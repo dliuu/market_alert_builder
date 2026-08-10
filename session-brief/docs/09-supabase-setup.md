@@ -14,9 +14,16 @@ connected until you fill it in. This is a one-time, ~5-minute setup.
 
 **Project Settings → Database → Connection string.**
 
-- **Direct** (port `5432`) — used by Alembic for migrations. Copy the URI form.
+- **Session pooler** (port `5432`) — used by Alembic for migrations. Copy the URI form.
 - **Transaction pooler** (port `6543`) — used by the running app for short-lived
   connections. Copy this too.
+
+**Do not use the "Direct connection" string** (`db.<ref>.supabase.co:5432`) for
+`DATABASE_URL`. It's IPv6-only unless you've bought Supabase's IPv4 add-on, and
+most local networks and CI runners can't route to it — you'll hit
+`psycopg.OperationalError: failed to resolve host`. The **session pooler** is
+IPv4 and behaves like a direct connection (no statement-level multiplexing), so
+it's safe for DDL and is what Alembic should use instead.
 
 SQLAlchemy 2 / psycopg 3 need the driver marker in the scheme. Change the prefix
 from `postgresql://` to **`postgresql+psycopg://`** in both.
@@ -38,8 +45,8 @@ cp .env.example .env
 # edit .env with the values from steps 2–3
 ```
 
-- `DATABASE_URL` → the **direct** (`5432`) string, with `+psycopg`.
-- `DATABASE_POOL_URL` → the **pooler** (`6543`) string, with `+psycopg`.
+- `DATABASE_URL` → the **session pooler** (`5432`) string, with `+psycopg`.
+- `DATABASE_POOL_URL` → the **transaction pooler** (`6543`) string, with `+psycopg`.
 - `RENDER_SHARED_SECRET` → any random string (`openssl rand -hex 32`).
 
 ## 5. Run the migration and confirm the connection

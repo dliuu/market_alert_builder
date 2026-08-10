@@ -2,7 +2,7 @@
 
 Sequenced. Each has a definition of done that is testable, not vibes.
 
-- [ ] **M0 — Scaffold.** Monorepo, both apps boot, Supabase connected, Alembic runs, `pnpm contracts:gen` produces both generated files and CI fails when they're dirty. *(Code complete; box ticks once Supabase keys are in `.env` and CI is green — see `docs/09-supabase-setup.md`.)*
+- [x] **M0 — Scaffold.** Monorepo, both apps boot, Supabase connected, Alembic runs, `pnpm contracts:gen` produces both generated files and CI fails when they're dirty.
 - [ ] **M1 — Book CRUD.** Sectors, holdings, lots in Next.js. *Done when:* you enter your real book and it survives a redeploy.
 - [ ] **M2 — Ingest + normalize.** One vendor behind `MarketDataProvider`. *Done when:* `bars_daily` fills nightly for your symbols and a replay from `raw_payloads` reproduces it byte-for-byte.
 - [ ] **M3 — Compute: returns, P&L, contribution.** *Done when:* numbers tie out against your broker to the cent, and `Σ contribution_bps == book day_bps` in a property test.
