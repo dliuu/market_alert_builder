@@ -1,0 +1,72 @@
+# 07 — Decision log
+
+Append-only. Each entry: what was decided, what it rules out, and what would reverse it.
+
+---
+
+**D1 — Brief-as-object, not brief-as-template**
+The pipeline emits versioned JSON; web and email are renderers over it.
+*Rules out:* generating HTML directly from the compute stage.
+*Reverses if:* never. Retrofitting this means parsing your own prose to recover the claim history.
+
+---
+
+**D2 — The LLM never produces a number**
+Narration writes prose only; figures are substituted from the object.
+*Rules out:* asking the model to summarise raw market data.
+*Reverses if:* never, for a tool you act on. A hallucinated basis point is a worse failure than a missing paragraph.
+
+---
+
+**D3 — Tape quality runs on daily OHLCV**
+Range position is exact from daily O/H/L/C; RVOL uses 30-day average volume.
+*Rules out:* gap-fill behaviour and VWAP in v1.
+*Reverses if:* you notice yourself repeatedly wanting to know whether a gap filled. Then buy minute bars (~$29/mo).
+
+---
+
+**D4 — Two services, Postgres as the shared surface**
+Next.js for UI/auth/billing/email templates; Python for the pipeline.
+*Rules out:* a single-language monolith; an internal REST API between the two.
+*Reverses if:* this stays single-user forever, in which case a Python monolith with Jinja is less to operate.
+
+---
+
+**D5 — Python owns the schema exclusively**
+Alembic is the only migration path; the web app introspects and never issues DDL.
+*Rules out:* Drizzle or Prisma migrations.
+*Reverses if:* never. Two ORMs owning one schema is the most reliable way to lose a weekend.
+
+---
+
+**D6 — One HTTP call between services: `/api/render/:brief_id`**
+So the email template has exactly one source (React Email in the web app).
+*Rules out:* a parallel MJML template in Python.
+*Reverses if:* the web app's availability becomes the pipeline's bottleneck. Fallback is a plaintext-only send.
+
+---
+
+**D7 — `user_id` on every table from the first migration**
+Even during single-user development.
+*Rules out:* nothing. Costs one column.
+*Reverses if:* never.
+
+---
+
+**D8 — End-of-day data, not real-time**
+The close brief is EOD-native; the open brief uses prior close plus delayed pre-market.
+*Rules out:* intraday alerts, live dashboards.
+*Reverses if:* you take the product commercial and buy a real-time redistribution licence — a business decision, not a technical one.
+
+---
+
+**D9 — No intraday alerts**
+*Rules out:* push notifications, a third send.
+*Reverses if:* never. It changes a briefing into a monitor, which is a different product with worse habits attached.
+
+---
+
+**D10 — Supabase for Postgres, not Neon**
+Managed Postgres from Supabase. The worker still owns the schema via Alembic against the direct connection; Supabase's RLS becomes the tenancy mechanism, enforcing D7's `user_id` at the database rather than in a hand-rolled data-access layer.
+*Rules out:* Neon; app-layer tenancy as the primary guard.
+*Reverses if:* you need a Postgres feature Supabase gates behind a higher tier, or RLS proves too coarse — then move to plain managed Postgres plus app-layer tenancy.

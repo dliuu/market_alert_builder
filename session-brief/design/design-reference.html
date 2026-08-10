@@ -1,0 +1,784 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Brief — design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --paper:#E4E5E0;
+  --card:#F5F5F2;
+  --ink:#14161A;
+  --ink2:#565C64;
+  --ink3:#878D93;
+  --rule:#CBCDC6;
+  --rule2:#DFE0DB;
+  --navy:#1B2A4A;
+  --ox:#8C2B25;
+  --pine:#1F6152;
+  --mark:#F5DE63;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --disp:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --body:"Newsreader",Georgia,serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--disp);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 20px 90px}
+
+/* ─── masthead ─── */
+.mast{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap}
+.mast h1{
+  font-size:clamp(30px,5vw,46px);font-weight:700;letter-spacing:-.035em;
+  margin:0;line-height:.95;
+}
+.mast h1 em{font-style:normal;color:var(--ink3)}
+.mast .sub{
+  font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink2);max-width:34ch;line-height:1.7;text-align:right;
+}
+
+/* ─── signature: session rail ─── */
+.rail{margin:34px 0 30px;position:relative;padding:0 2px}
+.rail-line{position:relative;height:2px;background:var(--rule)}
+.rail-session{
+  position:absolute;top:-1px;height:4px;background:var(--navy);
+  left:16.6%;right:11.1%;
+}
+.rail-tick{position:absolute;top:-5px;width:1px;height:12px;background:var(--ink3)}
+.rail-lab{
+  position:absolute;top:16px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.09em;color:var(--ink3);transform:translateX(-50%);white-space:nowrap;
+}
+.clip{position:absolute;top:-30px;transform:translateX(-50%);text-align:center;cursor:default}
+.clip .dot{
+  width:11px;height:11px;border-radius:50%;background:var(--mark);
+  border:2px solid var(--ink);margin:0 auto;
+}
+.clip .stem{width:2px;height:19px;background:var(--ink);margin:0 auto}
+.clip .lb{
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:5px;white-space:nowrap;
+}
+.rail-note{
+  font-family:var(--mono);font-size:10.5px;color:var(--ink3);letter-spacing:.06em;
+  margin-top:34px;text-align:center;
+}
+
+/* ─── tabs ─── */
+.tabs{display:flex;gap:0;border-bottom:2px solid var(--ink);margin-bottom:0;flex-wrap:wrap}
+.tab{
+  appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+  margin-bottom:-2px;padding:11px 17px 10px;cursor:pointer;
+  font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink2);
+}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ox);font-weight:600}
+.tab:focus-visible{outline:2px solid var(--navy);outline-offset:2px}
+
+.panel{padding-top:30px}
+.panel[hidden]{display:none}
+
+.lede{
+  font-family:var(--body);font-size:17px;line-height:1.6;color:var(--ink2);
+  max-width:62ch;margin:0 0 26px;
+}
+.lede b{color:var(--ink);font-weight:500}
+
+/* ─── generic card ─── */
+.card{background:var(--card);border:1px solid var(--rule);padding:22px}
+.eyebrow{
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--ink3);margin:0 0 12px;
+}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+
+/* ─── setup screen ─── */
+.app{background:var(--card);border:1px solid var(--rule);overflow:hidden}
+.appbar{
+  display:flex;justify-content:space-between;align-items:center;gap:12px;
+  padding:13px 18px;border-bottom:1px solid var(--rule);background:#fff;flex-wrap:wrap;
+}
+.brand{font-weight:700;letter-spacing:-.02em;font-size:15px}
+.brand span{color:var(--ox)}
+.appnav{display:flex;gap:16px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.appnav .on{color:var(--ink);border-bottom:1.5px solid var(--ox);padding-bottom:2px}
+.appbody{padding:22px}
+
+.sector{border:1px solid var(--rule);background:#fff;margin-bottom:14px}
+.sector-hd{
+  display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--rule2);flex-wrap:wrap;
+}
+.sector-hd h4{margin:0;font-size:15px;letter-spacing:-.01em;font-weight:600}
+.pill{
+  font-family:var(--mono);font-size:10px;letter-spacing:.07em;color:var(--ink2);
+  border:1px solid var(--rule);border-radius:999px;padding:3px 9px;background:var(--paper);
+}
+.sector-hd .sp{margin-left:auto;display:flex;gap:7px;align-items:center}
+.ghost{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--ink3);
+  background:none;border:1px dashed var(--rule);padding:4px 9px;cursor:pointer;
+}
+.ghost:hover{color:var(--ink);border-color:var(--ink3)}
+
+.rows{padding:4px 0}
+.row{
+  display:grid;grid-template-columns:70px 1fr 112px 100px 118px 26px;gap:12px;align-items:center;
+  padding:9px 15px;border-bottom:1px solid var(--rule2);
+}
+.row:last-child{border-bottom:0}
+.tk{font-family:var(--mono);font-size:13.5px;font-weight:600;letter-spacing:.02em}
+.nm{font-family:var(--body);font-size:14px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg{display:flex;border:1px solid var(--rule);background:var(--paper)}
+.seg button{
+  flex:1;appearance:none;background:none;border:0;cursor:pointer;padding:5px 0;
+  font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);
+}
+.seg button[aria-pressed="true"]{background:var(--navy);color:#fff}
+.seg button:focus-visible{outline:2px solid var(--navy);outline-offset:1px}
+.pos{font-family:var(--mono);font-size:11.5px;color:var(--ink2);text-align:right}
+.pos.empty{color:var(--ink3);opacity:.7}
+.pnl{font-family:var(--mono);font-size:12px;text-align:right;font-weight:600;letter-spacing:-.01em}
+.pnl em{display:block;font-style:normal;font-weight:400;font-size:10px;color:var(--ink3);margin-top:1px}
+.pnl.mut{font-weight:400;color:var(--ink3);opacity:.7}
+.dir{font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:-.01em}
+.dir em{font-style:normal;font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3);font-weight:500;margin-left:4px}
+.x{
+  appearance:none;background:none;border:0;cursor:pointer;color:var(--ink3);
+  font-family:var(--mono);font-size:14px;line-height:1;padding:4px;
+}
+.x:hover{color:var(--ox)}
+
+.addbar{display:flex;gap:9px;padding:13px 15px;border-top:1px solid var(--rule2);background:var(--paper);flex-wrap:wrap}
+.addbar input{
+  font-family:var(--mono);font-size:12px;padding:8px 11px;border:1px solid var(--rule);
+  background:#fff;color:var(--ink);min-width:0;flex:1;
+}
+.addbar input:focus{outline:2px solid var(--navy);outline-offset:-1px}
+.btn{
+  font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  background:var(--navy);color:#fff;border:0;padding:9px 15px;cursor:pointer;
+}
+.btn:hover{background:#2A3D63}
+.btn.alt{background:none;color:var(--ink);border:1px solid var(--ink)}
+.btn.alt:hover{background:var(--ink);color:var(--card)}
+
+.prefs{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:20px}
+.pref{border:1px solid var(--rule);background:#fff;padding:14px 15px}
+.pref .k{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3);margin-bottom:7px}
+.pref .v{font-family:var(--mono);font-size:17px;font-weight:600;letter-spacing:-.01em}
+.pref .h{font-family:var(--body);font-size:13px;color:var(--ink2);margin-top:5px;line-height:1.45}
+
+/* ─── email frames ─── */
+.mailwrap{display:flex;justify-content:center}
+.mail{width:100%;max-width:624px;background:#fff;border:1px solid var(--rule);box-shadow:0 1px 0 var(--rule)}
+.mailhd{padding:14px 20px;border-bottom:1px solid var(--rule2);background:#FBFBF9}
+.mailhd .from{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.mailhd .from b{font-size:13px;font-weight:600}
+.mailhd .from span{font-family:var(--mono);font-size:10.5px;color:var(--ink3)}
+.mailhd .subj{font-family:var(--mono);font-size:12.5px;margin-top:6px;line-height:1.5;color:var(--ink)}
+.mailhd .to{font-family:var(--mono);font-size:10px;color:var(--ink3);margin-top:4px}
+
+.mb{padding:24px 22px 30px}
+.mtop{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:2px solid var(--ink);padding-bottom:10px;flex-wrap:wrap}
+.mtop .t{font-size:23px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.mtop .t i{font-style:normal;color:var(--ox)}
+.mtop .d{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);text-align:right;line-height:1.6}
+
+.matters{margin:20px 0 6px}
+.matters .lb{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin-bottom:8px}
+.matters p{
+  font-family:var(--body);font-size:18px;line-height:1.5;margin:0;letter-spacing:-.005em;
+}
+.hl{
+  background:linear-gradient(180deg,transparent 52%,var(--mark) 52%,var(--mark) 94%,transparent 94%);
+  padding:0 2px;
+}
+
+.sec{margin-top:26px}
+.sec > h3{
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink);margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--rule);
+  display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+}
+.sec > h3 em{font-style:normal;font-weight:400;color:var(--ink3);letter-spacing:.06em;text-transform:none;font-size:10px}
+
+table.d{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+table.d th{
+  text-align:right;font-weight:500;font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink3);padding:0 0 6px;border-bottom:1px solid var(--rule2);
+}
+table.d th:first-child,table.d td:first-child{text-align:left}
+table.d td{padding:7px 0;border-bottom:1px solid var(--rule2);text-align:right;vertical-align:top}
+table.d td+td{padding-left:8px}
+table.d tr:last-child td{border-bottom:0}
+table.d tr.tot td{border-top:2px solid var(--ink);border-bottom:0;padding-top:9px;font-weight:600}
+table.d tr.tot td:first-child{font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3)}
+.sym{font-weight:600;font-size:12px}
+.up{color:var(--pine)}
+.dn{color:var(--ox)}
+.mut{color:var(--ink3)}
+.why{
+  display:block;font-family:var(--body);font-size:12.5px;color:var(--ink2);
+  margin-top:2px;line-height:1.4;font-weight:400;max-width:30ch;
+}
+.bar{display:inline-block;height:7px;background:var(--rule);position:relative;width:44px;vertical-align:middle}
+.bar i{position:absolute;top:0;bottom:0;display:block}
+.bar i.p{background:var(--pine)}
+.bar i.o{background:var(--ox)}
+
+ul.cal{list-style:none;margin:0;padding:0}
+ul.cal li{
+  display:grid;grid-template-columns:66px 1fr;gap:11px;padding:7px 0;
+  border-bottom:1px solid var(--rule2);font-family:var(--body);font-size:14px;line-height:1.45;
+}
+ul.cal li:last-child{border-bottom:0}
+ul.cal time{font-family:var(--mono);font-size:11px;color:var(--ink);font-weight:500}
+ul.cal b{font-weight:500}
+ul.cal .tag{
+  font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink3);border:1px solid var(--rule);padding:1px 5px;margin-left:5px;white-space:nowrap;
+}
+
+.note{
+  font-family:var(--body);font-size:14px;line-height:1.55;color:var(--ink2);margin:10px 0 0;
+}
+.note b{color:var(--ink);font-weight:500}
+.flag{border-left:3px solid var(--ox);padding:10px 0 10px 13px;margin-top:12px;background:#FBF7F6}
+.flag .fl{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ox);margin-bottom:5px;font-weight:600}
+.flag p{margin:0;font-family:var(--body);font-size:14px;line-height:1.5}
+
+.scorecard{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule2);border:1px solid var(--rule2);margin-top:4px}
+.scorecard div{background:#fff;padding:11px 10px}
+.scorecard .k{font-family:var(--mono);font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3);margin-bottom:5px}
+.scorecard .v{font-family:var(--mono);font-size:17px;font-weight:600;letter-spacing:-.02em}
+.scorecard .s{font-family:var(--mono);font-size:9.5px;color:var(--ink3);margin-top:2px}
+
+.mailft{border-top:1px solid var(--rule);padding:15px 22px 20px;background:#FBFBF9}
+.mailft p{font-family:var(--mono);font-size:9.5px;line-height:1.7;color:var(--ink3);margin:0}
+.mailft a{color:var(--ink2)}
+
+/* ─── dashboard ─── */
+.dashgrid{display:grid;grid-template-columns:1.55fr 1fr;gap:18px;align-items:start}
+.heat{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.tile{padding:11px 10px;color:#fff;min-height:78px;display:flex;flex-direction:column;justify-content:space-between}
+.tile .t{font-family:var(--mono);font-size:12px;font-weight:600}
+.tile .p{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.02em}
+.tile .w{font-family:var(--mono);font-size:9px;opacity:.72;margin-top:1px}
+.arch{border:1px solid var(--rule);background:#fff}
+.arch a{
+  display:grid;grid-template-columns:auto 1fr;gap:10px;padding:10px 13px;
+  border-bottom:1px solid var(--rule2);text-decoration:none;color:inherit;align-items:baseline;
+}
+.arch a:last-child{border-bottom:0}
+.arch a:hover{background:var(--paper)}
+.arch .w{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);white-space:nowrap}
+.arch .h{font-family:var(--body);font-size:13.5px;line-height:1.4}
+
+.strip{display:flex;flex-direction:column;gap:1px;background:var(--rule2);border:1px solid var(--rule2)}
+.srow{display:grid;grid-template-columns:1fr 54px 78px;gap:8px;background:#fff;padding:9px 12px;align-items:center}
+.srow .n{font-family:var(--body);font-size:14px}
+.srow .v{font-family:var(--mono);font-size:12px;font-weight:600;text-align:right}
+.srow .b{height:8px;background:var(--rule2);position:relative}
+.srow .b i{position:absolute;top:0;bottom:0;left:50%;display:block}
+
+.foot{margin-top:44px;border-top:1px solid var(--rule);padding-top:16px}
+.foot p{font-family:var(--mono);font-size:10px;letter-spacing:.05em;line-height:1.8;color:var(--ink3);margin:0}
+
+@media (max-width:820px){
+  .grid2,.grid3,.dashgrid{grid-template-columns:1fr}
+  .row{grid-template-columns:70px 1fr 118px;row-gap:8px}
+  .row .pos,.row .pnl,.row .x{grid-column:span 3;text-align:left}
+  .row .pnl em{display:inline;margin-left:7px}
+  .heat{grid-template-columns:repeat(2,1fr)}
+  .scorecard{grid-template-columns:repeat(2,1fr)}
+  .mast .sub{text-align:left}
+  .clip .lb{font-size:9px}
+}
+@media (prefers-reduced-motion:no-preference){
+  .panel:not([hidden]){animation:fade .28s ease both}
+  @keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <h1>Session&nbsp;Brief<br><em>design proposal</em></h1>
+    <p class="sub">Two emails per trading day.<br>One prepares you, one accounts for you.</p>
+  </header>
+
+  <!-- signature: the session spine -->
+  <div class="rail">
+    <div class="rail-line">
+      <div class="rail-session"></div>
+      <div class="rail-tick" style="left:16.6%"></div>
+      <div class="rail-tick" style="left:88.9%"></div>
+      <div class="rail-lab" style="left:16.6%">09:30 open</div>
+      <div class="rail-lab" style="left:88.9%">16:00 close</div>
+
+      <div class="clip" style="left:8.3%">
+        <div class="lb">08:15 · brief one</div>
+        <div class="dot"></div><div class="stem"></div>
+      </div>
+      <div class="clip" style="left:95%">
+        <div class="lb">16:45 · brief two</div>
+        <div class="dot"></div><div class="stem"></div>
+      </div>
+    </div>
+    <p class="rail-note">Both sends sit outside the bell — you read them when you can act on them, not while the tape is moving.</p>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" aria-controls="p1" id="t1">Setup</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="p2" id="t2">Open email</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="p3" id="t3">Close email</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="p4" id="t4">Web dashboard</button>
+  </div>
+
+  <!-- ══════════ SETUP ══════════ -->
+  <section class="panel" id="p1" role="tabpanel" aria-labelledby="t1">
+    <p class="lede">One screen, and you should never need to visit it twice. <b>A sector is a folder, a ticker is a line, and every line is either owned or watched.</b> Share count is optional — but supplying it is what upgrades the close email from percentages to dollars.</p><p class="lede" style="margin-top:-14px">Each row carries its lifetime unrealised P&amp;L, and each sector header carries today’s direction — so the setup screen doubles as a standing position sheet.</p>
+
+    <div class="app">
+      <div class="appbar">
+        <div class="brand">Session<span>·</span>Brief</div>
+        <nav class="appnav"><span class="on">Book</span><span>Briefs</span><span>Delivery</span></nav>
+      </div>
+      <div class="appbody">
+
+        <div class="sector">
+          <div class="sector-hd">
+            <h4>Physical AI &amp; Automation</h4>
+            <span class="pill">3 names</span><span class="pill">benchmark · ARKQ</span><span class="dir up">▲ +0.4% <em>today</em></span>
+            <span class="sp"><button class="ghost">Rename</button><button class="ghost">Set benchmark</button></span>
+          </div>
+          <div class="rows">
+            <div class="row">
+              <span class="tk">SYM</span><span class="nm">Symbotic Inc.</span>
+              <span class="seg"><button aria-pressed="true">Owned</button><button aria-pressed="false">Watching</button></span>
+              <span class="pos">1,100 sh @ 31.40</span><span class="pnl up">+$5,082<em>+14.7%</em></span><button class="x" aria-label="Remove SYM">×</button>
+            </div>
+            <div class="row">
+              <span class="tk">TSLA</span><span class="nm">Tesla — Optimus exposure</span>
+              <span class="seg"><button aria-pressed="false">Owned</button><button aria-pressed="true">Watching</button></span>
+              <span class="pos empty">no position</span><span class="pnl mut">—</span><button class="x" aria-label="Remove TSLA">×</button>
+            </div>
+            <div class="row">
+              <span class="tk">SERV</span><span class="nm">Serve Robotics</span>
+              <span class="seg"><button aria-pressed="false">Owned</button><button aria-pressed="true">Watching</button></span>
+              <span class="pos empty">no position</span><span class="pnl mut">—</span><button class="x" aria-label="Remove SERV">×</button>
+            </div>
+          </div>
+          <div class="addbar">
+            <input placeholder="Add a ticker to this sector" aria-label="Add a ticker to Physical AI and Automation">
+            <button class="btn">Add</button>
+          </div>
+        </div>
+
+        <div class="sector">
+          <div class="sector-hd">
+            <h4>Space &amp; Orbital Comms</h4>
+            <span class="pill">2 names</span><span class="pill">benchmark · UFO</span><span class="dir dn">▼ −4.2% <em>today</em></span>
+            <span class="sp"><button class="ghost">Rename</button><button class="ghost">Set benchmark</button></span>
+          </div>
+          <div class="rows">
+            <div class="row">
+              <span class="tk">ASTS</span><span class="nm">AST SpaceMobile</span>
+              <span class="seg"><button aria-pressed="true">Owned</button><button aria-pressed="false">Watching</button></span>
+              <span class="pos">530 sh @ 24.10</span><span class="pnl up">+$4,685<em>+36.7%</em></span><button class="x" aria-label="Remove ASTS">×</button>
+            </div>
+            <div class="row">
+              <span class="tk">RKLB</span><span class="nm">Rocket Lab</span>
+              <span class="seg"><button aria-pressed="true">Owned</button><button aria-pressed="false">Watching</button></span>
+              <span class="pos">1,500 sh @ 19.85</span><span class="pnl up">+$1,815<em>+6.1%</em></span><button class="x" aria-label="Remove RKLB">×</button>
+            </div>
+          </div>
+          <div class="addbar">
+            <input placeholder="Add a ticker to this sector" aria-label="Add a ticker to Space and Orbital Comms">
+            <button class="btn">Add</button>
+          </div>
+        </div>
+
+        <div class="sector">
+          <div class="sector-hd">
+            <h4>Semis, Storage &amp; Optics</h4>
+            <span class="pill">3 names</span><span class="pill">benchmark · SOXX</span><span class="dir up">▲ +3.1% <em>today</em></span>
+            <span class="sp"><button class="ghost">Rename</button><button class="ghost">Set benchmark</button></span>
+          </div>
+          <div class="rows">
+            <div class="row">
+              <span class="tk">SNDK</span><span class="nm">SanDisk</span>
+              <span class="seg"><button aria-pressed="true">Owned</button><button aria-pressed="false">Watching</button></span>
+              <span class="pos">800 sh @ 44.20</span><span class="pnl up">+$4,408<em>+12.5%</em></span><button class="x" aria-label="Remove SNDK">×</button>
+            </div>
+            <div class="row">
+              <span class="tk">AAOI</span><span class="nm">Applied Optoelectronics</span>
+              <span class="seg"><button aria-pressed="true">Owned</button><button aria-pressed="false">Watching</button></span>
+              <span class="pos">1,700 sh @ 16.75</span><span class="pnl up">+$2,873<em>+10.1%</em></span><button class="x" aria-label="Remove AAOI">×</button>
+            </div>
+            <div class="row">
+              <span class="tk">MU</span><span class="nm">Micron Technology</span>
+              <span class="seg"><button aria-pressed="false">Owned</button><button aria-pressed="true">Watching</button></span>
+              <span class="pos empty">no position</span><span class="pnl mut">—</span><button class="x" aria-label="Remove MU">×</button>
+            </div>
+          </div>
+          <div class="addbar">
+            <input placeholder="Add a ticker to this sector" aria-label="Add a ticker to Semis Storage and Optics">
+            <button class="btn">Add</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn alt">New sector</button>
+          <button class="btn alt">Import from CSV</button>
+          <button class="btn alt">Paste a broker screenshot</button>
+        </div>
+
+        <div class="prefs">
+          <div class="pref">
+            <div class="k">Morning send</div>
+            <div class="v">08:15 ET</div>
+            <p class="h">Late enough to catch pre-market volume, early enough to change your mind.</p>
+          </div>
+          <div class="pref">
+            <div class="k">Evening send</div>
+            <div class="v">16:45 ET</div>
+            <p class="h">After the close settles and after-hours earnings have printed.</p>
+          </div>
+          <div class="pref">
+            <div class="k">Depth</div>
+            <div class="v">Full</div>
+            <p class="h">Full runs about 1,400 words. Tight drops the per-name detail tables.</p>
+          </div>
+          <div class="pref">
+            <div class="k">Quiet rules</div>
+            <div class="v">2 active</div>
+            <p class="h">Skip market holidays. Skip the evening brief if nothing you hold moved more than 1%.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ OPEN EMAIL ══════════ -->
+  <section class="panel" id="p2" role="tabpanel" aria-labelledby="t2" hidden>
+    <p class="lede">The morning brief answers one question: <b>what changed while I was asleep, and what should I be ready for?</b> It is forward-looking. No performance, no P&amp;L — those are the evening's job.</p>
+
+    <div class="mailwrap"><div class="mail">
+      <div class="mailhd">
+        <div class="from"><b>Session Brief</b><span>08:15 ET</span></div>
+        <div class="subj"><b>Open · Tue Aug 11 —</b> futures −0.4%, SYM reports tonight, memory bid again</div>
+        <div class="to">to danny · 8 names · 3 sectors</div>
+      </div>
+
+      <div class="mb">
+        <div class="mtop">
+          <div class="t">Before the <i>bell</i></div>
+          <div class="d">Tuesday 11 Aug 2026<br>75 min to open</div>
+        </div>
+
+        <div class="matters">
+          <div class="lb">The one thing</div>
+          <p><span class="hl">Symbotic reports after the close tonight</span> — it's 25% of your book and the options market is pricing a ±14% move. Everything else this morning is noise by comparison.</p>
+        </div>
+
+        <div class="sec">
+          <h3>Overnight tape <em>vs prior close</em></h3>
+          <table class="d">
+            <tr><td class="sym">ES futures</td><td class="dn">−0.41%</td><td class="sym">10Y</td><td>4.28% <span class="mut">+3bp</span></td></tr>
+            <tr><td class="sym">NQ futures</td><td class="dn">−0.63%</td><td class="sym">DXY</td><td class="up">+0.22%</td></tr>
+            <tr><td class="sym">VIX</td><td class="up">16.4 <span class="mut">+1.1</span></td><td class="sym">WTI</td><td class="dn">−0.9%</td></tr>
+            <tr><td class="sym">TSM Taipei</td><td class="up">+1.8%</td><td class="sym">SK Hynix</td><td class="up">+3.4%</td></tr>
+          </table>
+          <p class="note"><b>Read:</b> risk-off in US index futures, but Asian memory names ripped overnight on a Hynix pricing comment. Your semis sleeve is likely to open green against a red tape — that divergence is the tell worth watching in the first hour.</p>
+        </div>
+
+        <div class="sec">
+          <h3>Your names, pre-market <em>08:12 ET</em></h3>
+          <table class="d">
+            <thead><tr><th>Name</th><th>Pre</th><th>Gap</th><th>Pre vol</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="sym">SNDK</span><span class="why">Hynix said NAND contract pricing settles up mid-single-digits in Q4. Read-through is direct.</span></td>
+                <td class="up">+4.1%</td><td class="up">+$1.94</td><td>3.1× <span class="mut">avg</span></td>
+              </tr>
+              <tr>
+                <td><span class="sym">SYM</span><span class="why">Drifting on no news. Earnings tonight 16:15 ET; implied move ±14%, and it has gapped &gt;10% on 3 of the last 4 prints.</span></td>
+                <td class="dn">−0.8%</td><td class="dn">−$0.29</td><td>0.6× <span class="mut">avg</span></td>
+              </tr>
+              <tr>
+                <td><span class="sym">ASTS</span><span class="why">Downgraded to Hold at Deutsche Bank, PT cut 42 → 34. Valuation call, not a thesis break.</span></td>
+                <td class="dn">−5.2%</td><td class="dn">−$1.88</td><td>4.7× <span class="mut">avg</span></td>
+              </tr>
+              <tr>
+                <td><span class="sym">AAOI</span><span class="why">No stock-specific news; tracking the optics complex higher.</span></td>
+                <td class="up">+1.3%</td><td class="up">+$0.24</td><td>1.2× <span class="mut">avg</span></td>
+              </tr>
+              <tr>
+                <td><span class="sym">RKLB</span><span class="why">Quiet. Neutron static fire slipped a week per an overnight trade-press note.</span></td>
+                <td class="mut">−0.1%</td><td class="mut">flat</td><td>0.4× <span class="mut">avg</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="note">Only names moving more than 1% pre-market, or carrying news, get a line. <b>Everything else is listed as unchanged and skipped</b> — a brief that mentions all eight names every morning trains you to stop reading it.</p>
+        </div>
+
+        <div class="sec">
+          <h3>On the clock today</h3>
+          <ul class="cal">
+            <li><time>08:30</time><span><b>CPI, July</b> — core expected +0.3% m/m <span class="tag">macro</span><br><span class="mut" style="font-family:var(--body);font-size:13px">Matters most to your unprofitable-growth sleeve: ASTS and RKLB have the longest duration in the book.</span></span></li>
+            <li><time>16:15</time><span><b>SYM Q3 earnings</b> + call at 17:00 <span class="tag">your holding</span><br><span class="mut" style="font-family:var(--body);font-size:13px">Watch: GreenBox commitments, Walmart deployment pace, gross margin on new systems.</span></span></li>
+            <li><time>16:20</time><span><b>MU earnings</b> <span class="tag">watchlist</span> <span class="tag">reads through to SNDK</span></span></li>
+            <li><time>—</time><span><b>ASTS lockup</b> tranche unlocks Thu Aug 13 <span class="tag">supply</span></span></li>
+          </ul>
+        </div>
+
+        <div class="sec">
+          <h3>Sector setup</h3>
+          <table class="d">
+            <thead><tr><th>Sector</th><th>Bench 5d</th><th>vs SPY 5d</th><th>Pre-mkt</th></tr></thead>
+            <tbody>
+              <tr><td class="sym">Semis, Storage &amp; Optics<span class="why">Leadership rotating from logic into memory for the first time since March.</span></td><td class="up">+4.2%</td><td class="up">+3.1%</td><td class="up">+2.0%</td></tr>
+              <tr><td class="sym">Physical AI &amp; Automation<span class="why">Holding pattern into SYM's print — it's the sector's only real catalyst this week.</span></td><td class="up">+0.6%</td><td class="dn">−0.5%</td><td class="mut">−0.2%</td></tr>
+              <tr><td class="sym">Space &amp; Orbital Comms<span class="why">Third straight down week. Rate-sensitive and there is no near-term catalyst on the calendar.</span></td><td class="dn">−3.8%</td><td class="dn">−4.9%</td><td class="dn">−3.1%</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sec">
+          <h3>Exposure check</h3>
+          <div class="flag">
+            <div class="fl">Concentration</div>
+            <p>Your three sectors moved with a 0.81 average pairwise correlation over the last 20 sessions. You hold eight names but you are, functionally, making one bet on long-duration AI capex. Worth knowing on a CPI morning.</p>
+          </div>
+          <p class="note"><b>Earnings within 5 sessions:</b> SYM (tonight), AAOI (Thu). <b>Cash runway under 6 quarters:</b> ASTS (4.1), SERV (5.2, watchlist).</p>
+        </div>
+      </div>
+
+      <div class="mailft">
+        <p>Sample data for layout only — not live prices and not investment advice.<br>
+        <a href="#">Open the dashboard</a> · <a href="#">Edit your book</a> · <a href="#">Skip tomorrow morning</a> · <a href="#">Unsubscribe</a></p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ══════════ CLOSE EMAIL ══════════ -->
+  <section class="panel" id="p3" role="tabpanel" aria-labelledby="t3" hidden>
+    <p class="lede">The evening brief answers a different question: <b>what happened, how much did it cost or make me, and was I right about this morning?</b> It's backward-looking and it keeps score — including on itself.</p>
+
+    <div class="mailwrap"><div class="mail">
+      <div class="mailhd">
+        <div class="from"><b>Session Brief</b><span>16:45 ET</span></div>
+        <div class="subj"><b>Close · Tue Aug 11 —</b> book +1.1% (+$1,746), SNDK carried it, SYM +9% after hours</div>
+        <div class="to">to danny · 8 names · 3 sectors</div>
+      </div>
+
+      <div class="mb">
+        <div class="mtop">
+          <div class="t">After the <i>bell</i></div>
+          <div class="d">Tuesday 11 Aug 2026<br>session closed 16:00</div>
+        </div>
+
+        <div class="matters">
+          <div class="lb">The one thing</div>
+          <p><span class="hl">You made money on a red day, and it was one name.</span> SNDK contributed 140 of your 111 bps — without it the book was down. That's concentration working for you today, which is the same mechanism that works against you on another day.</p>
+        </div>
+
+        <div class="sec">
+          <h3>Session scorecard</h3>
+          <div class="scorecard">
+            <div><div class="k">Session</div><div class="v up">+1.10%</div><div class="s">+$1,746</div></div>
+            <div><div class="k">vs SPY</div><div class="v up">+173bp</div><div class="s">SPY −0.63%</div></div>
+            <div><div class="k">Book value</div><div class="v">$159,786</div><div class="s">5 positions</div></div>
+            <div><div class="k">Unrealised</div><div class="v up">+$18,863</div><div class="s">+13.4% on cost</div></div>
+          </div>
+          <p class="note">Percentages tell you what moved. <b>Dollars tell you what it meant.</b> A 6% move in your smallest position is a rounding error; a 2% move in SYM is a real day.</p>
+        </div>
+
+        <div class="sec">
+          <h3>Attribution <em>contribution to book return</em></h3>
+          <table class="d">
+            <thead><tr><th>Name</th><th>Close</th><th>Day</th><th>Day P&amp;L</th><th>bps</th><th>Total P&amp;L</th></tr></thead>
+            <tbody>
+              <tr><td class="sym">SNDK</td><td>49.71</td><td class="up">+5.9%</td><td class="up">+2,216</td><td class="up">+140</td><td class="up">+4,408 <span class="mut">+12.5%</span></td></tr>
+              <tr><td class="sym">AAOI</td><td>18.44</td><td class="up">+2.4%</td><td class="up">+731</td><td class="up">+46</td><td class="up">+2,873 <span class="mut">+10.1%</span></td></tr>
+              <tr><td class="sym">SYM</td><td>36.02</td><td class="up">+0.7%</td><td class="up">+277</td><td class="up">+18</td><td class="up">+5,082 <span class="mut">+14.7%</span></td></tr>
+              <tr><td class="sym">RKLB</td><td>21.06</td><td class="dn">−0.9%</td><td class="dn">−285</td><td class="dn">−18</td><td class="up">+1,815 <span class="mut">+6.1%</span></td></tr>
+              <tr><td class="sym">ASTS</td><td>32.94</td><td class="dn">−6.4%</td><td class="dn">−1,193</td><td class="dn">−75</td><td class="up">+4,685 <span class="mut">+36.7%</span></td></tr>
+              <tr class="tot"><td>Book</td><td>—</td><td class="up">+1.10%</td><td class="up">+1,746</td><td class="up">+111</td><td class="up">+18,863 <span class="mut">+13.4%</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sec">
+          <h3>How they traded <em>tape quality, not just direction</em></h3>
+          <table class="d">
+            <thead><tr><th>Name</th><th>RVOL</th><th>Close in range</th><th>vs sector</th><th>50d</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="sym">SNDK</span><span class="why">Opened +4%, added to it all session, closed on the high on 3.4× volume. That is accumulation, not a gap-and-fade.</span></td>
+                <td>3.4×</td><td><span class="bar"><i class="p" style="left:0;width:96%"></i></span> <span class="mut">96%</span></td><td class="up">+3.9%</td><td class="up">+18%</td>
+              </tr>
+              <tr>
+                <td><span class="sym">ASTS</span><span class="why">Gapped down on the downgrade and never filled. Closed near the low with volume, ahead of Thursday's lockup.</span></td>
+                <td>4.1×</td><td><span class="bar"><i class="o" style="left:0;width:11%"></i></span> <span class="mut">11%</span></td><td class="dn">−2.6%</td><td class="dn">−9%</td>
+              </tr>
+              <tr>
+                <td><span class="sym">SYM</span><span class="why">Volume dried up into the print — the market is not positioned either way. Wider outcome distribution tonight.</span></td>
+                <td>0.5×</td><td><span class="bar"><i class="p" style="left:0;width:58%"></i></span> <span class="mut">58%</span></td><td class="up">+1.2%</td><td class="up">+4%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sec">
+          <h3>Sector rotation <em>your sectors vs their benchmarks</em></h3>
+          <div class="strip">
+            <div class="srow"><span class="n">Semis, Storage &amp; Optics <span class="mut" style="font-family:var(--mono);font-size:10px">· 3 of 3 up</span></span><span class="v up">+3.1%</span><span class="b"><i class="p" style="left:50%;width:31%"></i></span></div>
+            <div class="srow"><span class="n">Physical AI &amp; Automation <span class="mut" style="font-family:var(--mono);font-size:10px">· 2 of 3 up</span></span><span class="v up">+0.4%</span><span class="b"><i class="p" style="left:50%;width:4%"></i></span></div>
+            <div class="srow"><span class="n">Space &amp; Orbital Comms <span class="mut" style="font-family:var(--mono);font-size:10px">· 0 of 2 up</span></span><span class="v dn">−4.2%</span><span class="b"><i class="o" style="left:8%;width:42%"></i></span></div>
+          </div>
+          <p class="note"><b>Breadth matters more than the average.</b> Semis were up on all three names — that's a sector move. If one name had carried it, the label "sector strength" would be a story you were telling yourself.</p>
+        </div>
+
+        <div class="sec">
+          <h3>After hours <em>as of 16:42</em></h3>
+          <table class="d">
+            <tr>
+              <td><span class="sym">SYM</span><span class="why">Q3 beat on revenue, guided Q4 above consensus, gross margin +190bp q/q. Call at 17:00 — the number that matters is new system commitments.</span></td>
+              <td class="up">+9.2%</td><td class="mut">on 1.1M sh</td>
+            </tr>
+          </table>
+          <p class="note">If SYM holds this into tomorrow's open, it adds roughly <b>+230bp</b> to the book. That will be waiting in the morning brief.</p>
+        </div>
+
+        <div class="sec">
+          <h3>Yesterday's flag, resolved</h3>
+          <div class="flag">
+            <div class="fl">Closing the loop</div>
+            <p>Monday's brief flagged that memory pricing was the swing factor for your semis sleeve. That resolved in your favour today. The Space sleeve flag — no catalyst, rate-sensitive, third down week — did not, and is now four weeks running.</p>
+          </div>
+          <p class="note">Every brief scores its own prior calls. <b>A newsletter that never revisits what it said is entertainment</b>, and you'd stop trusting it inside a month.</p>
+        </div>
+      </div>
+
+      <div class="mailft">
+        <p>Sample data for layout only — not live prices and not investment advice.<br>
+        <a href="#">Open the dashboard</a> · <a href="#">See the full tables</a> · <a href="#">Adjust depth</a> · <a href="#">Unsubscribe</a></p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ══════════ DASHBOARD ══════════ -->
+  <section class="panel" id="p4" role="tabpanel" aria-labelledby="t4" hidden>
+    <p class="lede">The web app is deliberately thin. <b>The email is the product; the site is where you change the inputs and re-read the archive.</b> Nothing here is a live trading screen — building one is a different, much larger project.</p>
+
+    <div class="app">
+      <div class="appbar">
+        <div class="brand">Session<span>·</span>Brief</div>
+        <nav class="appnav"><span>Book</span><span class="on">Briefs</span><span>Delivery</span></nav>
+      </div>
+      <div class="appbody">
+        <div class="dashgrid">
+
+          <div>
+            <div class="card" style="padding:13px 16px;margin-bottom:14px;display:flex;gap:26px;flex-wrap:wrap">
+              <div><div class="k" style="font-family:var(--mono);font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)">Book value</div><div style="font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em">$159,786</div></div>
+              <div><div class="k" style="font-family:var(--mono);font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)">Total P&amp;L</div><div class="up" style="font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em">+$18,863 <span style="font-size:12px">+13.4%</span></div></div>
+              <div><div class="k" style="font-family:var(--mono);font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)">Today</div><div class="up" style="font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em">+$1,746 <span style="font-size:12px">+1.10%</span></div></div>
+            </div>
+            <p class="eyebrow">Today's session · sized by position, coloured by move</p>
+            <div class="heat">
+              <div class="tile" style="background:#1F6152;grid-column:span 2"><div class="t">SNDK</div><div><div class="p">+5.9%</div><div class="w">+$2,216 · 3.4× vol</div></div></div>
+              <div class="tile" style="background:#3D7A6C"><div class="t">SYM</div><div><div class="p">+0.7%</div><div class="w">+$277</div></div></div>
+              <div class="tile" style="background:#8C2B25"><div class="t">ASTS</div><div><div class="p">−6.4%</div><div class="w">−$1,193</div></div></div>
+              <div class="tile" style="background:#A85A54"><div class="t">RKLB</div><div><div class="p">−0.9%</div><div class="w">−$285</div></div></div>
+              <div class="tile" style="background:#4F8578"><div class="t">AAOI</div><div><div class="p">+2.4%</div><div class="w">+$731</div></div></div>
+              <div class="tile" style="background:#878D93"><div class="t">MU</div><div><div class="p">+1.9%</div><div class="w">watching</div></div></div>
+              <div class="tile" style="background:#9BA1A7"><div class="t">SERV</div><div><div class="p">−2.2%</div><div class="w">watching</div></div></div>
+            </div>
+
+            <p class="eyebrow" style="margin-top:24px">Sector strength · 20 sessions vs benchmark</p>
+            <div class="strip">
+              <div class="srow"><span class="n">Semis, Storage &amp; Optics</span><span class="v up">+8.4%</span><span class="b"><i class="p" style="left:50%;width:42%"></i></span></div>
+              <div class="srow"><span class="n">Physical AI &amp; Automation</span><span class="v up">+1.9%</span><span class="b"><i class="p" style="left:50%;width:10%"></i></span></div>
+              <div class="srow"><span class="n">Space &amp; Orbital Comms</span><span class="v dn">−11.2%</span><span class="b"><i class="o" style="left:6%;width:44%"></i></span></div>
+            </div>
+          </div>
+
+          <div>
+            <p class="eyebrow">Archive · every brief, searchable</p>
+            <div class="arch">
+              <a href="#"><span class="w">Tue pm</span><span class="h">Book +1.2%, SNDK carried it, SYM +9% after hours</span></a>
+              <a href="#"><span class="w">Tue am</span><span class="h">Futures −0.4%, SYM reports tonight, memory bid again</span></a>
+              <a href="#"><span class="w">Mon pm</span><span class="h">Book −0.8%, Space sleeve down a third straight week</span></a>
+              <a href="#"><span class="w">Mon am</span><span class="h">Quiet open, CPI Tuesday is the week's only real event</span></a>
+              <a href="#"><span class="w">Fri pm</span><span class="h">Book +0.3%, AAOI reversed off the 200-day</span></a>
+            </div>
+
+            <p class="eyebrow" style="margin-top:24px">Standing flags</p>
+            <div class="card" style="padding:15px 16px">
+              <p class="note" style="margin:0"><b>Correlation 0.81</b> across your three sectors. Eight names, one bet.</p>
+              <p class="note"><b>ASTS runway 4.1 quarters</b> at the current burn, with a lockup tranche Thursday.</p>
+              <p class="note"><b>SYM is 25% of the book</b> — the largest single-name weight you've carried this year.</p>
+            </div>
+
+            <p class="eyebrow" style="margin-top:24px">Next send</p>
+            <div class="card" style="padding:15px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+              <div><div class="v" style="font-family:var(--mono);font-size:17px;font-weight:600">Wed 08:15 ET</div>
+              <p class="note" style="margin-top:3px">Will lead with the SYM print.</p></div>
+              <button class="btn alt">Send me one now</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>All figures shown are invented sample data for layout evaluation. Nothing here is investment advice.<br>
+    Design proposal · palette: paper #E4E5E0 · navy #1B2A4A · pine #1F6152 · oxblood #8C2B25 · marker #F5DE63</p>
+  </footer>
+</div>
+
+<script>
+(function(){
+  var tabs=[].slice.call(document.querySelectorAll('.tab'));
+  function show(i){
+    tabs.forEach(function(t,j){
+      t.setAttribute('aria-selected',j===i?'true':'false');
+      document.getElementById(t.getAttribute('aria-controls')).hidden=(j!==i);
+    });
+  }
+  tabs.forEach(function(t,i){
+    t.addEventListener('click',function(){show(i);});
+    t.addEventListener('keydown',function(e){
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+        e.preventDefault();
+        var n=(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+        tabs[n].focus();show(n);
+      }
+    });
+  });
+  // segmented owned/watching toggles
+  [].slice.call(document.querySelectorAll('.seg')).forEach(function(seg){
+    var bs=[].slice.call(seg.querySelectorAll('button'));
+    bs.forEach(function(b){
+      b.addEventListener('click',function(){
+        bs.forEach(function(o){o.setAttribute('aria-pressed',o===b?'true':'false');});
+      });
+    });
+  });
+})();
+</script>
