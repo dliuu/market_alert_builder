@@ -1,0 +1,19 @@
+{
+  "name": "session-brief",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "typecheck": "pnpm --filter web typecheck",
+    "check": "biome check .",
+    "contracts:gen": "bash scripts/contracts-gen.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "json-schema-to-typescript": "15.0.4"
+  }
+}
