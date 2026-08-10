@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sessionbrief.dev/schemas/brief-object.json",
+  "title": "BriefObject",
+  "description": "The versioned document a brief is assembled into. Web and email are renderers over this.",
+  "type": "object",
+  "required": ["schema_version", "brief_id", "user_id", "session_date", "kind",
+               "generated_at", "subject", "book", "sections", "flags", "claims",
+               "resolved_claims", "suppressed", "data_quality"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "brief_id": { "type": "string" },
+    "user_id": { "type": "string" },
+    "session_date": { "type": "string", "format": "date" },
+    "kind": { "enum": ["open", "close"] },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "subject": { "type": "string", "maxLength": 160 },
+    "one_thing": { "type": ["string", "null"] },
+    "book": { "$ref": "#/$defs/book" },
+    "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
+    "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "resolved_claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "suppressed": { "type": "array", "items": { "type": "string" } },
+    "data_quality": {
+      "type": "object",
+      "required": ["missing", "stale"],
+      "additionalProperties": false,
+      "properties": {
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "stale": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "book": {
+      "type": "object",
+      "description": "All monetary values are integer cents. Never float.",
+      "required": ["value_cents", "day_pnl_cents", "day_bps", "total_pnl_cents"],
+      "additionalProperties": false,
+      "properties": {
+        "value_cents": { "type": "integer" },
+        "day_pnl_cents": { "type": "integer" },
+        "day_bps": { "type": "integer" },
+        "total_pnl_cents": { "type": "integer" },
+        "total_pct": { "type": "number" },
+        "vs_spy_bps": { "type": "integer" }
+      }
+    },
+    "section": {
+      "type": "object",
+      "required": ["id", "tier", "rows"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": ["one_thing", "overnight_tape", "premarket", "calendar",
+                   "sector_setup", "exposure_check", "scorecard", "attribution",
+                   "tape_quality", "sector_rotation", "after_hours", "accountability"]
+        },
+        "tier": { "enum": ["full", "brief", "suppressed"] },
+        "note": { "type": ["string", "null"] },
+        "rows": { "type": "array", "items": { "$ref": "#/$defs/row" } }
+      }
+    },
+    "row": {
+      "type": "object",
+      "required": ["symbol"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "close": { "type": ["number", "null"] },
+        "day_return": { "type": ["number", "null"] },
+        "day_pnl_cents": { "type": ["integer", "null"] },
+        "contribution_bps": { "type": ["integer", "null"] },
+        "total_pnl_cents": { "type": ["integer", "null"] },
+        "total_pct": { "type": ["number", "null"] },
+        "rvol": { "type": ["number", "null"] },
+        "range_position": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "rel_strength": { "type": ["number", "null"] },
+        "why": {
+          "type": ["string", "null"],
+          "description": "LLM-written. Prose only — must contain no figures."
+        }
+      }
+    },
+    "flag": {
+      "type": "object",
+      "required": ["type", "severity", "text_key"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["concentration", "correlation", "runway", "dilution",
+                           "earnings_soon", "supply_event", "short_interest"] },
+        "severity": { "enum": ["info", "warn"] },
+        "symbol": { "type": ["string", "null"] },
+        "sector_id": { "type": ["string", "null"] },
+        "value": { "type": ["number", "null"] },
+        "text_key": { "type": "string" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["id", "symbol", "type", "direction", "horizon_sessions", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "symbol": { "type": "string" },
+        "type": { "enum": ["catalyst_pending", "relative_strength",
+                           "supply_overhang", "breadth"] },
+        "direction": { "enum": ["up", "down", "neutral"] },
+        "horizon_sessions": { "type": "integer", "minimum": 1 },
+        "outcome": { "enum": ["correct", "wrong", "unresolved", null] }
+      }
+    }
+  }
+}
