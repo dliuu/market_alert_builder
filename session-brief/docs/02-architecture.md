@@ -32,7 +32,7 @@
                     │  • owns Alembic migrations   │
                     └──────────────────────────────┘
                             │
-              Finnhub · SEC EDGAR · Claude API · Resend
+              Tiingo · SEC EDGAR · Claude API · Resend
 ```
 
 ## Why two services
@@ -95,7 +95,7 @@ for user in active_users:                assemble, narrate, render, send
 
 ## The real product blocker: data licensing
 
-This matters more than any technical decision here. Finnhub's free tier is licensed for **personal, non-commercial use** — fine for your own book, not for paying users. Redistributing *real-time* market data to third parties generally requires a commercial vendor plan and, depending on the data, exchange agreements.
+This matters more than any technical decision here. Tiingo's free tier is licensed for **personal, internal use only, with no redistribution** — fine for your own book, not for paying users. Redistributing market data to third parties requires a commercial vendor plan and, depending on the data, exchange agreements.
 
 **Design around it: build on end-of-day data.** The close brief is EOD-native and needs nothing else. The open brief works on prior-close data plus delayed pre-market quotes. Delayed and EOD data carry far lighter licensing than real-time, and the brief is a considered read at 08:15, not a trading screen. Sort the licensing before you take money, not after.
 
@@ -126,15 +126,17 @@ This matters more than any technical decision here. Finnhub's free tier is licen
 
 | Need | Source | Cost |
 |---|---|---|
-| Daily OHLCV, quotes, pre-market | Finnhub | Free, 60 req/min, **non-commercial** |
-| Earnings calendar, EPS surprises | Finnhub | Free, 1-month forward window |
-| Company news | Finnhub | Free — feeds the narration step |
+| Daily OHLCV (EOD), adjusted close | Tiingo | Free, personal/non-commercial. `close` + `adjClose` map to `bars_daily.c` / `adj_c` |
+| Earnings calendar, EPS surprises | **TBD** | Source gap — Tiingo free doesn't cover it. Resolve at M7 |
+| Company news | **TBD** | Source gap — Tiingo's news API is a paid add-on. Resolve at M8 (narration) |
 | Cash, burn, shares outstanding | SEC EDGAR `companyfacts` | Free, authoritative XBRL, no key. Set a real User-Agent |
-| Benchmark ETFs | Finnhub | Free, same path as equities |
+| Benchmark ETFs | Tiingo | Free, same EOD path as equities |
 | Minute bars (deferred) | Massive (ex-Polygon.io) Starter | ~$29/mo — only for gap-fill and VWAP |
 | Short interest | — | Skip v1; FINRA's bi-monthly cadence doesn't justify the plumbing |
 
-Polygon.io rebranded to Massive in late 2025 — same API and keys, new billing. Alpha Vantage's free tier is now 25 requests/day, which is unusable here.
+Finnhub's free tier moved historical daily candles behind premium (403 on free keys), so it can't supply bars — Tiingo replaces it there. Polygon.io rebranded to Massive in late 2025 — same API and keys, new billing. Alpha Vantage's free tier is now 25 requests/day, which is unusable here.
+
+**Two open source gaps** (earnings calendar, company news) are marked TBD above. They feed M7 and M8, not M2 — pick a provider when those milestones arrive. Finnhub's free tier still covers both and is one candidate; so are the vendors' own news/calendar endpoints.
 
 Put every vendor behind a `MarketDataProvider` protocol (`daily_bars`, `quote`, `earnings_calendar`, `news`) from the first commit. You will switch, probably twice.
 
