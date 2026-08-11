@@ -73,6 +73,9 @@ class BookMetrics:
 class ComputeResult:
     positions: list[PositionMetrics]
     book: BookMetrics
+    # The benchmark's own day return (SPY), exact. Carried so downstream stages
+    # (M6 claims) can form per-symbol relative strength without re-reading bars.
+    benchmark_return: Fraction | None = None
 
 
 @dataclass
@@ -139,7 +142,7 @@ def compute(
         total_pct=_ratio(book_total_pnl, book_total_cost),
         vs_spy_bps=_vs_spy(book_day_pnl, book_prior, benchmark_return),
     )
-    return ComputeResult(positions=positions, book=book)
+    return ComputeResult(positions=positions, book=book, benchmark_return=benchmark_return)
 
 
 def _aggregate(symbol: str, lots: list[Lot], price: Price, session_date: date) -> _Aggregate:

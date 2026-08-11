@@ -1,5 +1,5 @@
 import { DEV_USER_ID } from "@/lib/constants";
-import type { BriefObject, Row } from "@/lib/contracts/brief";
+import type { BriefObject, Claim, Row } from "@/lib/contracts/brief";
 import { db } from "@/lib/db";
 import { briefs } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
@@ -165,6 +165,25 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </section>
       )}
 
+      {/* Yesterday's flag, resolved — the accountability loop */}
+      {brief.resolved_claims.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Yesterday's flag, resolved</h2>
+          <ul style={S.claimList}>
+            {brief.resolved_claims.map((c: Claim) => (
+              <li key={c.id} style={S.claimItem}>
+                <span>
+                  <strong>{c.symbol}</strong> {c.type.replace(/_/g, " ")} ({c.direction})
+                </span>
+                <span style={{ fontWeight: 700, ...signColor(c.outcome === "correct" ? 1 : -1) }}>
+                  {c.outcome === "correct" ? "✓ correct" : "✗ wrong"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {(brief.data_quality.missing.length > 0 || brief.data_quality.stale.length > 0) && (
         <p style={S.muted}>
           {brief.data_quality.missing.length > 0 &&
@@ -257,6 +276,13 @@ const S: Record<string, React.CSSProperties> = {
     width: 10,
     height: 10,
     borderRadius: "50%",
+  },
+  claimList: { listStyle: "none", padding: 0, margin: 0, fontSize: "0.9rem" },
+  claimItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "6px 0",
+    borderBottom: "1px solid #f4f4f4",
   },
   table: { borderCollapse: "collapse", width: "100%", fontSize: "0.88rem" },
   th: {

@@ -26,6 +26,13 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
+from worker.claims import (
+    Claim,
+    ResolvedClaim,
+    emit_claims,
+    resolve_due_claims,
+    store_emitted_claims,
+)
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
 from worker.tape import TapeMetrics, compute_and_store_tape
 
@@ -54,14 +61,17 @@ def assemble(
     session_date: date,
     kind: str,
     generated_at: datetime,
+    claims: list[Claim] | None = None,
+    resolved: list[ResolvedClaim] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
     ``closes`` maps each held symbol to its session close (dollars); ``tape``
-    carries RVOL / range position per symbol. ``generated_at`` is injected
-    (never ``datetime.now()``) so the object is deterministic and
+    carries RVOL / range position per symbol. ``claims`` are emitted this
+    session, ``resolved`` are prior ones graded now (M6). ``generated_at`` is
+    injected (never ``datetime.now()``) so the object is deterministic and
     snapshot-testable.
     """
     if kind not in ("open", "close"):
@@ -76,17 +86,7 @@ def assemble(
             "(no prior-close value). Graceful degradation lands in M5."
         )
 
-    # Tier every held name. Suppressed names leave the rows and become one
-    # roll-up line; the survivors keep their tier for narration (M8) and tape.
-    shown: list[tuple[PositionMetrics, str]] = []
-    suppressed: list[str] = []
-    for p in result.positions:
-        rvol = tape[p.symbol].rvol if p.symbol in tape else None
-        tier = _tier(p.day_return, rvol)
-        if tier == "suppressed":
-            suppressed.append(p.symbol)
-        else:
-            shown.append((p, tier))
+    shown, suppressed = _tier_positions(result, tape)
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -100,13 +100,54 @@ def assemble(
         "book": _book(book),
         "sections": [_attribution(shown, closes), _tape_quality(shown, tape)],
         "flags": [],  # M7
-        "claims": [],  # M6
-        "resolved_claims": [],  # M6
+        "claims": [_claim_dict(c, user_id, session_date, kind) for c in claims or []],
+        "resolved_claims": [_resolved_dict(r) for r in resolved or []],
         "suppressed": sorted(suppressed),
         "data_quality": {"missing": missing or [], "stale": stale or []},
     }
     # model_validate enforces the contract (extra='forbid', required keys, types).
     return BriefObject.model_validate(payload)
+
+
+def _tier_positions(
+    result: ComputeResult, tape: dict[str, TapeMetrics]
+) -> tuple[list[tuple[PositionMetrics, str]], list[str]]:
+    """Tier every held name. Suppressed names leave the rows and become one
+    roll-up line; the survivors keep their tier for narration (M8), tape, and
+    claim emission (M6)."""
+    shown: list[tuple[PositionMetrics, str]] = []
+    suppressed: list[str] = []
+    for p in result.positions:
+        rvol = tape[p.symbol].rvol if p.symbol in tape else None
+        tier = _tier(p.day_return, rvol)
+        if tier == "suppressed":
+            suppressed.append(p.symbol)
+        else:
+            shown.append((p, tier))
+    return shown, suppressed
+
+
+def _claim_dict(claim: Claim, user_id: str, session_date: date, kind: str) -> dict[str, object]:
+    # Emitted claims have no DB id yet; a deterministic slug identifies them.
+    return {
+        "id": f"{user_id}-{session_date.isoformat()}-{kind}-{claim.symbol}-{claim.claim_type}",
+        "symbol": claim.symbol,
+        "type": claim.claim_type,
+        "direction": claim.direction,
+        "horizon_sessions": claim.horizon_sessions,
+        "outcome": None,
+    }
+
+
+def _resolved_dict(resolved: ResolvedClaim) -> dict[str, object]:
+    return {
+        "id": resolved.id,
+        "symbol": resolved.symbol,
+        "type": resolved.claim_type,
+        "direction": resolved.direction,
+        "horizon_sessions": resolved.horizon_sessions,
+        "outcome": resolved.outcome,
+    }
 
 
 def _tier(day_return: Fraction | None, rvol: Fraction | None) -> str:
@@ -255,6 +296,11 @@ def assemble_and_store(
     closes = _read_closes(conn, symbols, session_date)
     tape = compute_and_store_tape(conn, user_id, symbols, session_date)
 
+    # Grade prior claims first — that's independent of whether this brief sends.
+    resolved = resolve_due_claims(conn, user_id, session_date)
+    shown, _ = _tier_positions(result, tape)
+    emitted = emit_claims(shown, result.benchmark_return)
+
     from datetime import UTC
 
     obj = assemble(
@@ -265,10 +311,14 @@ def assemble_and_store(
         session_date=session_date,
         kind=kind,
         generated_at=datetime.now(UTC),
+        claims=emitted,
+        resolved=resolved,
     )
     if close_brief_should_skip(obj):
+        # A quiet session still resolved its due claims (above), but emits none.
         return None
     _store_brief(conn, obj)
+    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
     return obj
 
 
