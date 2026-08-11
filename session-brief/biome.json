@@ -9,6 +9,8 @@
     "ignore": [
       "**/.next/**",
       "apps/web/lib/contracts/brief.ts",
+      "apps/web/lib/db/schema.ts",
+      "apps/web/lib/db/relations.ts",
       "packages/contracts/brief-object.schema.json"
     ]
   },
