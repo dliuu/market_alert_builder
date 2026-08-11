@@ -5,7 +5,7 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 - [x] **M0 — Scaffold.** Monorepo, both apps boot, Supabase connected, Alembic runs, `pnpm contracts:gen` produces both generated files and CI fails when they're dirty.
 - [x] **M1 — Book CRUD.** Sectors, holdings, lots in Next.js. *Done when:* you enter your real book and it survives a redeploy.
 - [x] **M2 — Ingest + normalize.** One vendor behind `MarketDataProvider`. *Done when:* `bars_daily` fills nightly for your symbols and a replay from `raw_payloads` reproduces it byte-for-byte.
-- [ ] **M3 — Compute: returns, P&L, contribution.** *Done when:* numbers tie out against your broker to the cent, and `Σ contribution_bps == book day_bps` in a property test.
+- [x] **M3 — Compute: returns, P&L, contribution.** *Done when:* numbers tie out against your broker to the cent, and `Σ contribution_bps == book day_bps` in a property test.
 - [ ] **M4 — Assemble → BriefObject → web page.** *Done when:* you can read a close brief at `/briefs/<date>-close` and a snapshot test asserts the object from a frozen fixture.
 - [ ] **M5 — Suppression + tape quality.** *Done when:* a quiet session produces a visibly shorter brief and the roll-up line names the skipped tickers.
 - [ ] **M6 — Claims + resolution.** *Done when:* the close brief scores the same day's open brief and outcomes persist in `claims`.

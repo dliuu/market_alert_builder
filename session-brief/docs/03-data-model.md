@@ -35,7 +35,7 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 ## Derived
 
 ```sql
-metrics  (symbol, session_date, metric, value)   -- PK (symbol, session_date, metric)
+metrics  (user_id, symbol, session_date, metric, value)   -- PK (user_id, symbol, session_date, metric)
 flags    (id, user_id, flag_type, symbol, sector_id, first_seen, last_seen,
           severity, payload jsonb)
 claims   (id, user_id, brief_id, symbol, claim_type, direction, horizon_sessions,
@@ -47,7 +47,7 @@ deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
             -- UNIQUE (brief_id, recipient)
 ```
 
-`metrics` in long format looks wasteful and isn't: it lets you add a metric without a migration, and rolling-window queries stay clean.
+`metrics` in long format looks wasteful and isn't: it lets you add a metric without a migration, and rolling-window queries stay clean. It carries `user_id` (D14) — contribution, weight and P&L are book-specific, so a metric is only meaningful within a user's book. Units ride the metric name: `*_cents` are integer cents, `*_bps` are basis points, `day_return`/`weight` are fractions.
 
 `flags.last_seen` is what enforces the once-a-week rate limit on the correlation flag. Rate limiting belongs in the data, not the renderer — otherwise you can't answer "when did I last warn myself about this?"
 
