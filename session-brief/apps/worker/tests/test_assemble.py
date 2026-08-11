@@ -10,9 +10,16 @@ from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
+from contracts.brief import BriefObject, Row
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
 from worker.compute import Lot, Price, compute
 from worker.tape import TapeMetrics
+
+
+def _tier_of(row: Row) -> str:
+    assert row.tier is not None  # attribution rows are always tiered
+    return row.tier.value
+
 
 _SESSION = date(2026, 8, 11)  # a Tuesday
 _USER = "00000000-0000-0000-0000-000000000001"
@@ -36,7 +43,7 @@ def _tape(symbol: str, rvol: str | None, rp: str | None) -> TapeMetrics:
 # --- Two-name book, both movers: hand-checkable figures -------------------
 
 
-def _two() -> object:
+def _two() -> BriefObject:
     lots = [_lot("A", "10", "90"), _lot("B", "20", "40")]
     prices = {
         "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10%
@@ -61,14 +68,14 @@ def test_both_movers_are_full_none_suppressed() -> None:
     obj = _two()
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     assert [r.symbol for r in attribution.rows] == ["A", "B"]
-    assert all(r.tier.value == "full" for r in attribution.rows)
+    assert all(_tier_of(r) == "full" for r in attribution.rows)
     assert obj.suppressed == []
 
 
 # --- Mixed session: one of each tier (the M5 snapshot) --------------------
 
 
-def _mixed() -> object:
+def _mixed() -> BriefObject:
     lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "5", "100")]
     prices = {
         "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10.0% → full
@@ -89,7 +96,7 @@ def _mixed() -> object:
 def test_tiers_partition_every_name() -> None:
     obj = _mixed()
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
-    tiers = {r.symbol: r.tier.value for r in attribution.rows}
+    tiers = {r.symbol: _tier_of(r) for r in attribution.rows}
     assert tiers == {"A": "full", "B": "brief"}
     assert obj.suppressed == ["C"]
     # No name is lost: shown ∪ suppressed == every held symbol.
@@ -117,7 +124,7 @@ def test_matches_frozen_fixture() -> None:
 # --- Quiet session: nothing moved >1% → skip ------------------------------
 
 
-def _quiet() -> object:
+def _quiet() -> BriefObject:
     # B brief (-0.5%) and C suppressed (+0.1%); no full-tier mover.
     lots = [_lot("B", "20", "40"), _lot("C", "5", "100")]
     prices = {
@@ -145,7 +152,7 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     obj = assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
                    kind="close", generated_at=_GENERATED_AT)
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
-    assert attribution.rows[0].tier.value == "full"
+    assert _tier_of(attribution.rows[0]) == "full"
     assert obj.suppressed == []
     assert close_brief_should_skip(obj) is False
 

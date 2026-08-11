@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -71,21 +72,18 @@ def _seed(conn: Connection, zca_close_on_d: str, spy_close_on_d: str) -> None:
     _seed_bar(conn, "SPY", _D, spy_close_on_d)
 
 
-def _claim_row(conn: Connection, session_date: date = _E) -> dict:
+def _claim_row(conn: Connection, session_date: date = _E) -> dict[str, Any]:
     # Filter to the emit session: the resolve session's own close brief emits its
     # own claim, so there can be more than one row overall.
-    return (
-        conn.execute(
-            text(
-                "SELECT symbol, claim_type, direction, horizon_sessions, session_date, "
-                "outcome, resolved_session FROM claims "
-                "WHERE user_id = :u AND session_date = :d"
-            ),
-            {"u": _TEST_USER_ID, "d": session_date},
-        )
-        .mappings()
-        .one()
-    )
+    row = conn.execute(
+        text(
+            "SELECT symbol, claim_type, direction, horizon_sessions, session_date, "
+            "outcome, resolved_session FROM claims "
+            "WHERE user_id = :u AND session_date = :d"
+        ),
+        {"u": _TEST_USER_ID, "d": session_date},
+    ).mappings().one()
+    return dict(row)
 
 
 def test_emit_then_resolve_correct(db_conn: Connection) -> None:

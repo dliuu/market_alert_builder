@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -72,18 +73,15 @@ def _seed_book(conn: Connection) -> None:
     _seed_lot(conn, "ZZB", "20", 4000)  # cost $40
 
 
-def _brief_rows(conn: Connection) -> list[dict]:
-    return (
-        conn.execute(
-            text(
-                "SELECT kind, schema_version, body FROM briefs "
-                "WHERE user_id = :u AND session_date = :d AND kind = 'close'"
-            ),
-            {"u": _TEST_USER_ID, "d": _SESSION},
-        )
-        .mappings()
-        .all()
-    )
+def _brief_rows(conn: Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        text(
+            "SELECT kind, schema_version, body FROM briefs "
+            "WHERE user_id = :u AND session_date = :d AND kind = 'close'"
+        ),
+        {"u": _TEST_USER_ID, "d": _SESSION},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def test_assemble_and_store_persists_the_object(db_conn: Connection) -> None:
@@ -157,8 +155,9 @@ def test_tape_metrics_are_persisted(db_conn: Connection) -> None:
     from worker.tape import compute_and_store_tape
 
     tape = compute_and_store_tape(db_conn, _TEST_USER_ID, ["ZZT"], _SESSION)
-    assert float(tape["ZZT"].rvol) == 2.0  # 2000 / mean(1000 × 30)
-    assert float(tape["ZZT"].range_position) == 0.75  # (102-96)/(104-96)
+    rvol, rp = tape["ZZT"].rvol, tape["ZZT"].range_position
+    assert rvol is not None and float(rvol) == 2.0  # 2000 / mean(1000 × 30)
+    assert rp is not None and float(rp) == 0.75  # (102-96)/(104-96)
 
     stored = {
         r["metric"]: r["value"]
