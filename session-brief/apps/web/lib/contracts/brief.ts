@@ -59,6 +59,10 @@ export interface Section {
 }
 export interface Row {
   symbol: string;
+  /**
+   * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).
+   */
+  tier?: "full" | "brief";
   close?: number | null;
   day_return?: number | null;
   day_pnl_cents?: number | null;

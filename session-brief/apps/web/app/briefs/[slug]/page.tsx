@@ -31,6 +31,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   if (!row) notFound();
   const brief = row.body as unknown as BriefObject;
   const attribution = brief.sections.find((s) => s.id === "attribution");
+  const tape = brief.sections.find((s) => s.id === "tape_quality");
 
   return (
     <main style={S.main}>
@@ -132,6 +133,38 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </section>
       )}
 
+      {/* Roll-up line — the suppressed names, folded into one line */}
+      {brief.suppressed.length > 0 && (
+        <p style={S.muted}>{brief.suppressed.join(", ")} — unchanged.</p>
+      )}
+
+      {/* How they traded — tape quality for the movers */}
+      {tape && tape.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>How they traded</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Symbol</th>
+                <th style={S.thR}>RVOL</th>
+                <th style={S.th}>Range position</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tape.rows.map((r: Row) => (
+                <tr key={r.symbol}>
+                  <td style={S.td}>{r.symbol}</td>
+                  <td style={S.tdR}>{r.rvol != null ? `${r.rvol.toFixed(2)}×` : "—"}</td>
+                  <td style={{ ...S.td, width: "55%" }}>
+                    <RangeBar position={r.range_position} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {(brief.data_quality.missing.length > 0 || brief.data_quality.stale.length > 0) && (
         <p style={S.muted}>
           {brief.data_quality.missing.length > 0 &&
@@ -140,6 +173,18 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </p>
       )}
     </main>
+  );
+}
+
+function RangeBar({ position }: { position: number | null | undefined }) {
+  if (position == null) return <span style={S.muted}>—</span>;
+  const pctFromLow = Math.round(position * 100);
+  // Close near the high = strong (pine); near the low = weak (oxblood).
+  const fill = position >= 0.5 ? "#1a6b43" : "#8b2d2d";
+  return (
+    <div style={S.barTrack} title={`close at ${pctFromLow}% of the day's range`}>
+      <div style={{ ...S.barDot, left: `calc(${pctFromLow}% - 5px)`, background: fill }} />
+    </div>
   );
 }
 
@@ -199,6 +244,20 @@ const S: Record<string, React.CSSProperties> = {
     letterSpacing: "0.03em",
   },
   statValue: { fontSize: "1.05rem", fontWeight: 600, marginTop: 2 },
+  barTrack: {
+    position: "relative",
+    height: 8,
+    borderRadius: 4,
+    background: "linear-gradient(90deg, #f0e6e6, #e8e8e8, #e6f0ea)",
+    border: "1px solid #eee",
+  },
+  barDot: {
+    position: "absolute",
+    top: -2,
+    width: 10,
+    height: 10,
+    borderRadius: "50%",
+  },
   table: { borderCollapse: "collapse", width: "100%", fontSize: "0.88rem" },
   th: {
     textAlign: "left",

@@ -147,6 +147,10 @@ def _brief(kind: str, date_arg: str | None, user_id: str, dry_run: bool) -> None
     finally:
         conn.close()
 
+    if obj is None:
+        print(f"brief: {kind} {session_date} skipped — nothing moved >1%.")
+        return
+
     print(json.dumps(obj.model_dump(mode="json"), indent=2))
     verb = "would write (dry-run)" if dry_run else "wrote"
     print(f"brief: {verb} {obj.brief_id}")

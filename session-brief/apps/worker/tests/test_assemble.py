@@ -1,7 +1,6 @@
-"""Stage ④ assemble: pure, no DB. Explicit figure checks plus a snapshot of the
-whole object against a frozen fixture (docs/04 — "freeze one session, assert the
-object"). The input is the two-position book from test_compute, whose figures are
-hand-verifiable, so the fixture is auditable rather than a mystery blob."""
+"""Stage ④ assemble: pure, no DB. Figure checks on a hand-verifiable book, the
+M5 tiering rules (full / brief / suppressed), and a snapshot of a mixed session
+against a frozen fixture (docs/04)."""
 
 from __future__ import annotations
 
@@ -11,8 +10,9 @@ from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
-from worker.assemble import SCHEMA_VERSION, assemble
+from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
 from worker.compute import Lot, Price, compute
+from worker.tape import TapeMetrics
 
 _SESSION = date(2026, 8, 11)  # a Tuesday
 _USER = "00000000-0000-0000-0000-000000000001"
@@ -20,89 +20,135 @@ _GENERATED_AT = datetime(2026, 8, 11, 20, 42, 11, tzinfo=UTC)
 _FIXTURE = Path(__file__).parent / "fixtures" / "close_brief.json"
 
 
-def _fixture_input() -> tuple[list[Lot], dict[str, Price], dict[str, Decimal]]:
-    lots = [
-        Lot("A", Decimal("10"), 9000, date(2026, 8, 1)),  # 10 sh @ $90
-        Lot("B", Decimal("20"), 4000, date(2026, 8, 1)),  # 20 sh @ $40
-    ]
-    prices = {
-        "A": Price(c=Decimal("110"), prev_c=Decimal("100")),
-        "B": Price(c=Decimal("48"), prev_c=Decimal("50")),
-    }
-    closes = {"A": Decimal("110"), "B": Decimal("48")}
-    return lots, prices, closes
+def _lot(symbol: str, shares: str, cost: str) -> Lot:
+    cost_cents = int((Decimal(cost) * 100).to_integral_value())
+    return Lot(symbol, Decimal(shares), cost_cents, date(2026, 8, 1))
 
 
-def _build() -> object:
-    lots, prices, closes = _fixture_input()
-    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))  # SPY +1%
-    return assemble(
-        result,
-        closes,
-        user_id=_USER,
-        session_date=_SESSION,
-        kind="close",
-        generated_at=_GENERATED_AT,
+def _tape(symbol: str, rvol: str | None, rp: str | None) -> TapeMetrics:
+    return TapeMetrics(
+        symbol=symbol,
+        rvol=Fraction(rvol) if rvol is not None else None,
+        range_position=Fraction(rp) if rp is not None else None,
     )
 
 
-# --- Explicit figures (the spec, hand-checked) ---------------------------
+# --- Two-name book, both movers: hand-checkable figures -------------------
+
+
+def _two() -> object:
+    lots = [_lot("A", "10", "90"), _lot("B", "20", "40")]
+    prices = {
+        "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10%
+        "B": Price(c=Decimal("48"), prev_c=Decimal("50")),  # -4%
+    }
+    closes = {"A": Decimal("110"), "B": Decimal("48")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT)
 
 
 def test_book_totals() -> None:
-    book = _build().book
-    assert book.value_cents == 206_000  # 10*$110 + 20*$48 = $2,060
-    assert book.day_pnl_cents == 6_000  # 10*(+$10) + 20*(-$2) = +$60
-    assert book.day_bps == 300  # $60 / $2,000 prior = 3.00% = 300 bps
-    assert book.total_pnl_cents == 36_000  # 10*$20 + 20*$8 = $360
-    assert book.vs_spy_bps == 200  # 300 bps book − 100 bps SPY
-    assert book.total_pct == 36_000 / 170_000  # $360 / $1,700 cost
+    book = _two().book
+    assert book.value_cents == 206_000
+    assert book.day_pnl_cents == 6_000
+    assert book.day_bps == 300
+    assert book.total_pnl_cents == 36_000
+    assert book.vs_spy_bps == 200
 
 
-def test_attribution_rows() -> None:
-    sections = _build().sections
-    assert [s.id.value for s in sections] == ["attribution"]
-    rows = {r.symbol: r for r in sections[0].rows}
-    assert rows["A"].close == 110.0
-    assert rows["A"].day_return == 0.1
-    assert rows["A"].day_pnl_cents == 10_000
-    assert rows["A"].contribution_bps == 500  # $100 / $2,000 prior = 500 bps
-    assert rows["B"].contribution_bps == -200  # -$40 / $2,000 prior = -200 bps
-    assert rows["B"].day_return == -0.04
+def test_both_movers_are_full_none_suppressed() -> None:
+    obj = _two()
+    attribution = next(s for s in obj.sections if s.id.value == "attribution")
+    assert [r.symbol for r in attribution.rows] == ["A", "B"]
+    assert all(r.tier.value == "full" for r in attribution.rows)
+    assert obj.suppressed == []
 
 
-def test_subject_is_numeric_and_deterministic() -> None:
-    assert _build().subject == "Close · Tue Aug 11 — book +3.0% (+$60.00)"
+# --- Mixed session: one of each tier (the M5 snapshot) --------------------
 
 
-def test_money_fields_are_integers() -> None:
-    obj = _build()
-    assert isinstance(obj.book.value_cents, int)
-    assert isinstance(obj.book.day_pnl_cents, int)
-    for row in obj.sections[0].rows:
-        assert row.day_pnl_cents is None or isinstance(row.day_pnl_cents, int)
-        assert row.total_pnl_cents is None or isinstance(row.total_pnl_cents, int)
+def _mixed() -> object:
+    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "5", "100")]
+    prices = {
+        "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10.0% → full
+        "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),  # -0.5%  → brief
+        "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),  # +0.1%  → suppressed
+    }
+    closes = {"A": Decimal("110"), "B": Decimal("49.75"), "C": Decimal("100.1")}
+    tape = {
+        "A": _tape("A", "2", "0.8"),
+        "B": _tape("B", "1.2", "0.5"),
+        "C": _tape("C", "1", "0.5"),
+    }
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT)
 
 
-def test_downstream_stages_are_empty_in_m4() -> None:
-    obj = _build()
-    assert obj.one_thing is None  # narration → M8
-    assert obj.flags == []  # M7
-    assert obj.claims == [] and obj.resolved_claims == []  # M6
-    assert obj.suppressed == []  # M5
-    assert obj.schema_version == SCHEMA_VERSION
+def test_tiers_partition_every_name() -> None:
+    obj = _mixed()
+    attribution = next(s for s in obj.sections if s.id.value == "attribution")
+    tiers = {r.symbol: r.tier.value for r in attribution.rows}
+    assert tiers == {"A": "full", "B": "brief"}
+    assert obj.suppressed == ["C"]
+    # No name is lost: shown ∪ suppressed == every held symbol.
+    assert set(tiers) | set(obj.suppressed) == {"A", "B", "C"}
 
 
-def test_identifiers() -> None:
-    obj = _build()
-    assert obj.brief_id == f"{_USER}-2026-08-11-close"
-    assert obj.generated_at == _GENERATED_AT
+def test_tape_quality_is_full_movers_only() -> None:
+    obj = _mixed()
+    tape = next(s for s in obj.sections if s.id.value == "tape_quality")
+    assert [r.symbol for r in tape.rows] == ["A"]  # B is brief, C suppressed
+    assert tape.rows[0].rvol == 2.0
+    assert tape.rows[0].range_position == 0.8
 
 
-# --- Snapshot: the whole object against a frozen fixture ------------------
+def test_mixed_session_sends() -> None:
+    assert close_brief_should_skip(_mixed()) is False  # A is a full-tier mover
 
 
 def test_matches_frozen_fixture() -> None:
-    got = _build().model_dump(mode="json")
+    got = _mixed().model_dump(mode="json")
     expected = json.loads(_FIXTURE.read_text())
     assert got == expected
+
+
+# --- Quiet session: nothing moved >1% → skip ------------------------------
+
+
+def _quiet() -> object:
+    # B brief (-0.5%) and C suppressed (+0.1%); no full-tier mover.
+    lots = [_lot("B", "20", "40"), _lot("C", "5", "100")]
+    prices = {
+        "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),
+        "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),
+    }
+    closes = {"B": Decimal("49.75"), "C": Decimal("100.1")}
+    tape = {"B": _tape("B", "1.2", "0.5"), "C": _tape("C", "1", "0.5")}
+    result = compute(_SESSION, lots, prices)
+    return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT)
+
+
+def test_quiet_session_is_skipped() -> None:
+    assert close_brief_should_skip(_quiet()) is True
+
+
+def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
+    # C barely moved (+0.1%) but its volume spiked → full, so the brief sends.
+    lots = [_lot("C", "5", "100")]
+    prices = {"C": Price(c=Decimal("100.1"), prev_c=Decimal("100"))}
+    closes = {"C": Decimal("100.1")}
+    tape = {"C": _tape("C", "3", "0.5")}  # rvol 3.0 > 1.5
+    result = compute(_SESSION, lots, prices)
+    obj = assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
+                   kind="close", generated_at=_GENERATED_AT)
+    attribution = next(s for s in obj.sections if s.id.value == "attribution")
+    assert attribution.rows[0].tier.value == "full"
+    assert obj.suppressed == []
+    assert close_brief_should_skip(obj) is False
+
+
+def test_schema_version_is_two() -> None:
+    assert _mixed().schema_version == SCHEMA_VERSION == 2

@@ -90,6 +90,7 @@ def test_assemble_and_store_persists_the_object(db_conn: Connection) -> None:
     _seed_book(db_conn)
 
     obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None  # both names are full-tier movers → the brief sends
 
     rows = _brief_rows(db_conn)
     assert len(rows) == 1
@@ -111,3 +112,63 @@ def test_reassembly_upserts_not_duplicates(db_conn: Connection) -> None:
     assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
 
     assert len(_brief_rows(db_conn)) == 1
+
+
+def test_quiet_session_writes_nothing(db_conn: Connection) -> None:
+    # Both names move <0.3% → suppressed, no full-tier mover → skip, no row.
+    _seed_user(db_conn)
+    for symbol, prev_c, c in (("ZZA", "100", "100.1"), ("ZZB", "50", "49.95")):
+        _seed_bar(db_conn, symbol, _PREV, prev_c)
+        _seed_bar(db_conn, symbol, _SESSION, c)
+    _seed_lot(db_conn, "ZZA", "10", 9000)
+    _seed_lot(db_conn, "ZZB", "20", 4000)
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+
+    assert obj is None
+    assert _brief_rows(db_conn) == []
+
+
+def test_tape_metrics_are_persisted(db_conn: Connection) -> None:
+    # 30 prior sessions of flat volume, then a session with a real intraday range
+    # and double volume → rvol and range_position land in `metrics`.
+    _seed_user(db_conn)
+    from datetime import timedelta
+
+    day = _SESSION - timedelta(days=40)
+    for _ in range(30):
+        db_conn.execute(
+            text(
+                "INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v, adj_c) "
+                "VALUES ('ZZT', :d, 100, 100, 100, 100, 1000, 100)"
+            ),
+            {"d": day},
+        )
+        day += timedelta(days=1)
+    # session bar: close in the top quarter of a 96→104 range, volume 2000
+    db_conn.execute(
+        text(
+            "INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v, adj_c) "
+            "VALUES ('ZZT', :d, 100, 104, 96, 102, 2000, 102)"
+        ),
+        {"d": _SESSION},
+    )
+
+    from worker.tape import compute_and_store_tape
+
+    tape = compute_and_store_tape(db_conn, _TEST_USER_ID, ["ZZT"], _SESSION)
+    assert float(tape["ZZT"].rvol) == 2.0  # 2000 / mean(1000 × 30)
+    assert float(tape["ZZT"].range_position) == 0.75  # (102-96)/(104-96)
+
+    stored = {
+        r["metric"]: r["value"]
+        for r in db_conn.execute(
+            text(
+                "SELECT metric, value FROM metrics WHERE user_id = :u "
+                "AND symbol = 'ZZT' AND session_date = :d"
+            ),
+            {"u": _TEST_USER_ID, "d": _SESSION},
+        ).mappings()
+    }
+    assert float(stored["rvol"]) == 2.0
+    assert float(stored["range_position"]) == 0.75

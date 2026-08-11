@@ -6,10 +6,11 @@ turns the exact ``Fraction``s that stage ③ carries into the contract's display
 types: basis points round to ``int``, ratios become ``float``. Money stays
 integer cents end to end (invariant: never float).
 
-M4 scope: the close brief's ``book`` totals and one ``attribution`` section.
-Suppression tiers (M5), tape quality (M5), claims (M6), flags (M7) and narration
-(M8) are deliberately empty here; the schema allows their arrays to be empty and
-``one_thing``/``why`` to be null.
+M5 adds suppression and tape quality: assembly tiers every held name
+(full / brief / suppressed) from movement + RVOL, folds the suppressed ones
+into ``suppressed[]`` (rendered as one roll-up line), and emits a
+``tape_quality`` section for the movers. Claims (M6), flags (M7) and narration
+(M8) stay empty; the schema allows it.
 """
 
 from __future__ import annotations
@@ -23,19 +24,31 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from contracts.brief import BriefObject
+from contracts.brief import Id as SectionId
+from contracts.brief import Tier1 as RowTier
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
+from worker.tape import TapeMetrics, compute_and_store_tape
 
-# The first shipped object shape. Bump on any shape change and keep old
-# renderers (docs/04). The "3" in the docs/04 example is illustrative, not
-# history — there was no v1/v2.
-SCHEMA_VERSION = 1
+# Object shape version. Bump on any shape change and keep old renderers
+# (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
+# section, populated `suppressed[]`).
+SCHEMA_VERSION = 2
 
 _BPS_PER_UNIT = 10_000
+
+# Suppression thresholds (docs/05). `full` also fires on an RVOL spike; `brief`
+# is the 0.3–1% band; below that a name is suppressed. The earnings-in-5-sessions
+# and "carries news" exceptions need data that lands at M7/M8 and are not yet
+# applied here.
+_FULL_MOVE = Fraction(1, 100)  # > 1%
+_BRIEF_MOVE = Fraction(3, 1000)  # >= 0.3%
+_RVOL_SPIKE = Fraction(3, 2)  # > 1.5x
 
 
 def assemble(
     result: ComputeResult,
     closes: dict[str, Decimal],
+    tape: dict[str, TapeMetrics],
     *,
     user_id: str,
     session_date: date,
@@ -46,10 +59,10 @@ def assemble(
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
-    ``closes`` maps each held symbol to its session close (dollars) — the one
-    figure the attribution rows need that ``ComputeResult`` doesn't carry.
-    ``generated_at`` is injected (never ``datetime.now()``) so the object is
-    deterministic and snapshot-testable.
+    ``closes`` maps each held symbol to its session close (dollars); ``tape``
+    carries RVOL / range position per symbol. ``generated_at`` is injected
+    (never ``datetime.now()``) so the object is deterministic and
+    snapshot-testable.
     """
     if kind not in ("open", "close"):
         raise ValueError(f"unknown brief kind {kind!r}")
@@ -63,6 +76,18 @@ def assemble(
             "(no prior-close value). Graceful degradation lands in M5."
         )
 
+    # Tier every held name. Suppressed names leave the rows and become one
+    # roll-up line; the survivors keep their tier for narration (M8) and tape.
+    shown: list[tuple[PositionMetrics, str]] = []
+    suppressed: list[str] = []
+    for p in result.positions:
+        rvol = tape[p.symbol].rvol if p.symbol in tape else None
+        tier = _tier(p.day_return, rvol)
+        if tier == "suppressed":
+            suppressed.append(p.symbol)
+        else:
+            shown.append((p, tier))
+
     payload = {
         "schema_version": SCHEMA_VERSION,
         "brief_id": f"{user_id}-{session_date.isoformat()}-{kind}",
@@ -73,15 +98,37 @@ def assemble(
         "subject": _subject(kind, session_date, book),
         "one_thing": None,  # narration, M8
         "book": _book(book),
-        "sections": [_attribution(result.positions, closes)],
+        "sections": [_attribution(shown, closes), _tape_quality(shown, tape)],
         "flags": [],  # M7
         "claims": [],  # M6
         "resolved_claims": [],  # M6
-        "suppressed": [],  # M5
+        "suppressed": sorted(suppressed),
         "data_quality": {"missing": missing or [], "stale": stale or []},
     }
     # model_validate enforces the contract (extra='forbid', required keys, types).
     return BriefObject.model_validate(payload)
+
+
+def _tier(day_return: Fraction | None, rvol: Fraction | None) -> str:
+    """Classify a name into full / brief / suppressed (docs/05)."""
+    moved = abs(day_return) if day_return is not None else Fraction(0)
+    if moved > _FULL_MOVE or (rvol is not None and rvol > _RVOL_SPIKE):
+        return "full"
+    if moved >= _BRIEF_MOVE:
+        return "brief"
+    return "suppressed"
+
+
+def close_brief_should_skip(obj: BriefObject) -> bool:
+    """A close brief is skipped entirely when nothing was a full-tier mover
+    (docs/05). Brief-tier names alone don't warrant a send; the open brief
+    (not yet built) always sends regardless."""
+    if obj.kind.value != "close":
+        return False
+    attribution = next((s for s in obj.sections if s.id is SectionId.attribution), None)
+    if attribution is None:
+        return True
+    return not any(r.tier is RowTier.full for r in attribution.rows)
 
 
 def _book(book: BookMetrics) -> dict[str, int | float]:
@@ -101,10 +148,13 @@ def _book(book: BookMetrics) -> dict[str, int | float]:
     return out
 
 
-def _attribution(positions: list[PositionMetrics], closes: dict[str, Decimal]) -> dict[str, object]:
+def _attribution(
+    shown: list[tuple[PositionMetrics, str]], closes: dict[str, Decimal]
+) -> dict[str, object]:
     rows = [
         {
             "symbol": p.symbol,
+            "tier": tier,
             "close": float(closes[p.symbol]) if p.symbol in closes else None,
             "day_return": float(p.day_return) if p.day_return is not None else None,
             "day_pnl_cents": p.day_pnl_cents,
@@ -112,9 +162,35 @@ def _attribution(positions: list[PositionMetrics], closes: dict[str, Decimal]) -
             "total_pnl_cents": p.total_pnl_cents,
             "total_pct": _row_total_pct(p),
         }
-        for p in positions
+        for p, tier in shown
     ]
     return {"id": "attribution", "tier": "full", "note": None, "rows": rows}
+
+
+def _tape_quality(
+    shown: list[tuple[PositionMetrics, str]], tape: dict[str, TapeMetrics]
+) -> dict[str, object]:
+    """§4 "How they traded" — RVOL and range position for the full-tier movers.
+    Brief-tier names get a bare attribution row but no tape detail; if there are
+    no movers, the whole section is suppressed."""
+    rows = [
+        {
+            "symbol": p.symbol,
+            "rvol": _tape_float(tape, p.symbol, "rvol"),
+            "range_position": _tape_float(tape, p.symbol, "range_position"),
+        }
+        for p, tier in shown
+        if tier == "full"
+    ]
+    tier = "full" if rows else "suppressed"
+    return {"id": "tape_quality", "tier": tier, "note": None, "rows": rows}
+
+
+def _tape_float(tape: dict[str, TapeMetrics], symbol: str, field: str) -> float | None:
+    if symbol not in tape:
+        return None
+    value: Fraction | None = getattr(tape[symbol], field)
+    return float(value) if value is not None else None
 
 
 def _row_total_pct(p: PositionMetrics) -> float | None:
@@ -169,24 +245,29 @@ _UPSERT_BRIEF = text("""
 
 def assemble_and_store(
     conn: Connection, user_id: str, session_date: date, kind: str = "close"
-) -> BriefObject:
+) -> BriefObject | None:
     """Compute metrics, assemble the object, and upsert it into ``briefs``.
-    Idempotent on ``(user_id, session_date, kind)``: re-running replaces the row
-    rather than duplicating it."""
+    Returns ``None`` (writing nothing) when a close brief is skipped because
+    nothing was a full-tier mover. Idempotent on ``(user_id, session_date,
+    kind)``: re-running replaces the row rather than duplicating it."""
     result = compute_and_store(conn, user_id, session_date)
     symbols = [p.symbol for p in result.positions]
     closes = _read_closes(conn, symbols, session_date)
+    tape = compute_and_store_tape(conn, user_id, symbols, session_date)
 
     from datetime import UTC
 
     obj = assemble(
         result,
         closes,
+        tape,
         user_id=user_id,
         session_date=session_date,
         kind=kind,
         generated_at=datetime.now(UTC),
     )
+    if close_brief_should_skip(obj):
+        return None
     _store_brief(conn, obj)
     return obj
 

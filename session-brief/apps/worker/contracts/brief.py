@@ -63,8 +63,17 @@ class Tier(Enum):
     suppressed = 'suppressed'
 
 
+class Tier1(Enum):
+    full = 'full'
+    brief = 'brief'
+
+
 class Row(BaseModel):
     symbol: str
+    tier: Tier1 | None = Field(
+        None,
+        description='Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).',
+    )
     close: float | None = None
     day_return: float | None = None
     day_pnl_cents: int | None = None
