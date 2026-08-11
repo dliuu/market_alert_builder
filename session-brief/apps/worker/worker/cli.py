@@ -9,6 +9,7 @@ from fractions import Fraction
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from worker.assemble import assemble_and_store
 from worker.compute import compute_and_store
 from worker.constants import DEV_USER_ID
 from worker.db import get_engine
@@ -32,6 +33,14 @@ def main() -> None:
     compute.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
     compute.add_argument("--user", default=DEV_USER_ID, help="user id (defaults to the dev user)")
 
+    brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
+    brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
+    brief.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
+    brief.add_argument("--user", default=DEV_USER_ID, help="user id (defaults to the dev user)")
+    brief.add_argument(
+        "--dry-run", action="store_true", help="print the object; do not write the briefs row"
+    )
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -40,6 +49,10 @@ def main() -> None:
 
     if args.command == "compute":
         _compute(date_arg=args.date, user_id=args.user)
+        return
+
+    if args.command == "brief":
+        _brief(kind=args.kind, date_arg=args.date, user_id=args.user, dry_run=args.dry_run)
         return
 
     if args.command in (None, "hello"):
@@ -110,6 +123,33 @@ def _compute(date_arg: str | None, user_id: str) -> None:
     identity = book.day_bps is not None and total_contrib == book.day_bps
     print(f"  Σ contribution_bps = {_bps(total_contrib)}  vs  day_bps = {_bps(book.day_bps)}  "
           f"[{'OK' if identity else 'n/a — book opened today'}]")
+
+
+def _brief(kind: str, date_arg: str | None, user_id: str, dry_run: bool) -> None:
+    import json
+
+    engine = get_engine()
+    session_date = date.fromisoformat(date_arg) if date_arg else _latest_session(engine)
+    if session_date is None:
+        raise SystemExit("No bars found. Run `backfill` first.")
+
+    conn = engine.connect()
+    trans = conn.begin()
+    try:
+        obj = assemble_and_store(conn, user_id, session_date, kind)
+        if dry_run:
+            trans.rollback()  # --dry-run assembles but writes nothing
+        else:
+            trans.commit()
+    except Exception:
+        trans.rollback()
+        raise
+    finally:
+        conn.close()
+
+    print(json.dumps(obj.model_dump(mode="json"), indent=2))
+    verb = "would write (dry-run)" if dry_run else "wrote"
+    print(f"brief: {verb} {obj.brief_id}")
 
 
 def _latest_session(engine: Engine) -> date | None:

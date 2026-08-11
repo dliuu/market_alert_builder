@@ -1,0 +1,232 @@
+import { DEV_USER_ID } from "@/lib/constants";
+import type { BriefObject, Row } from "@/lib/contracts/brief";
+import { db } from "@/lib/db";
+import { briefs } from "@/lib/db/schema";
+import { and, eq } from "drizzle-orm";
+import { notFound } from "next/navigation";
+
+export const dynamic = "force-dynamic";
+
+// Slug is "<YYYY-MM-DD>-<kind>", e.g. 2026-08-11-close.
+const SLUG = /^(\d{4}-\d{2}-\d{2})-(open|close)$/;
+
+export default async function BriefPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const match = SLUG.exec(slug);
+  if (!match) notFound();
+  const [sessionDate, kind] = [match[1], match[2]];
+
+  const [row] = await db
+    .select()
+    .from(briefs)
+    .where(
+      and(
+        eq(briefs.userId, DEV_USER_ID),
+        eq(briefs.sessionDate, sessionDate),
+        eq(briefs.kind, kind),
+      ),
+    )
+    .limit(1);
+
+  if (!row) notFound();
+  const brief = row.body as unknown as BriefObject;
+  const attribution = brief.sections.find((s) => s.id === "attribution");
+
+  return (
+    <main style={S.main}>
+      <p style={S.crumb}>
+        <a href="/briefs">← briefs</a>
+      </p>
+      <h1 style={S.subject}>{brief.subject}</h1>
+      <p style={S.muted}>
+        {kind} · {sessionDate} · schema v{brief.schema_version}
+      </p>
+
+      {brief.one_thing && <p style={S.oneThing}>{brief.one_thing}</p>}
+
+      {/* Scorecard — from book totals */}
+      <section style={S.card}>
+        <h2 style={S.h2}>Session scorecard</h2>
+        <div style={S.grid}>
+          <Stat label="Book value" value={dollars(brief.book.value_cents)} />
+          <Stat
+            label="Day P&L"
+            value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
+            positive={brief.book.day_pnl_cents >= 0}
+          />
+          <Stat
+            label="Total P&L"
+            value={`${signedDollars(brief.book.total_pnl_cents)}${
+              brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
+            }`}
+            positive={brief.book.total_pnl_cents >= 0}
+          />
+          {brief.book.vs_spy_bps != null && (
+            <Stat
+              label="vs SPY"
+              value={bps(brief.book.vs_spy_bps)}
+              positive={brief.book.vs_spy_bps >= 0}
+            />
+          )}
+        </div>
+      </section>
+
+      {/* Attribution */}
+      {attribution && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Attribution</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Symbol</th>
+                <th style={S.thR}>Close</th>
+                <th style={S.thR}>Day %</th>
+                <th style={S.thR}>Day P&L</th>
+                <th style={S.thR}>Contrib</th>
+                <th style={S.thR}>Total P&L</th>
+                <th style={S.thR}>Total %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {attribution.rows.map((r: Row) => (
+                <tr key={r.symbol}>
+                  <td style={S.td}>{r.symbol}</td>
+                  <td style={S.tdR}>{r.close != null ? `$${r.close.toFixed(2)}` : "—"}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.day_return) }}>
+                    {pctOrDash(r.day_return)}
+                  </td>
+                  <td style={{ ...S.tdR, ...signColor(r.day_pnl_cents) }}>
+                    {r.day_pnl_cents != null ? signedDollars(r.day_pnl_cents) : "—"}
+                  </td>
+                  <td style={{ ...S.tdR, ...signColor(r.contribution_bps) }}>
+                    {r.contribution_bps != null ? bps(r.contribution_bps) : "—"}
+                  </td>
+                  <td style={{ ...S.tdR, ...signColor(r.total_pnl_cents) }}>
+                    {r.total_pnl_cents != null ? signedDollars(r.total_pnl_cents) : "—"}
+                  </td>
+                  <td style={S.tdR}>{pctOrDash(r.total_pct)}</td>
+                </tr>
+              ))}
+              {/* Book totals row */}
+              <tr>
+                <td style={S.tdTotal}>Book</td>
+                <td style={S.tdR} />
+                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                  {pct(brief.book.day_bps / 10000)}
+                </td>
+                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                  {signedDollars(brief.book.day_pnl_cents)}
+                </td>
+                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
+                  {bps(brief.book.day_bps)}
+                </td>
+                <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
+                  {signedDollars(brief.book.total_pnl_cents)}
+                </td>
+                <td style={S.tdRTotal}>
+                  {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {(brief.data_quality.missing.length > 0 || brief.data_quality.stale.length > 0) && (
+        <p style={S.muted}>
+          {brief.data_quality.missing.length > 0 &&
+            `missing: ${brief.data_quality.missing.join(", ")}. `}
+          {brief.data_quality.stale.length > 0 && `stale: ${brief.data_quality.stale.join(", ")}.`}
+        </p>
+      )}
+    </main>
+  );
+}
+
+function Stat({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
+  return (
+    <div>
+      <div style={S.statLabel}>{label}</div>
+      <div style={{ ...S.statValue, ...(positive == null ? {} : signColor(positive ? 1 : -1)) }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// --- formatters ---
+function dollars(cents: number): string {
+  return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function signedDollars(cents: number): string {
+  const sign = cents >= 0 ? "+" : "-";
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function bps(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value}bps`;
+}
+function pct(fraction: number): string {
+  return `${fraction >= 0 ? "+" : ""}${(fraction * 100).toFixed(2)}%`;
+}
+function pctOrDash(fraction: number | null | undefined): string {
+  return fraction == null ? "—" : pct(fraction);
+}
+function signColor(v: number | null | undefined): React.CSSProperties {
+  if (v == null || v === 0) return {};
+  // pine / oxblood — the pair chosen for surviving dark-mode inversion (docs/06).
+  return { color: v > 0 ? "#1a6b43" : "#8b2d2d" };
+}
+
+const S: Record<string, React.CSSProperties> = {
+  main: { fontFamily: "system-ui", padding: "2rem", maxWidth: 820, margin: "0 auto" },
+  crumb: { fontSize: "0.85rem", margin: "0 0 8px" },
+  subject: { margin: "0 0 4px", fontSize: "1.35rem" },
+  muted: { color: "#666", fontSize: "0.85rem", margin: "4px 0" },
+  oneThing: {
+    background: "#fff7d6",
+    padding: "12px 14px",
+    borderRadius: 8,
+    margin: "14px 0",
+    fontSize: "1rem",
+  },
+  card: { border: "1px solid #e2e2e2", borderRadius: 10, padding: "14px 16px", margin: "16px 0" },
+  h2: { margin: "0 0 12px", fontSize: "1rem", color: "#333" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 },
+  statLabel: {
+    fontSize: "0.72rem",
+    color: "#888",
+    textTransform: "uppercase",
+    letterSpacing: "0.03em",
+  },
+  statValue: { fontSize: "1.05rem", fontWeight: 600, marginTop: 2 },
+  table: { borderCollapse: "collapse", width: "100%", fontSize: "0.88rem" },
+  th: {
+    textAlign: "left",
+    padding: "4px 8px 6px 0",
+    color: "#888",
+    fontWeight: 500,
+    borderBottom: "1px solid #eee",
+  },
+  thR: {
+    textAlign: "right",
+    padding: "4px 0 6px 8px",
+    color: "#888",
+    fontWeight: 500,
+    borderBottom: "1px solid #eee",
+  },
+  td: { padding: "5px 8px 5px 0", borderBottom: "1px solid #f4f4f4", fontWeight: 600 },
+  tdR: {
+    padding: "5px 0 5px 8px",
+    borderBottom: "1px solid #f4f4f4",
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+  },
+  tdTotal: { padding: "7px 8px 5px 0", borderTop: "2px solid #ddd", fontWeight: 700 },
+  tdRTotal: {
+    padding: "7px 0 5px 8px",
+    borderTop: "2px solid #ddd",
+    textAlign: "right",
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+  },
+};

@@ -1,4 +1,4 @@
-import { pgTable, varchar, unique, pgPolicy, uuid, text, timestamp, index, foreignKey, integer, check, numeric, bigint, date } from "drizzle-orm/pg-core"
+import { pgTable, varchar, unique, pgPolicy, uuid, text, timestamp, index, foreignKey, integer, check, numeric, bigint, date, jsonb, primaryKey } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -84,4 +84,70 @@ export const lots = pgTable("lots", {
 			name: "lots_user_id_fkey"
 		}).onDelete("cascade"),
 	pgPolicy("lots_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
+]);
+
+export const rawPayloads = pgTable("raw_payloads", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	source: text().notNull(),
+	endpoint: text().notNull(),
+	symbol: text().notNull(),
+	asOf: date("as_of").notNull(),
+	body: jsonb().notNull(),
+	fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("raw_payloads_symbol_idx").using("btree", table.symbol.asc().nullsLast().op("text_ops")),
+	unique("raw_payloads_source_endpoint_symbol_as_of_key").on(table.source, table.endpoint, table.symbol, table.asOf),
+	pgPolicy("raw_payloads_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+]);
+
+export const briefs = pgTable("briefs", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	userId: uuid("user_id").notNull(),
+	sessionDate: date("session_date").notNull(),
+	kind: text().notNull(),
+	schemaVersion: integer("schema_version").notNull(),
+	body: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("briefs_user_date_idx").using("btree", table.userId.asc().nullsLast().op("date_ops"), table.sessionDate.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "briefs_user_id_fkey"
+		}).onDelete("cascade"),
+	unique("briefs_user_id_session_date_kind_key").on(table.userId, table.sessionDate, table.kind),
+	pgPolicy("briefs_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
+	check("briefs_kind_check", sql`kind = ANY (ARRAY['open'::text, 'close'::text])`),
+]);
+
+export const metrics = pgTable("metrics", {
+	userId: uuid("user_id").notNull(),
+	symbol: text().notNull(),
+	sessionDate: date("session_date").notNull(),
+	metric: text().notNull(),
+	value: numeric().notNull(),
+}, (table) => [
+	index("metrics_user_date_idx").using("btree", table.userId.asc().nullsLast().op("date_ops"), table.sessionDate.asc().nullsLast().op("date_ops")),
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "metrics_user_id_fkey"
+		}).onDelete("cascade"),
+	primaryKey({ columns: [table.userId, table.symbol, table.sessionDate, table.metric], name: "metrics_pkey"}),
+	pgPolicy("metrics_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
+]);
+
+export const barsDaily = pgTable("bars_daily", {
+	symbol: text().notNull(),
+	sessionDate: date("session_date").notNull(),
+	o: numeric().notNull(),
+	h: numeric().notNull(),
+	l: numeric().notNull(),
+	c: numeric().notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	v: bigint({ mode: "number" }).notNull(),
+	adjC: numeric("adj_c").notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.symbol, table.sessionDate], name: "bars_daily_pkey"}),
+	pgPolicy("bars_daily_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
 ]);

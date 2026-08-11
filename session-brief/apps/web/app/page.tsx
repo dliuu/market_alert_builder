@@ -6,6 +6,9 @@ export default function Home() {
       <p>
         <a href="/book">Set up your book →</a>
       </p>
+      <p>
+        <a href="/briefs">Read your briefs →</a>
+      </p>
     </main>
   );
 }

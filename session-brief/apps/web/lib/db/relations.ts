@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, sectors, holdings, lots } from "./schema";
+import { users, sectors, holdings, lots, briefs, metrics } from "./schema";
 
 export const sectorsRelations = relations(sectors, ({one, many}) => ({
 	user: one(users, {
@@ -13,6 +13,8 @@ export const usersRelations = relations(users, ({many}) => ({
 	sectors: many(sectors),
 	holdings: many(holdings),
 	lots: many(lots),
+	briefs: many(briefs),
+	metrics: many(metrics),
 }));
 
 export const holdingsRelations = relations(holdings, ({one, many}) => ({
@@ -34,6 +36,20 @@ export const lotsRelations = relations(lots, ({one}) => ({
 	}),
 	user: one(users, {
 		fields: [lots.userId],
+		references: [users.id]
+	}),
+}));
+
+export const briefsRelations = relations(briefs, ({one}) => ({
+	user: one(users, {
+		fields: [briefs.userId],
+		references: [users.id]
+	}),
+}));
+
+export const metricsRelations = relations(metrics, ({one}) => ({
+	user: one(users, {
+		fields: [metrics.userId],
 		references: [users.id]
 	}),
 }));
