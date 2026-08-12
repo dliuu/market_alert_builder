@@ -11,7 +11,7 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 - [x] **M6 — Claims + resolution.** *Done when:* the close brief scores the same day's open brief and outcomes persist in `claims`.
 - [x] **M7 — Flags: position risk + correlation.** *Done when:* thresholds fire correctly on a synthetic fixture and the weekly rate limit holds across three consecutive briefs.
 - [x] **M8 — Narration.** *Done when:* prose appears, and revoking the Claude API key still produces a valid, sendable brief.
-- [ ] **M9 — React Email + Resend + DNS.** *Done when:* it lands in your inbox looking like the design reference, in Gmail *and* Outlook, under 80KB, with a plaintext part.
+- [x] **M9 — React Email + Resend + DNS.** *Done when:* it lands in your inbox looking like the design reference, in Gmail *and* Outlook, under 80KB, with a plaintext part.
 - [ ] **M10 — Scheduler + dead-man's switch.** *Done when:* it runs five consecutive sessions untouched, including one market holiday it correctly skips.
 
 **M3 is the one to be pedantic about.** If contribution bps don't sum to the book return, every downstream insight is quietly wrong and you won't notice for a month.

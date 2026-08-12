@@ -28,3 +28,17 @@ WEB_RENDER_URL: str = os.environ.get("WEB_RENDER_URL", "http://localhost:3000")
 BRIEF_FROM: str = os.environ.get("BRIEF_FROM", "")
 # Default recipient for the `send` CLI command until per-user delivery exists.
 BRIEF_RECIPIENT: str = os.environ.get("BRIEF_RECIPIENT", "")
+
+# Scheduler + dead-man's switch (stage ①→⑦ orchestration, M10).
+# Healthchecks.io ping URL. The scheduler GETs it on every successful run
+# (including a correctly-skipped holiday) and GETs `<url>/fail` on a crash — so a
+# dead worker stops pinging and the check goes red (docs/02). Empty ⇒ no ping.
+HEALTHCHECKS_URL: str = os.environ.get("HEALTHCHECKS_URL", "")
+# Minutes after the session close to send the close brief (docs/02: send 16:45,
+# i.e. close + 45). Moves with half-days because it's added to the real close.
+SEND_DELAY_MINUTES: int = int(os.environ.get("SEND_DELAY_MINUTES", "45"))
+# How long to poll Tiingo for today's EOD bar before giving up, and how often.
+# Tiingo may publish a few minutes after the bell; a bounded poll avoids a false
+# alarm without letting a stale brief go out late (docs/06).
+BAR_POLL_TIMEOUT_S: int = int(os.environ.get("BAR_POLL_TIMEOUT_S", "1200"))
+BAR_POLL_INTERVAL_S: int = int(os.environ.get("BAR_POLL_INTERVAL_S", "90"))
