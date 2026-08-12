@@ -46,6 +46,17 @@ def main() -> None:
         help="skip Claude narration; ship the brief tables-only",
     )
 
+    send = sub.add_parser("send", help="render a stored brief and email it via Resend")
+    send.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
+    send.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
+    send.add_argument("--user", default=DEV_USER_ID, help="user id (defaults to the dev user)")
+    send.add_argument("--to", help="recipient; defaults to BRIEF_RECIPIENT in .env")
+    send.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="render and report size; do not touch Resend or the deliveries table",
+    )
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -63,6 +74,16 @@ def main() -> None:
             user_id=args.user,
             dry_run=args.dry_run,
             narrate=not args.no_narrate,
+        )
+        return
+
+    if args.command == "send":
+        _send(
+            kind=args.kind,
+            date_arg=args.date,
+            user_id=args.user,
+            to=args.to,
+            dry_run=args.dry_run,
         )
         return
 
@@ -173,6 +194,63 @@ def _brief(
     print(json.dumps(obj.model_dump(mode="json"), indent=2))
     verb = "would write (dry-run)" if dry_run else "wrote"
     print(f"brief: {verb} {obj.brief_id}")
+
+
+_MAX_HTML_BYTES = 80 * 1024  # Gmail clips near 102KB; the close brief stays under 80 (docs/06).
+
+
+def _send(kind: str, date_arg: str | None, user_id: str, to: str | None, dry_run: bool) -> None:
+    from worker import config
+    from worker.deliver import deliver_brief
+
+    recipient = to or config.BRIEF_RECIPIENT
+    if not recipient:
+        raise SystemExit("No recipient. Pass --to you@example.com or set BRIEF_RECIPIENT in .env.")
+    if not dry_run:
+        if not config.RESEND_API_KEY:
+            raise SystemExit("RESEND_API_KEY is not set. Add it to .env (see docs/06).")
+        if not config.BRIEF_FROM:
+            raise SystemExit("BRIEF_FROM is not set. Add it to .env — see docs/06.")
+
+    engine = get_engine()
+    session_date = date.fromisoformat(date_arg) if date_arg else _latest_session(engine)
+    if session_date is None:
+        raise SystemExit("No bars found. Run `backfill` first.")
+
+    conn = engine.connect()
+    trans = conn.begin()
+    try:
+        result = deliver_brief(
+            conn,
+            user_id=user_id,
+            session_date=session_date,
+            kind=kind,
+            recipient=recipient,
+            sender=config.BRIEF_FROM,
+            dry_run=dry_run,
+        )
+        if dry_run:
+            trans.rollback()  # --dry-run writes no deliveries row
+        else:
+            trans.commit()
+    except Exception:
+        trans.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if result.html_bytes is not None:
+        over = result.html_bytes >= _MAX_HTML_BYTES
+        flag = "  OVER 80KB — will clip in Gmail" if over else ""
+        print(f"send: html {result.html_bytes:,} bytes ({result.html_bytes / 1024:.1f} KB){flag}")
+    if result.detail:
+        print(f"send: {result.detail}")
+    if result.status == "dry_run":
+        print(f"send: dry-run for {kind} {session_date} → {recipient} (nothing sent)")
+    elif result.status == "skipped":
+        print(f"send: {kind} {session_date} → {recipient} already sent; skipped")
+    else:
+        print(f"send: {kind} {session_date} → {recipient} sent (msg {result.provider_msg_id})")
 
 
 def _latest_session(engine: Engine) -> date | None:
