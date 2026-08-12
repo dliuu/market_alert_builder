@@ -9,8 +9,9 @@ integer cents end to end (invariant: never float).
 M5 adds suppression and tape quality: assembly tiers every held name
 (full / brief / suppressed) from movement + RVOL, folds the suppressed ones
 into ``suppressed[]`` (rendered as one roll-up line), and emits a
-``tape_quality`` section for the movers. Claims (M6), flags (M7) and narration
-(M8) stay empty; the schema allows it.
+``tape_quality`` section for the movers. M6 adds claims; M7 populates the
+top-level ``flags[]`` (position risk + the weekly-capped correlation flag).
+Narration (M8) stays empty; the schema allows it.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
+from worker.flags import candidate_dict, record_flags, surface_flags
 from worker.tape import TapeMetrics, compute_and_store_tape
 
 # Object shape version. Bump on any shape change and keep old renderers
@@ -63,6 +65,7 @@ def assemble(
     generated_at: datetime,
     claims: list[Claim] | None = None,
     resolved: list[ResolvedClaim] | None = None,
+    flags: list[dict[str, object]] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
 ) -> BriefObject:
@@ -99,7 +102,7 @@ def assemble(
         "one_thing": None,  # narration, M8
         "book": _book(book),
         "sections": [_attribution(shown, closes), _tape_quality(shown, tape)],
-        "flags": [],  # M7
+        "flags": list(flags or []),
         "claims": [_claim_dict(c, user_id, session_date, kind) for c in claims or []],
         "resolved_claims": [_resolved_dict(r) for r in resolved or []],
         "suppressed": sorted(suppressed),
@@ -301,6 +304,10 @@ def assemble_and_store(
     shown, _ = _tier_positions(result, tape)
     emitted = emit_claims(shown, result.benchmark_return)
 
+    # Which flags fire, after the weekly rate limit — read-only; last_seen is
+    # written below only once the brief is confirmed to send (a real mention).
+    surfaced = surface_flags(conn, user_id, session_date, result)
+
     from datetime import UTC
 
     obj = assemble(
@@ -313,12 +320,15 @@ def assemble_and_store(
         generated_at=datetime.now(UTC),
         claims=emitted,
         resolved=resolved,
+        flags=[candidate_dict(c) for c in surfaced],
     )
     if close_brief_should_skip(obj):
-        # A quiet session still resolved its due claims (above), but emits none.
+        # A quiet session still resolved its due claims (above), but emits none
+        # and spends no rate-limit budget (flags aren't recorded).
         return None
     _store_brief(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
+    record_flags(conn, user_id, session_date, surfaced)
     return obj
 
 
