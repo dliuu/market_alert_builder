@@ -40,6 +40,11 @@ def main() -> None:
     brief.add_argument(
         "--dry-run", action="store_true", help="print the object; do not write the briefs row"
     )
+    brief.add_argument(
+        "--no-narrate",
+        action="store_true",
+        help="skip Claude narration; ship the brief tables-only",
+    )
 
     args = parser.parse_args()
 
@@ -52,7 +57,13 @@ def main() -> None:
         return
 
     if args.command == "brief":
-        _brief(kind=args.kind, date_arg=args.date, user_id=args.user, dry_run=args.dry_run)
+        _brief(
+            kind=args.kind,
+            date_arg=args.date,
+            user_id=args.user,
+            dry_run=args.dry_run,
+            narrate=not args.no_narrate,
+        )
         return
 
     if args.command in (None, "hello"):
@@ -125,18 +136,26 @@ def _compute(date_arg: str | None, user_id: str) -> None:
           f"[{'OK' if identity else 'n/a — book opened today'}]")
 
 
-def _brief(kind: str, date_arg: str | None, user_id: str, dry_run: bool) -> None:
+def _brief(
+    kind: str, date_arg: str | None, user_id: str, dry_run: bool, narrate: bool
+) -> None:
     import json
+
+    from worker.narrate import default_narrator
 
     engine = get_engine()
     session_date = date.fromisoformat(date_arg) if date_arg else _latest_session(engine)
     if session_date is None:
         raise SystemExit("No bars found. Run `backfill` first.")
 
+    # `default_narrator()` is None when ANTHROPIC_API_KEY is unset, so a keyless
+    # run degrades to tables-only rather than failing (M8).
+    narrator = default_narrator() if narrate else None
+
     conn = engine.connect()
     trans = conn.begin()
     try:
-        obj = assemble_and_store(conn, user_id, session_date, kind)
+        obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
         if dry_run:
             trans.rollback()  # --dry-run assembles but writes nothing
         else:

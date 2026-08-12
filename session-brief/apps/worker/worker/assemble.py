@@ -10,8 +10,9 @@ M5 adds suppression and tape quality: assembly tiers every held name
 (full / brief / suppressed) from movement + RVOL, folds the suppressed ones
 into ``suppressed[]`` (rendered as one roll-up line), and emits a
 ``tape_quality`` section for the movers. M6 adds claims; M7 populates the
-top-level ``flags[]`` (position risk + the weekly-capped correlation flag).
-Narration (M8) stays empty; the schema allows it.
+top-level ``flags[]`` (position risk + the weekly-capped correlation flag). M8
+narrates in ``assemble_and_store`` (stage ⑤, non-fatal): Claude fills ``one_thing``
+and the attribution rows' ``why``, or leaves them null if the call fails.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from worker.claims import (
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
 from worker.flags import candidate_dict, record_flags, surface_flags
+from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
 
 # Object shape version. Bump on any shape change and keep old renderers
@@ -288,12 +290,19 @@ _UPSERT_BRIEF = text("""
 
 
 def assemble_and_store(
-    conn: Connection, user_id: str, session_date: date, kind: str = "close"
+    conn: Connection,
+    user_id: str,
+    session_date: date,
+    kind: str = "close",
+    *,
+    narrator: Narrator | None = None,
 ) -> BriefObject | None:
-    """Compute metrics, assemble the object, and upsert it into ``briefs``.
-    Returns ``None`` (writing nothing) when a close brief is skipped because
-    nothing was a full-tier mover. Idempotent on ``(user_id, session_date,
-    kind)``: re-running replaces the row rather than duplicating it."""
+    """Compute metrics, assemble the object, narrate it, and upsert it into
+    ``briefs``. Returns ``None`` (writing nothing) when a close brief is skipped
+    because nothing was a full-tier mover. Idempotent on ``(user_id,
+    session_date, kind)``: re-running replaces the row rather than duplicating
+    it. ``narrator`` is off by default (tables-only); the CLI wires in the
+    Claude-backed one, and narration is non-fatal regardless (M8)."""
     result = compute_and_store(conn, user_id, session_date)
     symbols = [p.symbol for p in result.positions]
     closes = _read_closes(conn, symbols, session_date)
@@ -326,6 +335,9 @@ def assemble_and_store(
         # A quiet session still resolved its due claims (above), but emits none
         # and spends no rate-limit budget (flags aren't recorded).
         return None
+    # Stage ⑤: prose is added only to briefs that actually send, and never at
+    # the cost of the send — a failed Claude call returns the object unchanged.
+    obj = narrate_and_apply(obj, narrator)
     _store_brief(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
     record_flags(conn, user_id, session_date, surfaced)
