@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.28",
     "anthropic>=0.40",
+    "exchange-calendars>=4.13.2",
 ]
 
 [dependency-groups]
@@ -48,6 +49,11 @@ files = ["worker", "tests"]
 [[tool.mypy.overrides]]
 module = ["contracts.*"]
 ignore_errors = true
+
+# Third-party without type stubs (M10 scheduler): the trading calendar and APScheduler.
+[[tool.mypy.overrides]]
+module = ["exchange_calendars.*", "apscheduler.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

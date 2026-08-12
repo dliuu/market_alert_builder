@@ -46,6 +46,20 @@ def main() -> None:
         help="skip Claude narration; ship the brief tables-only",
     )
 
+    schedule = sub.add_parser(
+        "schedule", help="run the unattended daily scheduler + dead-man's switch (M10)"
+    )
+    schedule.add_argument(
+        "--once",
+        action="store_true",
+        help="run today's go/no-go job once and exit (no blocking loop)",
+    )
+    schedule.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the next few fire times and exit; nothing runs or sends",
+    )
+
     send = sub.add_parser("send", help="render a stored brief and email it via Resend")
     send.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
     send.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
@@ -75,6 +89,10 @@ def main() -> None:
             dry_run=args.dry_run,
             narrate=not args.no_narrate,
         )
+        return
+
+    if args.command == "schedule":
+        _schedule(once=args.once, dry_run=args.dry_run)
         return
 
     if args.command == "send":
@@ -251,6 +269,35 @@ def _send(kind: str, date_arg: str | None, user_id: str, to: str | None, dry_run
         print(f"send: {kind} {session_date} → {recipient} already sent; skipped")
     else:
         print(f"send: {kind} {session_date} → {recipient} sent (msg {result.provider_msg_id})")
+
+
+def _schedule(once: bool, dry_run: bool) -> None:
+    from datetime import timedelta
+
+    from worker import config
+    from worker.scheduler import next_fire, run_scheduler, run_session_job
+
+    if dry_run:
+        from datetime import UTC, datetime
+
+        delay = timedelta(minutes=config.SEND_DELAY_MINUTES)
+        now = datetime.now(UTC)
+        print(f"schedule: now {now.isoformat()}, send delay {config.SEND_DELAY_MINUTES}min")
+        for _ in range(5):
+            now = next_fire(now, delay)
+            print(f"  next fire: {now.isoformat()}")
+            now = now + timedelta(seconds=1)
+        return
+
+    engine = get_engine()
+    if once:
+        from datetime import UTC, datetime
+
+        outcome = run_session_job(engine, now_utc=datetime.now(UTC))
+        print(f"schedule --once: {outcome}")
+        return
+
+    run_scheduler(engine)
 
 
 def _latest_session(engine: Engine) -> date | None:

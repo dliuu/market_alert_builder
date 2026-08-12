@@ -1,0 +1,26 @@
+# Fly.io — the long-running worker (M10). Deploy from apps/worker:
+#
+#   fly launch --no-deploy            # first time: create the app, keep this file
+#   fly secrets set \                 # the worker's .env, as Fly secrets
+#       DATABASE_URL=... TIINGO_API_KEY=... ANTHROPIC_API_KEY=... \
+#       RESEND_API_KEY=... RENDER_SHARED_SECRET=... WEB_RENDER_URL=... \
+#       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=...
+#   fly deploy
+#
+# One always-on machine, no HTTP service — a background scheduler, not a web
+# server, so Fly never auto-stops it (docs/02: no cold starts).
+
+app = "session-brief-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Alembic is the only migration path (invariant 1). Run it before each cutover.
+[deploy]
+  release_command = "uv run --no-dev --frozen alembic upgrade head"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"   # bump to 1gb if pandas import OOMs during the soak
+  processes = ["app"]
