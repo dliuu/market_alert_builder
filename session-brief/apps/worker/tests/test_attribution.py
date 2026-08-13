@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import random
+from datetime import UTC, date, datetime
 
+import numpy as np
 import pytest
+from sqlalchemy import text as _text
+from sqlalchemy.engine import Connection
 
+from tests.helpers_attribution import seed_bars_for
 from worker.attribution import (
     COLD_START_FLOOR,
     apply_cold_start,
     decompose,
+    decompose_ortho,
     fit_ols,
+    fit_two_stage,
+    orthogonalize,
 )
 
 
@@ -55,3 +63,171 @@ def test_cold_start_shrinks_toward_theme_median_and_flags() -> None:
     shrunk = apply_cold_start(fit, theme_median_beta=0.4)
     w = (COLD_START_FLOOR - 1) / 120
     assert shrunk.beta_theme == pytest.approx(w * fit.beta_theme + (1 - w) * 0.4)
+
+
+def test_orthogonalize_decorrelates_the_basket_from_the_market() -> None:
+    # Stage A is robust (Huber IRLS), so rho is orthogonal to the market under the
+    # WEIGHTED inner product; unweighted correlation is small-but-nonzero, not
+    # machine-zero. What matters: the ~0.85 raw basket/market correlation collapses.
+    rng = np.random.default_rng(10)
+    r_market = rng.normal(scale=0.01, size=200)
+    r_basket = 0.9 * r_market + rng.normal(scale=0.003, size=200)  # ~0.85 corr, as M11
+    w = np.ones(200)
+    a, b, rho = orthogonalize(r_basket, r_market, w)
+    raw = abs(np.corrcoef(r_basket, r_market)[0, 1])
+    resid = abs(np.corrcoef(rho, r_market)[0, 1])
+    assert raw > 0.8                # raw basket tracks the market
+    assert resid < 0.05             # rho is numerically decorrelated
+    assert resid < raw / 10         # ...by more than an order of magnitude
+
+
+def test_two_stage_additivity_holds_exactly() -> None:
+    r_x, r_m, r_t = _series(160, seed=11)
+    fit = fit_two_stage(r_x, r_m, r_t)
+    for m, t, x in zip(r_m, r_t, r_x, strict=True):
+        d = decompose_ortho(fit, m, t, x)
+        assert d.market_bps + d.theme_bps + d.resid_bps == pytest.approx(d.total_bps, abs=1e-9)
+
+
+def test_two_stage_lowers_condition_number_versus_joint_ols() -> None:
+    # The same near-collinear market/theme that destabilizes the M11 joint fit.
+    rng = np.random.default_rng(12)
+    r_m = list(rng.normal(scale=0.01, size=160))
+    noise_t = rng.normal(scale=0.002, size=160)
+    noise_x = rng.normal(scale=0.004, size=160)
+    r_t = [m + n for m, n in zip(r_m, noise_t, strict=True)]      # ~market, near-collinear
+    r_x = [0.3 * m + 0.5 * t + n
+           for m, t, n in zip(r_m, r_t, noise_x, strict=True)]
+    joint = np.linalg.cond(np.column_stack([np.ones(160), r_m, r_t]))
+    fit = fit_two_stage(r_x, r_m, r_t)
+    assert fit.cond_number < joint
+
+
+def test_decompose_ortho_reconstructs_rho_from_stored_ab() -> None:
+    r_x, r_m, r_t = _series(160, seed=13)
+    fit = fit_two_stage(r_x, r_m, r_t)
+    # theme_bps must equal beta_theta * (r_basket - (a + b*r_market)) * 10_000.
+    m, t, x = r_m[0], r_t[0], r_x[0]
+    rho = t - (fit.a + fit.b * m)
+    d = decompose_ortho(fit, m, t, x)
+    assert d.theme_bps == pytest.approx(fit.beta_theta * rho * 10_000, abs=1e-9)
+
+
+def _seed_theme(conn: Connection, key: str, symbols: list[str]) -> str:
+    tid = conn.execute(_text(
+        "INSERT INTO themes (key, name) VALUES (:k, :k) RETURNING id::text"
+    ), {"k": key}).scalar_one()
+    for s in symbols:
+        conn.execute(_text(
+            "INSERT INTO theme_members (theme_id, symbol, effective_from) "
+            "VALUES (:t, :s, :d)"
+        ), {"t": tid, "s": s, "d": date(2019, 1, 1)})
+    return str(tid)
+
+
+def _hold(conn: Connection, symbol: str) -> None:
+    from worker.constants import DEV_USER_ID
+    sector_id = conn.execute(_text(
+        "INSERT INTO sectors (user_id, name) VALUES (:u, :n) RETURNING id"
+    ), {"u": DEV_USER_ID, "n": symbol}).scalar_one()
+    hid = conn.execute(_text(
+        "INSERT INTO holdings (user_id, sector_id, symbol) VALUES (:u, :sec, :s) RETURNING id"
+    ), {"u": DEV_USER_ID, "sec": sector_id, "s": symbol}).scalar_one()
+    conn.execute(_text(
+        "INSERT INTO lots (user_id, holding_id, shares, cost_basis_cents, opened_on) "
+        "VALUES (:u, :h, 100, 100000, :d)"
+    ), {"u": DEV_USER_ID, "h": hid, "d": date(2019, 1, 1)})
+
+
+def test_refit_writes_diagnostics_and_loo_and_beats_joint_condition(db_conn: Connection) -> None:
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_semis_test", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    from worker.attribution import refit
+    res = refit(db_conn, date(2020, 6, 30), now_utc=datetime(2020, 6, 30, tzinfo=UTC),
+                model_version=2)
+    assert "AAA" in res.symbols
+
+    diag = db_conn.execute(_text(
+        "SELECT diagnostics FROM attribution_fits "
+        "WHERE symbol='AAA' AND model_version=2 AND fit_date='2020-06-30'"
+    )).scalar_one()
+    assert {"a", "b", "beta_se", "cond_number", "huber_converged"} <= set(diag)
+
+    loo_n = db_conn.execute(_text(
+        "SELECT count(*) FROM basket_loo_returns "
+        "WHERE excluded_symbol='AAA' AND model_version=2"
+    )).scalar_one()
+    assert loo_n > 0
+
+
+def test_score_writes_resid_z_and_additive_rows(db_conn: Connection) -> None:
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_semis_test2", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    from worker.attribution import refit, score
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    refit(db_conn, date(2020, 6, 30), now_utc=now, model_version=2)
+    res = score(db_conn, date(2020, 6, 30), now_utc=now, model_version=2, synthetic=False)
+    assert res.rows_written >= 1
+
+    row = db_conn.execute(_text(
+        "SELECT market_bps, theme_bps, resid_bps, total_bps, resid_z FROM attribution "
+        "WHERE symbol='AAA' AND model_version=2 AND trade_date='2020-06-30'"
+    )).mappings().one()
+    assert row["resid_z"] is not None
+    # resid_z is a z-score (resid_bps / resid_scale-in-bps): on this synthetic
+    # fixture it must be O(1)-O(10), not the ~10,000x blow-up from a unit
+    # mismatch between a bps residual and a return-scale resid_scale.
+    assert abs(float(row["resid_z"])) < 100
+    got = float(row["market_bps"]) + float(row["theme_bps"]) + float(row["resid_bps"])
+    assert got == pytest.approx(float(row["total_bps"]), abs=1e-6)
+
+
+def test_refit_and_score_skip_empty_loo_basket_without_raising(db_conn: Connection) -> None:
+    """AAA is the only liquid theme member on two days (BBB/CCC/DDD's dollar
+    volume is zeroed there): AAA's own LOO basket -- which excludes AAA --
+    has no liquid survivors and is empty. refit must skip just that day (not
+    raise / abort the batch) and score must skip just that symbol, while other
+    symbols and other days are unaffected."""
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_empty_basket_test", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    empty_day = date(2020, 6, 20)  # inside the refit fit window
+    trade_day = date(2020, 6, 30)  # scored on a later date
+    db_conn.execute(_text(
+        "UPDATE bars_daily SET v = 0 WHERE symbol IN ('BBB', 'CCC', 'DDD') "
+        "AND session_date IN (:d1, :d2)"
+    ), {"d1": empty_day, "d2": trade_day})
+
+    from worker.attribution import refit, score
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    refit_res = refit(db_conn, date(2020, 6, 25), now_utc=now, model_version=2)
+    assert "AAA" in refit_res.symbols  # fit still completes on the remaining days
+
+    loo_on_empty_day = db_conn.execute(_text(
+        "SELECT count(*) FROM basket_loo_returns "
+        "WHERE excluded_symbol='AAA' AND model_version=2 AND trade_date=:d"
+    ), {"d": empty_day}).scalar_one()
+    assert loo_on_empty_day == 0  # the empty-basket day was skipped, not written
+
+    score_res = score(db_conn, trade_day, now_utc=now, model_version=2, synthetic=False)
+    assert "AAA" in score_res.skipped
+
+    aaa_row = db_conn.execute(_text(
+        "SELECT 1 FROM attribution WHERE symbol='AAA' AND model_version=2 AND trade_date=:d"
+    ), {"d": trade_day}).first()
+    assert aaa_row is None  # skipped, not written
+
+    # BBB's own LOO basket (excluding BBB) still has AAA as a liquid survivor,
+    # so BBB is unaffected by AAA's empty basket -- the guard is per-symbol.
+    bbb_row = db_conn.execute(_text(
+        "SELECT 1 FROM attribution WHERE symbol='BBB' AND model_version=2 AND trade_date=:d"
+    ), {"d": trade_day}).first()
+    assert bbb_row is not None
