@@ -85,6 +85,9 @@ def main() -> None:
     a_recon.add_argument("--date", required=True, help="trade date YYYY-MM-DD")
     a_recon.add_argument("--am", action="store_true", help="AM run against the official bar")
 
+    a_signals = attr_sub.add_parser("signals", help="weekly derived signals + theme dispersion")
+    a_signals.add_argument("--date", required=True, help="trade date YYYY-MM-DD")
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -177,7 +180,18 @@ def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) ->
               f"unchanged {len(recon_result.unchanged)}")
         return
 
-    raise SystemExit("unknown attribution subcommand; try themes-seed|refit|score|reconcile")
+    if attr_command == "signals":
+        from worker.attribution_signals import compute_signals
+
+        with engine.begin() as conn:
+            sig = compute_signals(conn, trade_date, now_utc=now,
+                                  model_version=ATTRIBUTION_MODEL_VERSION)
+        print(f"signals: {sig.names_written} name(s), {sig.themes_written} theme(s)")
+        return
+
+    raise SystemExit(
+        "unknown attribution subcommand; try themes-seed|refit|score|reconcile|signals"
+    )
 
 
 def _backfill(symbols_arg: str | None, days: int) -> None:
