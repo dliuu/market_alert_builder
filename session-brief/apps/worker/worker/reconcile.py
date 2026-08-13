@@ -86,8 +86,8 @@ def reconcile(
             unchanged.append(symbol)
 
     # Re-score every synthetic name from the official bar in one pass (clears
-    # synthetic/provisional, recomputes the day's basket returns), then stamp
-    # revised on the names that actually diverged.
+    # synthetic/provisional and re-stamps attribution), then stamp revised on
+    # the names that actually diverged.
     score(conn, trade_date, now_utc=now_utc, model_version=model_version, synthetic=False)
     if revised:
         conn.execute(text("""

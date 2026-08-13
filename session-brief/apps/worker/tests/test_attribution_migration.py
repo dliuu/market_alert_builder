@@ -33,7 +33,9 @@ def test_m12_econometrics_schema_present_and_shared(db_conn: Connection) -> None
     assert "weights" in basket_cols
 
     # Shared reference data: no user_id on the new tables.
-    for table in ("basket_loo_returns", "attribution_signals", "theme_dispersion"):
+    for table in (
+        "basket_loo_returns", "index_events", "attribution_signals", "theme_dispersion",
+    ):
         cols = db_conn.execute(text(
             "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
         ), {"t": table}).scalars().all()

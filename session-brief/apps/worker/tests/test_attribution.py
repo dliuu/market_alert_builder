@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import random
+from datetime import UTC, date, datetime
 
 import numpy as np
 import pytest
+from sqlalchemy import text as _text
+from sqlalchemy.engine import Connection
 
+from tests.helpers_attribution import seed_bars_for
 from worker.attribution import (
     COLD_START_FLOOR,
     apply_cold_start,
@@ -109,14 +113,6 @@ def test_decompose_ortho_reconstructs_rho_from_stored_ab() -> None:
     assert d.theme_bps == pytest.approx(fit.beta_theta * rho * 10_000, abs=1e-9)
 
 
-from datetime import UTC, date, datetime
-
-from sqlalchemy import text as _text
-from sqlalchemy.engine import Connection
-
-from tests.helpers_attribution import seed_bars_for
-
-
 def _seed_theme(conn: Connection, key: str, symbols: list[str]) -> str:
     tid = conn.execute(_text(
         "INSERT INTO themes (key, name) VALUES (:k, :k) RETURNING id::text"
@@ -184,5 +180,54 @@ def test_score_writes_resid_z_and_additive_rows(db_conn: Connection) -> None:
         "WHERE symbol='AAA' AND model_version=2 AND trade_date='2020-06-30'"
     )).mappings().one()
     assert row["resid_z"] is not None
+    # resid_z is a z-score (resid_bps / resid_scale-in-bps): on this synthetic
+    # fixture it must be O(1)-O(10), not the ~10,000x blow-up from a unit
+    # mismatch between a bps residual and a return-scale resid_scale.
+    assert abs(float(row["resid_z"])) < 100
     got = float(row["market_bps"]) + float(row["theme_bps"]) + float(row["resid_bps"])
     assert got == pytest.approx(float(row["total_bps"]), abs=1e-6)
+
+
+def test_refit_and_score_skip_empty_loo_basket_without_raising(db_conn: Connection) -> None:
+    """AAA is the only liquid theme member on two days (BBB/CCC/DDD's dollar
+    volume is zeroed there): AAA's own LOO basket -- which excludes AAA --
+    has no liquid survivors and is empty. refit must skip just that day (not
+    raise / abort the batch) and score must skip just that symbol, while other
+    symbols and other days are unaffected."""
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_empty_basket_test", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    empty_day = date(2020, 6, 20)  # inside the refit fit window
+    trade_day = date(2020, 6, 30)  # scored on a later date
+    db_conn.execute(_text(
+        "UPDATE bars_daily SET v = 0 WHERE symbol IN ('BBB', 'CCC', 'DDD') "
+        "AND session_date IN (:d1, :d2)"
+    ), {"d1": empty_day, "d2": trade_day})
+
+    from worker.attribution import refit, score
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    refit_res = refit(db_conn, date(2020, 6, 25), now_utc=now, model_version=2)
+    assert "AAA" in refit_res.symbols  # fit still completes on the remaining days
+
+    loo_on_empty_day = db_conn.execute(_text(
+        "SELECT count(*) FROM basket_loo_returns "
+        "WHERE excluded_symbol='AAA' AND model_version=2 AND trade_date=:d"
+    ), {"d": empty_day}).scalar_one()
+    assert loo_on_empty_day == 0  # the empty-basket day was skipped, not written
+
+    score_res = score(db_conn, trade_day, now_utc=now, model_version=2, synthetic=False)
+    assert "AAA" in score_res.skipped
+
+    aaa_row = db_conn.execute(_text(
+        "SELECT 1 FROM attribution WHERE symbol='AAA' AND model_version=2 AND trade_date=:d"
+    ), {"d": trade_day}).first()
+    assert aaa_row is None  # skipped, not written
+
+    # BBB's own LOO basket (excluding BBB) still has AAA as a liquid survivor,
+    # so BBB is unaffected by AAA's empty basket -- the guard is per-symbol.
+    bbb_row = db_conn.execute(_text(
+        "SELECT 1 FROM attribution WHERE symbol='BBB' AND model_version=2 AND trade_date=:d"
+    ), {"d": trade_day}).first()
+    assert bbb_row is not None

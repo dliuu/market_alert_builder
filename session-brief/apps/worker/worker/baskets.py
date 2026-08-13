@@ -168,18 +168,6 @@ def primary_theme_of(
     return None
 
 
-def upsert_basket_return(
-    conn: Connection, theme_id: str, trade_date: date, model_version: int,
-    br: BasketReturn, *, synthetic: bool, revised: bool,
-    weights: dict[str, float] | None = None,
-) -> None:
-    conn.execute(_UPSERT_BASKET, {
-        "theme_id": theme_id, "trade_date": trade_date, "model_version": model_version,
-        "ret": br.ret, "n_members": br.n_members, "synthetic": synthetic, "revised": revised,
-        "weights": json.dumps(weights) if weights is not None else None,
-    })
-
-
 def upsert_basket_returns_many(conn: Connection, rows: list[dict[str, Any]]) -> None:
     """Batch upsert of full basket returns (one round-trip). Each row carries
     theme_id, trade_date, model_version, ret, n_members, synthetic, revised, and
@@ -200,17 +188,6 @@ _UPSERT_BASKET_LOO = text("""
     ON CONFLICT (theme_id, excluded_symbol, trade_date, model_version) DO UPDATE
         SET ret = EXCLUDED.ret, n_members = EXCLUDED.n_members
 """)
-
-
-def upsert_basket_loo_return(
-    conn: Connection, theme_id: str, excluded_symbol: str, trade_date: date,
-    model_version: int, br: BasketReturn,
-) -> None:
-    conn.execute(_UPSERT_BASKET_LOO, {
-        "theme_id": theme_id, "excluded_symbol": excluded_symbol,
-        "trade_date": trade_date, "model_version": model_version,
-        "ret": br.ret, "n_members": br.n_members,
-    })
 
 
 def upsert_basket_loo_returns_many(conn: Connection, rows: list[dict[str, Any]]) -> None:

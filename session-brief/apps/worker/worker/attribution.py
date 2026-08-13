@@ -159,8 +159,10 @@ def orthogonalize(
 ) -> tuple[float, float, np.ndarray]:
     """Stage A: residualize the basket on the market (robust, EWMA-weighted).
     Returns (a, b, rho) where rho = r_basket - (a + b*r_market) is theme movement
-    beyond the market. rho is orthogonal to r_market by construction of the WLS
-    normal equations, so beta_theta stops splitting shared variance arbitrarily."""
+    beyond the market. rho is orthogonal to r_market under the weighted (Huber/
+    EWMA) inner product by construction of the WLS normal equations, so unweighted
+    correlation is small-but-nonzero; beta_theta stops splitting shared variance
+    arbitrarily."""
     rb = np.asarray(r_basket, dtype=float)
     rm = np.asarray(r_market, dtype=float)
     X = np.column_stack([np.ones_like(rm), rm])
@@ -206,7 +208,7 @@ def fit_two_stage(
         a=a,
         b=b,
         r2=r2,
-        resid_scale=mad_scale(resid),
+        resid_scale=mad_scale(resid) * BPS,
         beta_se=(float(se[0]), float(se[1]), float(se[2])),
         durbin_watson=durbin_watson(resid),
         cond_number=condition_number(X),
@@ -464,12 +466,20 @@ def refit(
             rets = {s: returns[s][day] for s in live if day in returns.get(s, {})}
             liq = {s: liquidity.get(s, {}).get(day, 0.0) for s in live}
             if symbol in rets:
+                weights = screen_and_cap(
+                    {s: dv for s, dv in liq.items() if s != symbol},
+                    min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP,
+                )
+            else:
+                weights = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP)
+            if not weights or not rets:
+                continue
+            if symbol in rets:
                 loo = loo_weighted_return(
                     rets, liq, min_dollar_volume=MIN_DOLLAR_VOLUME,
                     cap=BASKET_CAP, excluded=symbol,
                 )
             else:
-                weights = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP)
                 loo = weighted_return(rets, weights)
             r_x.append(r_sym[day])
             r_m.append(market[day])
@@ -558,6 +568,13 @@ def score(
         rets = {s: day_returns[s] for s in live if s in day_returns}
         liq = {s: day_liquidity.get(s, 0.0) for s in live}
         if symbol in rets:
+            weights = screen_and_cap(
+                {s: dv for s, dv in liq.items() if s != symbol},
+                min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP,
+            )
+            if not weights:
+                skipped.append(symbol)
+                continue
             loo = loo_weighted_return(
                 rets, liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP, excluded=symbol,
             )
