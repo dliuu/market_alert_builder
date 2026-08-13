@@ -57,6 +57,9 @@ def _two() -> BriefObject:
 
 def test_book_totals() -> None:
     book = _two().book
+    # `book` is nullable since v3 (the open brief omits it) — a close brief
+    # always has one, and asserting that is part of what this test checks.
+    assert book is not None
     assert book.value_cents == 206_000
     assert book.day_pnl_cents == 6_000
     assert book.day_bps == 300
@@ -157,5 +160,6 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_two() -> None:
-    assert _mixed().schema_version == SCHEMA_VERSION == 2
+def test_schema_version_is_three() -> None:
+    # v3 = M14: nullable `book` + the open brief's §4/§5 row fields (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 3

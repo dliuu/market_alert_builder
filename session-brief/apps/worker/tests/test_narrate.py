@@ -12,8 +12,10 @@ import pytest
 from contracts.brief import BriefObject
 from worker.narrate import (
     apply_narration,
+    build_open_prompt,
     build_prompt,
     narrate_and_apply,
+    narrate_open_and_apply,
     parse_narration,
 )
 
@@ -119,3 +121,86 @@ def test_a_raising_narrator_is_non_fatal() -> None:
 def test_malformed_narrator_output_is_non_fatal() -> None:
     out = narrate_and_apply(_obj(), lambda _p: "garbage, not json")
     assert out.one_thing is None
+
+
+# --- The open brief's forward-looking prompt (M14) -------------------------
+
+
+def _open_obj() -> BriefObject:
+    """A minimal open brief: no book, no attribution section."""
+    return BriefObject.model_validate(
+        {
+            "schema_version": 3,
+            "brief_id": "u-2026-08-13-open",
+            "user_id": "u",
+            "session_date": "2026-08-13",
+            "kind": "open",
+            "generated_at": "2026-08-13T12:15:00Z",
+            "subject": "Open - Thu Aug 13 - the day ahead",
+            "one_thing": None,
+            "sections": [
+                {
+                    "id": "calendar",
+                    "tier": "full",
+                    "note": None,
+                    "rows": [
+                        {
+                            "symbol": "SNDK",
+                            "label": "SNDK Q2 earnings",
+                            "event_type": "earnings",
+                            "occurs_at": "2026-08-13",
+                            "tag": "holding",
+                        }
+                    ],
+                }
+            ],
+            "flags": [],
+            "claims": [],
+            "resolved_claims": [],
+            "suppressed": [],
+            "data_quality": {"missing": [], "stale": []},
+        }
+    )
+
+
+def test_open_prompt_asks_for_a_forward_looking_read() -> None:
+    prompt = build_open_prompt(_open_obj())
+    assert "close brief" not in prompt.lower()
+    assert "ahead" in prompt.lower()
+
+
+def test_open_prompt_does_not_ask_for_per_name_why() -> None:
+    """docs/05 gives the open brief's sections no `why` line — asking for one
+    would invite prose the object has nowhere to put.
+
+    Only the *instruction* is checked: the serialized object appended below it
+    legitimately contains a null `why` key on every row.
+    """
+    instruction = build_open_prompt(_open_obj()).split("for context only")[0]
+    assert '"why"' not in instruction
+
+
+def test_open_narration_fills_one_thing() -> None:
+    out = narrate_open_and_apply(
+        _open_obj(), lambda _p: '{"one_thing": "Earnings land before the bell."}'
+    )
+    assert out.one_thing == "Earnings land before the bell."
+
+
+def test_open_narration_still_drops_digits() -> None:
+    """Invariant 2 holds on both briefs."""
+    out = narrate_open_and_apply(
+        _open_obj(), lambda _p: '{"one_thing": "Semis are up 3 percent."}'
+    )
+    assert out.one_thing is None
+
+
+def test_open_narration_is_non_fatal() -> None:
+    """DoD 4: a keyless or failing run still yields a valid, sendable brief."""
+    obj = _open_obj()
+    assert narrate_open_and_apply(obj, None) == obj
+
+    def revoked(_prompt: str) -> str:
+        raise RuntimeError("401 Unauthorized")
+
+    assert narrate_open_and_apply(obj, revoked) == obj

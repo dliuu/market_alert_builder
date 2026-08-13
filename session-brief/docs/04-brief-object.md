@@ -28,6 +28,8 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
   "subject": "Close · Tue Aug 11 — book +1.1% (+$1,746), SNDK carried it",
   "one_thing": "You made money on a red day, and it was one name…",
 
+  // Close brief only. The open brief omits `book` entirely — no performance,
+  // no P&L (docs/05). Nullable since schema_version 3.
   "book": {
     "value_cents": 15978642,
     "day_pnl_cents": 174610,
@@ -76,6 +78,20 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 - **Money is integer cents.** Never float, anywhere in the object.
 - **Bump `schema_version` on any shape change** and keep old renderers. You will want to read year-old briefs.
 - **`tier` drives suppression.** The renderer never decides what to hide; assembly does.
+- **The JSON Schema is the contract, not the generated Pydantic.** Codegen types a
+  non-required property as `T | None = None`, so Pydantic will happily emit a
+  `null` the schema's own `type`/`enum` rejects — and only the TypeScript side
+  follows the schema. `apps/worker/tests/test_contract_schema.py` validates the
+  stored fixtures against `brief-object.schema.json` directly; that is the only
+  place both halves are checked against the same bytes.
+
+### Versions
+
+| v | Milestone | Change |
+|---|---|---|
+| 1 | M4 | `book` + `attribution` |
+| 2 | M5 | per-row `tier`, `tape_quality` section, populated `suppressed[]` |
+| 3 | M14 | `book` nullable (the open brief omits P&L); §4 calendar and §5 sector-setup row fields; `row.symbol` optional for macro releases |
 
 ## Narration contract
 

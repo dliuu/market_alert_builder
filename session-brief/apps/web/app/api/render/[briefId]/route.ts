@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { renderClose } from "@/emails/render";
+import { renderBrief } from "@/emails/render";
 import type { BriefObject } from "@/lib/contracts/brief";
 import { db } from "@/lib/db";
 import { briefs } from "@/lib/db/schema";
@@ -26,7 +26,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ briefI
   }
 
   const brief = row.body as unknown as BriefObject;
-  const { html, text } = await renderClose(brief);
+  // `kind` selects the template — the open and close briefs are different jobs
+  // (docs/01), but the worker still makes exactly one render call (D6).
+  const { html, text } = await renderBrief(brief);
   return NextResponse.json({ html, text });
 }
 

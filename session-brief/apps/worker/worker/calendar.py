@@ -52,6 +52,15 @@ def next_session(d: date) -> date:
     return nxt
 
 
+def previous_session(d: date) -> date:
+    """The last trading session strictly before ``d`` — the session the open
+    brief reads. At 08:15 on session D every figure comes from D-1's close
+    (M14), and "the day before" is not "yesterday": a Tuesday after a Monday
+    holiday looks back to Friday."""
+    prev: date = _calendar().previous_session(d.isoformat()).date()
+    return prev
+
+
 def today_et(now_utc: datetime) -> date:
     """The ET calendar date for a UTC instant — the session a run belongs to."""
     return now_utc.astimezone(ET).date()

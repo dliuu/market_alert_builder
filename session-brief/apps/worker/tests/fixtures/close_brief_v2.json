@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 2,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-11-close",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-11",
@@ -33,17 +33,7 @@
           "rvol": null,
           "range_position": null,
           "rel_strength": null,
-          "why": null,
-          "label": null,
-          "event_type": null,
-          "occurs_at": null,
-          "tag": null,
-          "sector_id": null,
-          "name": null,
-          "benchmark_symbol": null,
-          "ret_5d": null,
-          "vs_spy_5d": null,
-          "premarket": null
+          "why": null
         },
         {
           "symbol": "B",
@@ -57,17 +47,7 @@
           "rvol": null,
           "range_position": null,
           "rel_strength": null,
-          "why": null,
-          "label": null,
-          "event_type": null,
-          "occurs_at": null,
-          "tag": null,
-          "sector_id": null,
-          "name": null,
-          "benchmark_symbol": null,
-          "ret_5d": null,
-          "vs_spy_5d": null,
-          "premarket": null
+          "why": null
         }
       ]
     },
@@ -88,17 +68,7 @@
           "rvol": 2.0,
           "range_position": 0.8,
           "rel_strength": null,
-          "why": null,
-          "label": null,
-          "event_type": null,
-          "occurs_at": null,
-          "tag": null,
-          "sector_id": null,
-          "name": null,
-          "benchmark_symbol": null,
-          "ret_5d": null,
-          "vs_spy_5d": null,
-          "premarket": null
+          "why": null
         }
       ]
     }

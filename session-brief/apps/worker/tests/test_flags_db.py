@@ -64,6 +64,25 @@ def _flags_of(obj: Any) -> list[tuple[str, str | None, str]]:
     return [(f.type.value, f.symbol, f.text_key) for f in obj.flags]
 
 
+def _open_brief(conn: Connection, session_date: date, prior: date) -> Any:
+    """Drive the flags through the **open** brief — §6 is its section (docs/05).
+    Until M14 these tests went through the close brief because the open one
+    didn't exist (D18); the mechanism and its thresholds are unchanged, only its
+    home. The open brief also always sends, so unlike the close path there is no
+    need to engineer a >1% mover just to see the flags."""
+    from datetime import UTC, datetime
+
+    from worker.assemble_open import assemble_open_and_store
+
+    return assemble_open_and_store(
+        conn,
+        _TEST_USER_ID,
+        session_date,
+        prior_session=prior,
+        generated_at=datetime(2099, 1, 1, 12, 15, tzinfo=UTC),
+    )
+
+
 # --- Position risk fires from synthetic fundamentals + events -------------
 
 
@@ -91,8 +110,7 @@ def test_position_risk_flags_fire(db_conn: Connection) -> None:
         {"d": session + timedelta(days=5)},
     )
 
-    obj = assemble_and_store(db_conn, _TEST_USER_ID, session, "close")
-    assert obj is not None
+    obj = _open_brief(db_conn, session, prev)
     fired = {t for t, _, _ in _flags_of(obj)}
     # Single-name concentration (100% of a one-name book), runway, dilution,
     # earnings_soon, supply_event all fire; sector concentration too.
@@ -107,19 +125,19 @@ def test_weekly_rate_limit_holds_across_three_briefs(db_conn: Connection) -> Non
     start = date(2099, 6, 1)
     _seed_holding(db_conn, sector_id, "ZFB", start - timedelta(days=1))
     # A one-name book → 100% single-name (and sector) concentration on every
-    # session. Each session the name moves > 1% so the close brief sends.
+    # session. The open brief always sends, so no >1% mover is needed here.
     prev_close = 100.0
     sessions = [start, start + timedelta(days=1), start + timedelta(days=2)]
     _seed_bar(db_conn, "ZFB", start - timedelta(days=1), f"{prev_close:.2f}")
     for d in sessions:
-        prev_close *= 1.05  # +5% each session
+        prev_close *= 1.05
         _seed_bar(db_conn, "ZFB", d, f"{prev_close:.2f}")
 
     def concentration_symbols(obj: Any) -> list[str | None]:
         return [f.symbol for f in obj.flags if f.type.value == "concentration"]
 
-    briefs = [assemble_and_store(db_conn, _TEST_USER_ID, d, "close") for d in sessions]
-    assert all(b is not None for b in briefs)
+    priors = [start - timedelta(days=1), *sessions[:-1]]
+    briefs = [_open_brief(db_conn, d, p) for d, p in zip(sessions, priors, strict=True)]
 
     # Mentioned in brief 1 only; the persistent condition is capped for 2 and 3.
     assert "ZFB" in concentration_symbols(briefs[0])
@@ -139,24 +157,26 @@ def test_weekly_rate_limit_holds_across_three_briefs(db_conn: Connection) -> Non
     # A fourth brief a full week later re-surfaces the flag.
     later = sessions[0] + timedelta(days=7)
     _seed_bar(db_conn, "ZFB", later - timedelta(days=1), "200")
-    _seed_bar(db_conn, "ZFB", later, "220")  # +10%
-    fourth = assemble_and_store(db_conn, _TEST_USER_ID, later, "close")
-    assert fourth is not None
+    _seed_bar(db_conn, "ZFB", later, "220")
+    fourth = _open_brief(db_conn, later, later - timedelta(days=1))
     assert "ZFB" in concentration_symbols(fourth)
 
 
-def test_quiet_session_spends_no_rate_limit_budget(db_conn: Connection) -> None:
-    # A brief that skips (no full-tier mover) must not record a flag mention.
+def test_close_brief_spends_no_rate_limit_budget(db_conn: Connection) -> None:
+    """Since M14 the close brief doesn't surface flags at all, so it can never
+    consume the weekly budget the morning's §6 depends on — the reason the
+    mechanism moved rather than being shared."""
     sector_id = _seed_user(db_conn)
     prev, session = date(2099, 9, 1), date(2099, 9, 2)
     _seed_holding(db_conn, sector_id, "ZFC", prev)
     _seed_bar(db_conn, "ZFC", prev, "100")
-    _seed_bar(db_conn, "ZFC", session, "100.05")  # +0.05% → suppressed → brief skips
+    _seed_bar(db_conn, "ZFC", session, "115")  # +15% → a full-tier mover, so it sends
 
     obj = assemble_and_store(db_conn, _TEST_USER_ID, session, "close")
-    assert obj is None
+    assert obj is not None  # it sent
+    assert obj.flags == []  # but carried no flags
 
     rows = db_conn.execute(
         text("SELECT count(*) FROM flags WHERE user_id = :u"), {"u": _TEST_USER_ID}
     ).scalar_one()
-    assert rows == 0  # nothing surfaced, nothing recorded
+    assert rows == 0  # and recorded none
