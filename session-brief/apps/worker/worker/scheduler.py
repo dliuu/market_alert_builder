@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time  # `time` is already the stdlib module here
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -34,7 +35,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from worker import calendar, config
 from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID
-from worker.providers.base import MarketDataProvider
+from worker.providers.base import MarketDataProvider, PremarketProvider
 
 UTC = ZoneInfo("UTC")
 ET = calendar.ET  # America/New_York — the tz all wall-clock scheduling uses
@@ -277,6 +278,81 @@ def run_session_job(
         raise
 
 
+_PRIOR_TAPE = text("""
+    SELECT symbol, last FROM quotes
+    WHERE session_date = :prior_session AND symbol = ANY(:symbols)
+      AND last IS NOT NULL
+""")
+
+
+def _prior_tape_levels(
+    conn: Connection, symbols: list[str], prior_session: date
+) -> dict[str, Decimal]:
+    """Yesterday's capture is today's base for the macro tape — nothing ingests
+    futures or yield bars, so the tape bootstraps off its own history. On the
+    first morning it is empty and §2 renders its note."""
+    return {
+        str(row["symbol"]): Decimal(str(row["last"]))
+        for row in conn.execute(
+            _PRIOR_TAPE, {"prior_session": prior_session, "symbols": symbols}
+        ).mappings()
+    }
+
+
+def ingest_premarket_for_session(
+    engine: Engine,
+    *,
+    session_date: date,
+    prior_session: date,
+    user_id: str = DEV_USER_ID,
+    provider: PremarketProvider | None = None,
+) -> int:
+    """The 08:00 stage (docs/02): capture the morning's pre-market prints and the
+    overnight macro tape into `quotes`.
+
+    The provider defaults to the synthetic feed. That is not a test seam — it is
+    the shipping configuration until the premium pre-market licence lands (D8),
+    and swapping it is a one-line change here.
+    """
+    from worker.premarket import (
+        capture_stamp,
+        ingest_premarket,
+        prior_closes,
+        tape_universe,
+    )
+    from worker.providers.synthetic import SyntheticPremarketProvider
+
+    with engine.connect() as conn:
+        held = book_symbols(conn, user_id)
+        benchmarks = [
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT DISTINCT benchmark_symbol FROM sectors "
+                     "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"),
+                {"u": user_id},
+            ).all()
+        ]
+        tape = tape_universe(benchmarks)
+        closes = prior_closes(
+            conn, held + [symbol for symbol, _, _ in tape], prior_session
+        )
+
+    # The tape symbols have no bars (nothing ingests futures), so seed their
+    # bases from the tape's own prior capture where one exists, and skip the
+    # rest — a symbol with no base is omitted rather than invented.
+    with engine.connect() as conn:
+        closes |= _prior_tape_levels(conn, [s for s, _, _ in tape], prior_session)
+
+    prov = provider or SyntheticPremarketProvider(closes, session_date)
+    with engine.begin() as conn:
+        return ingest_premarket(
+            conn, prov,
+            held=held, tape=tape,
+            session_date=session_date,
+            captured_at=capture_stamp(session_date),
+        )
+
+
 def run_open_session_job(
     engine: Engine,
     *,
@@ -288,10 +364,13 @@ def run_open_session_job(
 ) -> str:
     """The 08:15 ET run. Returns ``skipped-holiday`` or ``sent``.
 
-    Deliberately simpler than the close job: there is **no bar poll**, because
+    Two respects it stays simpler than the close job: **no EOD bar poll**, because
     the open brief reads the *prior* close, which was already cached last night,
-    and **no skip gate**, because the open brief always sends (docs/05). M15
-    gives the pre-open stage real ingest work; in M14 it has none.
+    and **no skip gate**, because the open brief always sends (docs/05). It does
+    have ingest work of its own, though: the 08:00 stage (docs/02) —
+    `ingest_premarket_for_session` captures the morning's pre-market prints and
+    the overnight macro tape into `quotes` — before assembly reads them. M14
+    shipped this job with no ingest work at all; M15 is that stage.
     """
     from worker.assemble_open import assemble_open_and_store
     from worker.deliver import deliver_brief
@@ -306,6 +385,11 @@ def run_open_session_job(
             return "skipped-holiday"
 
         prior = calendar.previous_session(session_date)
+
+        written = ingest_premarket_for_session(
+            engine, session_date=session_date, prior_session=prior, user_id=user_id
+        )
+        print(f"open {session_date}: captured {written} pre-market quotes.")
 
         with engine.connect() as conn:
             trans = conn.begin()

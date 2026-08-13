@@ -12,8 +12,12 @@ Thanksgiving) is a 13:00 ET half-day; Mon 2026-09-07 is Labor Day.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from worker import scheduler
 
@@ -120,3 +124,64 @@ def test_a_session_gets_exactly_one_open_and_one_close() -> None:
     assert [k for _, k in fires] == ["open", "close"]
     assert all(w.date() == date(2026, 9, 4) for w, _ in fires)
     assert fires[0][0] < fires[1][0]
+
+
+# --- run_open_session_job: the 08:00 capture precedes assembly --------------
+#
+# A minimal engine stand-in: run_open_session_job only ever hands its
+# connection to `ingest_premarket_for_session` and `assemble_open_and_store`,
+# both monkeypatched below, so nothing here needs to talk to a real database.
+
+
+class _StubTransaction:
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        pass
+
+
+class _StubConn:
+    def begin(self) -> _StubTransaction:
+        return _StubTransaction()
+
+
+class _StubEngine:
+    def connect(self) -> contextlib.AbstractContextManager[_StubConn]:
+        return contextlib.nullcontext(_StubConn())
+
+
+def _engine() -> _StubEngine:
+    return _StubEngine()
+
+
+class _Stop(Exception):
+    """Cuts the job short after the step under test — the ordering is the
+    assertion, and delivery is somebody else's test."""
+
+
+def test_the_open_job_captures_premarket_before_assembling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/02's staging, made real: the 08:15 send reads quotes the 08:00 stage
+    wrote. M14's open job had nothing to ingest; M15 gives it the morning's."""
+    calls: list[str] = []
+
+    def fake_ingest(*_args: Any, **_kwargs: Any) -> int:
+        calls.append("ingest")
+        return 3
+
+    def fake_assemble(*_args: Any, **_kwargs: Any) -> object:
+        calls.append("assemble")
+        raise _Stop
+
+    monkeypatch.setattr(scheduler, "ingest_premarket_for_session", fake_ingest)
+    monkeypatch.setattr("worker.assemble_open.assemble_open_and_store", fake_assemble)
+
+    with pytest.raises(_Stop):
+        scheduler.run_open_session_job(
+            _engine(),  # type: ignore[arg-type]
+            now_utc=datetime(2026, 8, 13, 12, 15, tzinfo=UTC),
+            healthcheck_url="",
+        )
+    assert calls == ["ingest", "assemble"]

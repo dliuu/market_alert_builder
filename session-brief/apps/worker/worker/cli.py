@@ -44,6 +44,12 @@ def main() -> None:
         "--symbols", help="comma-separated tickers; defaults to the symbols in your book"
     )
 
+    seed_premarket = sub.add_parser(
+        "seed-premarket",
+        help="capture a session's pre-market quotes + macro tape (M15 bootstrap)",
+    )
+    seed_premarket.add_argument("--date", help="session date YYYY-MM-DD; defaults to today")
+
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
     brief.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
@@ -114,6 +120,10 @@ def main() -> None:
 
     if args.command == "events-seed":
         _events_seed(date_arg=args.date, symbols_arg=args.symbols)
+        return
+
+    if args.command == "seed-premarket":
+        _seed_premarket(date_arg=args.date)
         return
 
     if args.command == "brief":
@@ -238,6 +248,20 @@ def _events_seed(date_arg: str | None, symbols_arg: str | None) -> None:
         written = seed_events(conn, session_date=session_date, symbols=symbols)
 
     print(f"events-seed: {written} event(s) around {session_date} for {len(symbols)} symbol(s)")
+
+
+def _seed_premarket(date_arg: str | None) -> None:
+    from worker.scheduler import ingest_premarket_for_session
+
+    engine = get_engine()
+    session_date = date.fromisoformat(date_arg) if date_arg else date.today()
+    prior_session = calendar.previous_session(session_date)
+
+    written = ingest_premarket_for_session(
+        engine, session_date=session_date, prior_session=prior_session
+    )
+
+    print(f"seed-premarket: {written} quote(s) captured for {session_date}")
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
