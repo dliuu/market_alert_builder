@@ -38,10 +38,22 @@ class FdnProvider:
         raise NotImplementedError
 
     def earnings_calendar(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("earnings calendar consumed in M12")
+        raise NotImplementedError("earnings calendar feeds the open brief's §4 (M14/M15)")
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("dividends consumed in M12")
+        raise NotImplementedError("dividends feed is an M12 concern")
 
     def news(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError
+
+    # The §4 calendar seam (M14). fdnpy really does expose these —
+    # get_earnings_calendar / get_dividends_calendar / get_economic_calendar —
+    # but they are Premium tier, personal-use-only, with redistribution behind
+    # Enterprise (docs/02, D8). That is the same licensing gate M15 defers, so
+    # M14 seeds synthetically and these stay declared-but-unwired.
+
+    def dividends_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy dividends calendar is Premium; M14 §4 seeds")
+
+    def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy economic calendar is Premium; M14 §4 seeds")

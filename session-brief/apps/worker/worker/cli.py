@@ -33,6 +33,14 @@ def main() -> None:
     compute.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
     compute.add_argument("--user", default=DEV_USER_ID, help="user id (defaults to the dev user)")
 
+    events_seed = sub.add_parser(
+        "events-seed", help="seed the synthetic §4 calendar (earnings/ex-div/lockup/macro)"
+    )
+    events_seed.add_argument("--date", help="session date YYYY-MM-DD; defaults to today")
+    events_seed.add_argument(
+        "--symbols", help="comma-separated tickers; defaults to the symbols in your book"
+    )
+
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
     brief.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
@@ -93,6 +101,10 @@ def main() -> None:
 
     if args.command == "compute":
         _compute(date_arg=args.date, user_id=args.user)
+        return
+
+    if args.command == "events-seed":
+        _events_seed(date_arg=args.date, symbols_arg=args.symbols)
         return
 
     if args.command == "brief":
@@ -200,6 +212,23 @@ def _backfill(symbols_arg: str | None, days: int) -> None:
         f"backfill: {len(symbols)} symbol(s) {start}..{end} — "
         f"{written} new payload(s), {bars} bar(s) normalized"
     )
+
+
+def _events_seed(date_arg: str | None, symbols_arg: str | None) -> None:
+    from worker.events_seed import seed_events
+
+    engine = get_engine()
+    session_date = date.fromisoformat(date_arg) if date_arg else date.today()
+    symbols = _resolve_symbols(symbols_arg, engine)
+    if not symbols:
+        raise SystemExit(
+            "No symbols to seed. Pass --symbols AAPL,MSFT or add holdings to your book."
+        )
+
+    with engine.begin() as conn:
+        written = seed_events(conn, session_date=session_date, symbols=symbols)
+
+    print(f"events-seed: {written} event(s) around {session_date} for {len(symbols)} symbol(s)")
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
