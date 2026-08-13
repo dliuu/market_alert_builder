@@ -15,3 +15,26 @@ def test_attribution_tables_exist_and_are_shared(db_conn: Connection) -> None:
             "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
         ), {"t": table}).scalars().all()
         assert "user_id" not in cols
+
+
+def test_m12_econometrics_schema_present_and_shared(db_conn: Connection) -> None:
+    for table in ("basket_loo_returns", "index_events",
+                  "attribution_signals", "theme_dispersion"):
+        db_conn.execute(text(f"SELECT * FROM {table} LIMIT 0"))  # exists
+
+    attr_cols = db_conn.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='attribution'"
+    )).scalars().all()
+    assert "resid_z" in attr_cols
+
+    basket_cols = db_conn.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='basket_returns'"
+    )).scalars().all()
+    assert "weights" in basket_cols
+
+    # Shared reference data: no user_id on the new tables.
+    for table in ("basket_loo_returns", "attribution_signals", "theme_dispersion"):
+        cols = db_conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
+        ), {"t": table}).scalars().all()
+        assert "user_id" not in cols
