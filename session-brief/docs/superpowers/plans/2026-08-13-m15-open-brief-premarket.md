@@ -32,6 +32,23 @@ The design spec (`docs/superpowers/specs/2026-08-13-m15-open-brief-premarket-des
 3. **"§3: names moving >1% pre-market **or carrying news**" — half unbuildable.** There is no `news_items` table and no news feed (docs/02: FinancialData.net `get_latest_news`, Premium, unwired). Build the threshold predicate to take a `has_news: bool`, wire nothing to it, and document the gap — the D18 precedent, where `short_interest` has a live threshold and no feed.
 4. **"§2/§3 section IDs already exist in the enum (M14 note)" — true, and that's all that exists.** The `row` def has no §2 or §3 fields; §5's `premarket` field does exist (null since M14). The bump is for §2's `level`/`overnight_pct`/`overnight_abs`, §3's `pre_pct`/`gap_cents`/`premarket_vol_mult`, and the two `claim` changes.
 
+## Correction applied during execution — the pre-market seam is its own protocol
+
+The plan below says to add the four pre-market methods to `MarketDataProvider`.
+That was wrong and has been corrected in the code (Task 4, fix round 1, on the
+human's ruling). Protocols are structural, so widening the one provider protocol
+made `TiingoProvider` — which serves EOD bars and structurally cannot serve
+pre-market data — stop conforming, breaking `mypy --strict` (clean at this
+milestone's base, 6 errors after Task 3).
+
+The four methods live on a **separate `PremarketProvider` protocol** in
+`worker/providers/base.py`, because they are a separate, premium,
+licensing-gated feed (D8): a vendor may serve either, both, or neither.
+`ingest_premarket` takes a `PremarketProvider`; `FdnProvider` is intended to
+satisfy both once licensed; `SyntheticPremarketProvider` satisfies only the
+pre-market one and carries no EOD stubs. Read `MarketDataProvider` as
+`PremarketProvider` wherever the four methods appear below.
+
 ## Global Constraints
 
 - **Money is integer cents at rest and `Decimal` in Python. Never float on the money path.** `gap_cents` is an integer; prices are `Decimal`; ratios (`pre_pct`, `premarket_vol_mult`, `overnight_pct`) cross into the object as floats, which is the existing rule for display ratios (`assemble_open._float`).
@@ -2201,7 +2218,7 @@ def ingest_premarket_for_session(
     session_date: date,
     prior_session: date,
     user_id: str = DEV_USER_ID,
-    provider: MarketDataProvider | None = None,
+    provider: PremarketProvider | None = None,
 ) -> int:
     """The 08:00 stage (docs/02): capture the morning's pre-market prints and the
     overnight macro tape into `quotes`.
