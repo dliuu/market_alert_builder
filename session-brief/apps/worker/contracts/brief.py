@@ -68,8 +68,29 @@ class Tier1(Enum):
     brief = 'brief'
 
 
+class EventType(Enum):
+    earnings = 'earnings'
+    lockup = 'lockup'
+    ex_div = 'ex_div'
+    macro = 'macro'
+    NoneType_None = None
+
+
+class Tag(Enum):
+    macro = 'macro'
+    holding = 'holding'
+    watchlist = 'watchlist'
+    NoneType_None = None
+
+
 class Row(BaseModel):
-    symbol: str
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    symbol: str | None = Field(
+        None,
+        description="Absent on rows that name no security — a macro release in the open brief's calendar section has no ticker (M14).",
+    )
     tier: Tier1 | None = Field(
         None,
         description='Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).',
@@ -85,6 +106,42 @@ class Row(BaseModel):
     rel_strength: float | None = None
     why: str | None = Field(
         None, description='LLM-written. Prose only — must contain no figures.'
+    )
+    label: str | None = Field(
+        None,
+        description='Human-readable name for a row that isn\'t identified by its ticker (open brief §4 calendar, e.g. "CPI (Jul)").',
+    )
+    event_type: EventType | None = Field(
+        None, description='Open brief §4 (calendar). Mirrors events.event_type.'
+    )
+    occurs_at: date | None = Field(
+        None,
+        description='Open brief §4 (calendar): the session date the event lands on.',
+    )
+    tag: Tag | None = Field(
+        None, description='Open brief §4 (calendar): whose calendar this is (docs/05).'
+    )
+    sector_id: str | None = Field(
+        None,
+        description='Open brief §5 (sector setup): the sectors row this line summarizes.',
+    )
+    name: str | None = Field(
+        None, description="Open brief §5 (sector setup): the sector's display name."
+    )
+    benchmark_symbol: str | None = Field(
+        None,
+        description="Open brief §5 (sector setup): the sector's benchmark, or null when unset in the book.",
+    )
+    ret_5d: float | None = Field(
+        None, description="Open brief §5: the benchmark's trailing 5-session return."
+    )
+    vs_spy_5d: float | None = Field(
+        None,
+        description="Open brief §5: trailing 5-session return less SPY's over the same window.",
+    )
+    premarket: float | None = Field(
+        None,
+        description='Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15.',
     )
 
 
@@ -169,7 +226,10 @@ class BriefObject(BaseModel):
     generated_at: AwareDatetime
     subject: constr(max_length=160)
     one_thing: str | None = None
-    book: Book
+    book: Book | None = Field(
+        None,
+        description='Absent on the open brief, which carries no performance or P&L (M14). Always present on the close brief.',
+    )
     sections: list[Section]
     flags: list[Flag]
     claims: list[Claim]

@@ -1,4 +1,4 @@
-import type { BriefObject, Claim, Flag, Row } from "@/lib/contracts/brief";
+import type { Book, BriefObject, Claim, Flag, Row } from "@/lib/contracts/brief";
 import { Body, Container, Head, Hr, Html, Link, Preview, Section } from "@react-email/components";
 import { font, palette, signColor } from "./theme";
 
@@ -50,17 +50,20 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
             </Section>
           )}
 
-          {/* session scorecard */}
-          <Section style={sec}>
-            <SectionHead title="Session scorecard" />
-            <Scorecard brief={brief} positions={attribution?.rows.length ?? 0} />
-          </Section>
+          {/* session scorecard — `book` is nullable since v3 (the open brief
+              omits it), but a close brief always has one. Guard once here. */}
+          {brief.book && (
+            <Section style={sec}>
+              <SectionHead title="Session scorecard" />
+              <Scorecard book={brief.book} positions={attribution?.rows.length ?? 0} />
+            </Section>
+          )}
 
           {/* attribution */}
-          {attribution && attribution.rows.length > 0 && (
+          {brief.book && attribution && attribution.rows.length > 0 && (
             <Section style={sec}>
               <SectionHead title="Attribution" note="contribution to book return" />
-              <Attribution rows={attribution.rows} book={brief} />
+              <Attribution rows={attribution.rows} book={brief.book} />
             </Section>
           )}
 
@@ -145,8 +148,7 @@ function SectionHead({ title, note }: { title: string; note?: string }) {
   );
 }
 
-function Scorecard({ brief, positions }: { brief: BriefObject; positions: number }) {
-  const { book } = brief;
+function Scorecard({ book, positions }: { book: Book; positions: number }) {
   const cells = [
     {
       k: "Session",
@@ -190,7 +192,7 @@ function Scorecard({ brief, positions }: { brief: BriefObject; positions: number
   );
 }
 
-function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
+function Attribution({ rows, book }: { rows: Row[]; book: Book }) {
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
       <thead>
@@ -227,20 +229,16 @@ function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
         <tr>
           <td style={totL}>Book</td>
           <td style={totR}>—</td>
-          <td style={{ ...totR, color: signColor(book.book.day_pnl_cents) }}>
-            {signedPct(book.book.day_bps / 100)}
+          <td style={{ ...totR, color: signColor(book.day_pnl_cents) }}>
+            {signedPct(book.day_bps / 100)}
           </td>
-          <td style={{ ...totR, color: signColor(book.book.day_pnl_cents) }}>
-            {signedDollarsRound(book.book.day_pnl_cents)}
+          <td style={{ ...totR, color: signColor(book.day_pnl_cents) }}>
+            {signedDollarsRound(book.day_pnl_cents)}
           </td>
-          <td style={{ ...totR, color: signColor(book.book.day_bps) }}>
-            {signedInt(book.book.day_bps)}
-          </td>
-          <td style={{ ...totR, color: signColor(book.book.total_pnl_cents) }}>
-            {signedDollarsRound(book.book.total_pnl_cents)}
-            {book.book.total_pct != null && (
-              <span style={mut}> {signedPct(book.book.total_pct * 100)}</span>
-            )}
+          <td style={{ ...totR, color: signColor(book.day_bps) }}>{signedInt(book.day_bps)}</td>
+          <td style={{ ...totR, color: signColor(book.total_pnl_cents) }}>
+            {signedDollarsRound(book.total_pnl_cents)}
+            {book.total_pct != null && <span style={mut}> {signedPct(book.total_pct * 100)}</span>}
           </td>
         </tr>
       </tbody>

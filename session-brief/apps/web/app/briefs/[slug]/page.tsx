@@ -45,32 +45,35 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
 
       {brief.one_thing && <p style={S.oneThing}>{brief.one_thing}</p>}
 
-      {/* Scorecard — from book totals */}
-      <section style={S.card}>
-        <h2 style={S.h2}>Session scorecard</h2>
-        <div style={S.grid}>
-          <Stat label="Book value" value={dollars(brief.book.value_cents)} />
-          <Stat
-            label="Day P&L"
-            value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
-            positive={brief.book.day_pnl_cents >= 0}
-          />
-          <Stat
-            label="Total P&L"
-            value={`${signedDollars(brief.book.total_pnl_cents)}${
-              brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
-            }`}
-            positive={brief.book.total_pnl_cents >= 0}
-          />
-          {brief.book.vs_spy_bps != null && (
+      {/* Scorecard — from book totals. `book` is nullable since v3: the open
+          brief carries no performance or P&L at all (M14). */}
+      {brief.book && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Session scorecard</h2>
+          <div style={S.grid}>
+            <Stat label="Book value" value={dollars(brief.book.value_cents)} />
             <Stat
-              label="vs SPY"
-              value={bps(brief.book.vs_spy_bps)}
-              positive={brief.book.vs_spy_bps >= 0}
+              label="Day P&L"
+              value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
+              positive={brief.book.day_pnl_cents >= 0}
             />
-          )}
-        </div>
-      </section>
+            <Stat
+              label="Total P&L"
+              value={`${signedDollars(brief.book.total_pnl_cents)}${
+                brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
+              }`}
+              positive={brief.book.total_pnl_cents >= 0}
+            />
+            {brief.book.vs_spy_bps != null && (
+              <Stat
+                label="vs SPY"
+                value={bps(brief.book.vs_spy_bps)}
+                positive={brief.book.vs_spy_bps >= 0}
+              />
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Attribution */}
       {attribution && (
@@ -108,26 +111,28 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   <td style={S.tdR}>{pctOrDash(r.total_pct)}</td>
                 </tr>
               ))}
-              {/* Book totals row */}
-              <tr>
-                <td style={S.tdTotal}>Book</td>
-                <td style={S.tdR} />
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
-                  {pct(brief.book.day_bps / 10000)}
-                </td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
-                  {signedDollars(brief.book.day_pnl_cents)}
-                </td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
-                  {bps(brief.book.day_bps)}
-                </td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
-                  {signedDollars(brief.book.total_pnl_cents)}
-                </td>
-                <td style={S.tdRTotal}>
-                  {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
-                </td>
-              </tr>
+              {/* Book totals row — only when there is a book to total */}
+              {brief.book && (
+                <tr>
+                  <td style={S.tdTotal}>Book</td>
+                  <td style={S.tdR} />
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                    {pct(brief.book.day_bps / 10000)}
+                  </td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                    {signedDollars(brief.book.day_pnl_cents)}
+                  </td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
+                    {bps(brief.book.day_bps)}
+                  </td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
+                    {signedDollars(brief.book.total_pnl_cents)}
+                  </td>
+                  <td style={S.tdRTotal}>
+                    {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </section>

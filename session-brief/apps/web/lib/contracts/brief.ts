@@ -17,7 +17,7 @@ export interface BriefObject {
   generated_at: string;
   subject: string;
   one_thing?: string | null;
-  book: Book;
+  book?: Book;
   sections: Section[];
   flags: Flag[];
   claims: Claim[];
@@ -29,7 +29,7 @@ export interface BriefObject {
   };
 }
 /**
- * All monetary values are integer cents. Never float.
+ * Absent on the open brief, which carries no performance or P&L (M14). Always present on the close brief.
  */
 export interface Book {
   value_cents: number;
@@ -58,7 +58,10 @@ export interface Section {
   rows: Row[];
 }
 export interface Row {
-  symbol: string;
+  /**
+   * Absent on rows that name no security — a macro release in the open brief's calendar section has no ticker (M14).
+   */
+  symbol?: string | null;
   /**
    * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).
    */
@@ -76,7 +79,46 @@ export interface Row {
    * LLM-written. Prose only — must contain no figures.
    */
   why?: string | null;
-  [k: string]: unknown;
+  /**
+   * Human-readable name for a row that isn't identified by its ticker (open brief §4 calendar, e.g. "CPI (Jul)").
+   */
+  label?: string | null;
+  /**
+   * Open brief §4 (calendar). Mirrors events.event_type.
+   */
+  event_type?: "earnings" | "lockup" | "ex_div" | "macro" | null;
+  /**
+   * Open brief §4 (calendar): the session date the event lands on.
+   */
+  occurs_at?: string | null;
+  /**
+   * Open brief §4 (calendar): whose calendar this is (docs/05).
+   */
+  tag?: "macro" | "holding" | "watchlist" | null;
+  /**
+   * Open brief §5 (sector setup): the sectors row this line summarizes.
+   */
+  sector_id?: string | null;
+  /**
+   * Open brief §5 (sector setup): the sector's display name.
+   */
+  name?: string | null;
+  /**
+   * Open brief §5 (sector setup): the sector's benchmark, or null when unset in the book.
+   */
+  benchmark_symbol?: string | null;
+  /**
+   * Open brief §5: the benchmark's trailing 5-session return.
+   */
+  ret_5d?: number | null;
+  /**
+   * Open brief §5: trailing 5-session return less SPY's over the same window.
+   */
+  vs_spy_5d?: number | null;
+  /**
+   * Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15.
+   */
+  premarket?: number | null;
 }
 export interface Flag {
   type: "concentration" | "correlation" | "runway" | "dilution" | "earnings_soon" | "supply_event" | "short_interest";

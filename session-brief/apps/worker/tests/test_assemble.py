@@ -157,5 +157,6 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_two() -> None:
-    assert _mixed().schema_version == SCHEMA_VERSION == 2
+def test_schema_version_is_three() -> None:
+    # v3 = M14: nullable `book` + the open brief's §4/§5 row fields (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 3

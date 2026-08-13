@@ -129,7 +129,11 @@ def narrate_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObjec
 def _attribution_symbols(obj: BriefObject) -> set[str]:
     for section in obj.sections:
         if section.id is SectionId.attribution:
-            return {row.symbol for row in section.rows}
+            # `symbol` is optional since v3 (a macro calendar row names no
+            # security). Attribution rows always have one; skipping the None
+            # case keeps the set typed and can only ever drop a row that has
+            # no ticker for narration to key on.
+            return {row.symbol for row in section.rows if row.symbol is not None}
     return set()
 
 

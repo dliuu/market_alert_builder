@@ -42,8 +42,10 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 
 # Object shape version. Bump on any shape change and keep old renderers
 # (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
-# section, populated `suppressed[]`).
-SCHEMA_VERSION = 2
+# section, populated `suppressed[]`). v3 = M14 (nullable `book` so the open brief
+# can omit P&L, plus the §4 calendar / §5 sector-setup row fields and an optional
+# row `symbol` for macro releases).
+SCHEMA_VERSION = 3
 
 _BPS_PER_UNIT = 10_000
 
