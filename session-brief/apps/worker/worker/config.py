@@ -42,3 +42,7 @@ SEND_DELAY_MINUTES: int = int(os.environ.get("SEND_DELAY_MINUTES", "45"))
 # alarm without letting a stale brief go out late (docs/06).
 BAR_POLL_TIMEOUT_S: int = int(os.environ.get("BAR_POLL_TIMEOUT_S", "1200"))
 BAR_POLL_INTERVAL_S: int = int(os.environ.get("BAR_POLL_INTERVAL_S", "90"))
+# Attribution PM/AM reconcile (M11): correct the stored return when the
+# synthetic PM day-return and the official day-return differ by more than this
+# (fraction; 0.001 = 10 bps). Silent drift would slowly corrupt every fitted β.
+RECONCILE_TOL: float = float(os.environ.get("RECONCILE_TOL", "0.001"))
