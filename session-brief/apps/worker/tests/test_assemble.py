@@ -57,6 +57,9 @@ def _two() -> BriefObject:
 
 def test_book_totals() -> None:
     book = _two().book
+    # `book` is nullable since v3 (the open brief omits it) — a close brief
+    # always has one, and asserting that is part of what this test checks.
+    assert book is not None
     assert book.value_cents == 206_000
     assert book.day_pnl_cents == 6_000
     assert book.day_bps == 300

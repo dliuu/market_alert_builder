@@ -66,7 +66,6 @@ class Tier(Enum):
 class Tier1(Enum):
     full = 'full'
     brief = 'brief'
-    NoneType_None = None
 
 
 class EventType(Enum):
@@ -74,14 +73,12 @@ class EventType(Enum):
     lockup = 'lockup'
     ex_div = 'ex_div'
     macro = 'macro'
-    NoneType_None = None
 
 
 class Tag(Enum):
     macro = 'macro'
     holding = 'holding'
     watchlist = 'watchlist'
-    NoneType_None = None
 
 
 class Row(BaseModel):
@@ -94,7 +91,7 @@ class Row(BaseModel):
     )
     tier: Tier1 | None = Field(
         None,
-        description="Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup).",
+        description="Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup). Nullable via anyOf, not as an enum member — the absence of a tier is not itself a tier, and folding null into the enum makes the generated `.value` no longer a string.",
     )
     close: float | None = None
     day_return: float | None = None

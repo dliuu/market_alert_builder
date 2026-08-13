@@ -24,6 +24,7 @@ dev = [
     # Validates stored bodies against the canonical JSON Schema directly, rather
     # than only through the generated Pydantic models (see test_contract_schema).
     "jsonschema>=4.23",
+    "types-jsonschema>=4.23",
 ]
 
 [tool.uv]

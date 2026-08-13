@@ -66,9 +66,9 @@ export interface Row {
    */
   symbol?: string | null;
   /**
-   * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup).
+   * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup). Nullable via anyOf, not as an enum member — the absence of a tier is not itself a tier, and folding null into the enum makes the generated `.value` no longer a string.
    */
-  tier?: "full" | "brief" | null;
+  tier?: ("full" | "brief") | null;
   close?: number | null;
   day_return?: number | null;
   day_pnl_cents?: number | null;
@@ -89,7 +89,7 @@ export interface Row {
   /**
    * Open brief §4 (calendar). Mirrors events.event_type.
    */
-  event_type?: "earnings" | "lockup" | "ex_div" | "macro" | null;
+  event_type?: ("earnings" | "lockup" | "ex_div" | "macro") | null;
   /**
    * Open brief §4 (calendar): the session date the event lands on.
    */
@@ -97,7 +97,7 @@ export interface Row {
   /**
    * Open brief §4 (calendar): whose calendar this is (docs/05).
    */
-  tag?: "macro" | "holding" | "watchlist" | null;
+  tag?: ("macro" | "holding" | "watchlist") | null;
   /**
    * Open brief §5 (sector setup): the sectors row this line summarizes.
    */

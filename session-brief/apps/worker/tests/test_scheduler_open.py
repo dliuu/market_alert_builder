@@ -48,9 +48,14 @@ def test_half_day_moves_the_close_fire_but_not_the_open() -> None:
     assert close_fire == datetime(2026, 11, 27, 18, 45, tzinfo=UTC)
     # Open did not move: still 08:15 ET == 13:15 UTC.
     assert open_fire == datetime(2026, 11, 27, 13, 15, tzinfo=UTC)
-    # And a normal session's open fires at the same wall-clock time.
-    assert open_fire.astimezone(scheduler.ET).time() == (
-        scheduler.open_fire_time(date(2026, 11, 30)).astimezone(scheduler.ET).time()
+
+    # And a normal session's open fires at the same wall-clock time. Both are
+    # sessions, so neither lookup returns None — assert that before comparing.
+    normal_open = scheduler.open_fire_time(date(2026, 11, 30))
+    assert open_fire is not None and normal_open is not None
+    assert (
+        open_fire.astimezone(scheduler.ET).time()
+        == normal_open.astimezone(scheduler.ET).time()
     )
 
 

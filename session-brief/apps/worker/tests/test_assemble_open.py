@@ -150,7 +150,10 @@ def test_macro_calendar_row_has_no_symbol() -> None:
 def test_calendar_rows_are_ordered_by_date() -> None:
     calendar = next(s for s in _open().sections if s.id.value == "calendar")
     dates = [r.occurs_at for r in calendar.rows]
-    assert dates == sorted(dates)
+    # Every calendar row is dated — a row without a date has nothing to be "on
+    # the clock" for. Asserting it also makes the ordering check meaningful.
+    assert all(d is not None for d in dates)
+    assert dates == sorted(d for d in dates if d is not None)
 
 
 def test_sector_setup_carries_returns_and_a_null_premarket() -> None:
