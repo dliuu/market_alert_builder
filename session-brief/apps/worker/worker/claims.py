@@ -20,6 +20,7 @@ from sqlalchemy.engine import Connection
 
 from worker.compute import PositionMetrics
 from worker.constants import BENCHMARK_SYMBOL
+from worker.premarket import PremarketQuote
 
 # A full-tier name must beat/lag the benchmark by more than this (1d relative)
 # to be worth a claim. A tunable placeholder for the mechanism (D17).
@@ -73,6 +74,35 @@ def emit_claims(
     return out
 
 
+def emit_premarket_gap(quotes: list[PremarketQuote]) -> list[Claim]:
+    """The morning call (M15): a name gapping pre-market is claimed to hold that
+    relative direction into the close, **horizon 0** — resolved by that same
+    session's close brief. This is the same-day open→close loop D16b built the
+    engine for and could not run until an open brief emitted.
+
+    The threshold is §3's: if the move isn't worth a row, it isn't worth a
+    falsifiable call.
+    """
+    from worker.premarket import clears_threshold, pre_pct
+
+    out: list[Claim] = []
+    for quote in quotes:
+        if not clears_threshold(quote):
+            continue
+        pct = pre_pct(quote)
+        if pct is None or pct == 0:
+            continue
+        out.append(
+            Claim(
+                symbol=quote.symbol,
+                claim_type="premarket_gap",
+                direction="up" if pct > 0 else "down",
+                horizon_sessions=0,
+            )
+        )
+    return out
+
+
 # --- Persistence + resolution (DB) ----------------------------------------
 
 _INSERT = text("""
@@ -83,10 +113,13 @@ _INSERT = text("""
     ON CONFLICT (user_id, symbol, claim_type, session_date) DO NOTHING
 """)
 
+# `<=`, not `<`: a horizon-0 morning claim is due the session it was emitted
+# on. Horizon-1 claims emitted today are still excluded — not by this filter but
+# by `_resolve_session`, which places their resolution on the *next* session.
 _READ_UNRESOLVED = text("""
     SELECT id, symbol, claim_type, direction, horizon_sessions, session_date
     FROM claims
-    WHERE user_id = :user_id AND outcome IS NULL AND session_date < :session_date
+    WHERE user_id = :user_id AND outcome IS NULL AND session_date <= :session_date
 """)
 
 # The horizon-th session strictly after the emit session, for this symbol.
@@ -168,9 +201,21 @@ def resolve_due_claims(
     return resolved
 
 
+# Horizon 0 resolves on the emit session itself — but only once that session has
+# a bar. Before the close there is nothing to grade, so the claim waits.
+_SAME_SESSION = text("""
+    SELECT session_date FROM bars_daily
+    WHERE symbol = :symbol AND session_date = :emitted_on
+""")
+
+
 def _resolve_session(
     conn: Connection, symbol: str, emitted_on: date, horizon: int
 ) -> date | None:
+    if horizon == 0:
+        return conn.execute(
+            _SAME_SESSION, {"symbol": symbol, "emitted_on": emitted_on}
+        ).scalar()
     return conn.execute(
         _RESOLVE_SESSION, {"symbol": symbol, "emitted_on": emitted_on, "offset": horizon - 1}
     ).scalar()

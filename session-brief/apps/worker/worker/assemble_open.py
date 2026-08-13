@@ -13,10 +13,10 @@ Three consequences shape the module:
 - **No skip gate.** The close brief is skipped on a quiet session; the open brief
   always sends, because "nothing happened overnight" is information you need
   before the bell (docs/05).
-- **No claims.** M14 emits none (nothing directional is judgeable from cached
-  setup — the horizon-0 morning claim needs the pre-market signal, M15) and
-  *resolves* none. Resolving at 08:15 would work and that is precisely the trap:
-  it would consume the due claims before the close brief's §7 could report them.
+- **Emits, never resolves.** The horizon-0 morning claim (``premarket_gap``, M15)
+  is emitted here from the pre-market signal, but resolution stays out. Resolving
+  at 08:15 would work and that is precisely the trap: it would consume the due
+  claims before the close brief's §7 could report them.
 
 Everything here is pure over its inputs with ``generated_at`` injected, so a
 frozen fixture snapshots the whole object (the M4 discipline).
@@ -43,8 +43,8 @@ from sqlalchemy.engine import Connection
 
 from contracts.brief import BriefObject
 from worker.assemble import SCHEMA_VERSION
-from worker.assemble_shared import session_label
-from worker.claims import Claim
+from worker.assemble_shared import claim_dict, session_label
+from worker.claims import Claim, emit_premarket_gap, store_emitted_claims
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
 from worker.premarket import (
@@ -124,8 +124,9 @@ def assemble_open(
     is not always yesterday (a Tuesday after a Monday holiday looks back to
     Friday). ``generated_at`` is injected, never ``datetime.now()``.
 
-    ``claims`` is accepted now so the helper shape is stable across M15's
-    remaining tasks (the horizon-0 claim); this task leaves it unused.
+    ``claims`` carries the horizon-0 ``premarket_gap`` claims emitted this
+    session (M15); ``resolved_claims`` stays empty — resolution is the close
+    brief's job.
     """
     premarket_section, skipped = _premarket(premarket or [])
     payload = {
@@ -146,7 +147,7 @@ def assemble_open(
             _exposure_check(flags),
         ],
         "flags": [candidate_dict(f) for f in flags],
-        "claims": [],  # M15 lands the horizon-0 morning claim
+        "claims": [claim_dict(c, user_id, session_date, "open") for c in claims or []],
         "resolved_claims": [],  # resolution stays in the close brief (D16b)
         "suppressed": skipped,  # names that didn't clear §3's threshold
         "data_quality": {
@@ -446,6 +447,7 @@ def assemble_open_and_store(
 
     symbols = sorted(holdings)
     surfaced = surface_open_flags(conn, user_id, session_date, symbols, prior_session)
+    emitted = emit_premarket_gap(premarket)
 
     obj = assemble_open(
         events=events,
@@ -454,6 +456,7 @@ def assemble_open_and_store(
         holdings=holdings,
         tape=tape,
         premarket=premarket,
+        claims=emitted,
         user_id=user_id,
         session_date=session_date,
         prior_session=prior_session,
@@ -463,6 +466,7 @@ def assemble_open_and_store(
     obj = narrate_open_and_apply(obj, narrator)  # type: ignore[arg-type]
 
     _store(conn, obj)
+    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
 
     from worker.flags import record_flags
 
