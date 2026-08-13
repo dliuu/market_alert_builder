@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+import numpy as np
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -29,10 +30,20 @@ from worker.baskets import (
 )
 from worker.compute import _STORE_SCALE
 from worker.constants import BENCHMARK_SYMBOL
+from worker.robust import (
+    beta_standard_errors,
+    condition_number,
+    durbin_watson,
+    ewma_weights,
+    irls_huber,
+    mad_scale,
+)
 
 FIT_WINDOW = 120
 COLD_START_FLOOR = 40
 BPS = 10_000
+HALF_LIFE = 60.0
+R2_COLLAPSE_FLOOR = 0.05
 
 
 @dataclass(frozen=True)
@@ -113,6 +124,101 @@ def decompose(fit: Fit, r_market: float, r_theme: float, r_x: float) -> Decompos
     total = r_x * BPS
     market = fit.beta_market * r_market * BPS
     theme = fit.beta_theme * r_theme * BPS
+    resid = total - market - theme
+    return Decomposition(market_bps=market, theme_bps=theme, resid_bps=resid, total_bps=total)
+
+
+@dataclass(frozen=True)
+class TwoStageFit:
+    alpha: float
+    beta_market: float
+    beta_theta: float
+    a: float                 # stage-A intercept: r_basket = a + b*r_market + rho
+    b: float                 # stage-A market slope
+    r2: float | None
+    resid_scale: float | None  # MAD scale (1.4826 * MAD)
+    beta_se: tuple[float, float, float]
+    durbin_watson: float
+    cond_number: float
+    huber_converged: bool
+    r2_collapsed: bool
+    n_obs: int
+    cold_start: bool
+
+
+def orthogonalize(
+    r_basket: np.ndarray | list[float], r_market: np.ndarray | list[float],
+    w: np.ndarray,
+) -> tuple[float, float, np.ndarray]:
+    """Stage A: residualize the basket on the market (robust, EWMA-weighted).
+    Returns (a, b, rho) where rho = r_basket - (a + b*r_market) is theme movement
+    beyond the market. rho is orthogonal to r_market by construction of the WLS
+    normal equations, so beta_theta stops splitting shared variance arbitrarily."""
+    rb = np.asarray(r_basket, dtype=float)
+    rm = np.asarray(r_market, dtype=float)
+    X = np.column_stack([np.ones_like(rm), rm])
+    res = irls_huber(X, rb, prior_w=w)
+    a, b = float(res.beta[0]), float(res.beta[1])
+    rho = rb - (a + b * rm)
+    return a, b, rho
+
+
+def fit_two_stage(
+    r_x: list[float], r_market: list[float], r_basket: list[float], *,
+    half_life: float = HALF_LIFE,
+) -> TwoStageFit:
+    """Two-stage sequential-orthogonalization fit with robust Huber/EWMA IRLS.
+    Series are chronological (oldest first) so EWMA recency aligns. Additive
+    decomposition: market = beta_m*r_market, theme = beta_theta*rho, resid = eps."""
+    n = len(r_x)
+    if not (n == len(r_market) == len(r_basket)):
+        raise ValueError("mismatched series lengths")
+    if n < 2:
+        raise ValueError("need at least 2 observations to fit")
+
+    y = np.asarray(r_x, dtype=float)
+    rm = np.asarray(r_market, dtype=float)
+    w = ewma_weights(n, half_life)
+
+    a, b, rho = orthogonalize(r_basket, rm, w)
+    X = np.column_stack([np.ones(n), rm, rho])
+    res = irls_huber(X, y, prior_w=w)
+    alpha, beta_market, beta_theta = (float(v) for v in res.beta)
+
+    resid = res.resid
+    mean_y = float(np.mean(y))
+    ss_tot = float(np.sum((y - mean_y) ** 2))
+    ss_res = float(np.sum(resid**2))
+    r2 = None if ss_tot == 0 else 1.0 - ss_res / ss_tot
+    se = beta_standard_errors(X, resid, res.weights)
+
+    return TwoStageFit(
+        alpha=alpha,
+        beta_market=beta_market,
+        beta_theta=beta_theta,
+        a=a,
+        b=b,
+        r2=r2,
+        resid_scale=mad_scale(resid),
+        beta_se=(float(se[0]), float(se[1]), float(se[2])),
+        durbin_watson=durbin_watson(resid),
+        cond_number=condition_number(X),
+        huber_converged=res.converged,
+        r2_collapsed=(r2 is not None and r2 < R2_COLLAPSE_FLOOR),
+        n_obs=n,
+        cold_start=n < COLD_START_FLOOR,
+    )
+
+
+def decompose_ortho(
+    fit: TwoStageFit, r_market: float, r_basket: float, r_x: float
+) -> Decomposition:
+    """Additive decomposition using stored stage-A (a, b) to reconstruct rho for
+    this day. resid is the closing term so the parts sum to total exactly."""
+    rho = r_basket - (fit.a + fit.b * r_market)
+    total = r_x * BPS
+    market = fit.beta_market * r_market * BPS
+    theme = fit.beta_theta * rho * BPS
     resid = total - market - theme
     return Decomposition(market_bps=market, theme_bps=theme, resid_bps=resid, total_bps=total)
 

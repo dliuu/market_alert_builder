@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import random
 
+import numpy as np
 import pytest
 
 from worker.attribution import (
     COLD_START_FLOOR,
     apply_cold_start,
     decompose,
+    decompose_ortho,
     fit_ols,
+    fit_two_stage,
+    orthogonalize,
 )
 
 
@@ -55,3 +59,51 @@ def test_cold_start_shrinks_toward_theme_median_and_flags() -> None:
     shrunk = apply_cold_start(fit, theme_median_beta=0.4)
     w = (COLD_START_FLOOR - 1) / 120
     assert shrunk.beta_theme == pytest.approx(w * fit.beta_theme + (1 - w) * 0.4)
+
+
+def test_orthogonalize_decorrelates_the_basket_from_the_market() -> None:
+    # Stage A is robust (Huber IRLS), so rho is orthogonal to the market under the
+    # WEIGHTED inner product; unweighted correlation is small-but-nonzero, not
+    # machine-zero. What matters: the ~0.85 raw basket/market correlation collapses.
+    rng = np.random.default_rng(10)
+    r_market = rng.normal(scale=0.01, size=200)
+    r_basket = 0.9 * r_market + rng.normal(scale=0.003, size=200)  # ~0.85 corr, as M11
+    w = np.ones(200)
+    a, b, rho = orthogonalize(r_basket, r_market, w)
+    raw = abs(np.corrcoef(r_basket, r_market)[0, 1])
+    resid = abs(np.corrcoef(rho, r_market)[0, 1])
+    assert raw > 0.8                # raw basket tracks the market
+    assert resid < 0.05             # rho is numerically decorrelated
+    assert resid < raw / 10         # ...by more than an order of magnitude
+
+
+def test_two_stage_additivity_holds_exactly() -> None:
+    r_x, r_m, r_t = _series(160, seed=11)
+    fit = fit_two_stage(r_x, r_m, r_t)
+    for m, t, x in zip(r_m, r_t, r_x, strict=True):
+        d = decompose_ortho(fit, m, t, x)
+        assert d.market_bps + d.theme_bps + d.resid_bps == pytest.approx(d.total_bps, abs=1e-9)
+
+
+def test_two_stage_lowers_condition_number_versus_joint_ols() -> None:
+    # The same near-collinear market/theme that destabilizes the M11 joint fit.
+    rng = np.random.default_rng(12)
+    r_m = list(rng.normal(scale=0.01, size=160))
+    noise_t = rng.normal(scale=0.002, size=160)
+    noise_x = rng.normal(scale=0.004, size=160)
+    r_t = [m + n for m, n in zip(r_m, noise_t, strict=True)]      # ~market, near-collinear
+    r_x = [0.3 * m + 0.5 * t + n
+           for m, t, n in zip(r_m, r_t, noise_x, strict=True)]
+    joint = np.linalg.cond(np.column_stack([np.ones(160), r_m, r_t]))
+    fit = fit_two_stage(r_x, r_m, r_t)
+    assert fit.cond_number < joint
+
+
+def test_decompose_ortho_reconstructs_rho_from_stored_ab() -> None:
+    r_x, r_m, r_t = _series(160, seed=13)
+    fit = fit_two_stage(r_x, r_m, r_t)
+    # theme_bps must equal beta_theta * (r_basket - (a + b*r_market)) * 10_000.
+    m, t, x = r_m[0], r_t[0], r_x[0]
+    rho = t - (fit.a + fit.b * m)
+    d = decompose_ortho(fit, m, t, x)
+    assert d.theme_bps == pytest.approx(fit.beta_theta * rho * 10_000, abs=1e-9)
