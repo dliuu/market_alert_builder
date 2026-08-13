@@ -5,8 +5,10 @@ No network, clock, or DB in the pure section."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -171,12 +173,24 @@ def upsert_basket_return(
     br: BasketReturn, *, synthetic: bool, revised: bool,
     weights: dict[str, float] | None = None,
 ) -> None:
-    import json
     conn.execute(_UPSERT_BASKET, {
         "theme_id": theme_id, "trade_date": trade_date, "model_version": model_version,
         "ret": br.ret, "n_members": br.n_members, "synthetic": synthetic, "revised": revised,
         "weights": json.dumps(weights) if weights is not None else None,
     })
+
+
+def upsert_basket_returns_many(conn: Connection, rows: list[dict[str, Any]]) -> None:
+    """Batch upsert of full basket returns (one round-trip). Each row carries
+    theme_id, trade_date, model_version, ret, n_members, synthetic, revised, and
+    weights (dict|None); weights is JSON-encoded here."""
+    if not rows:
+        return
+    params = [
+        {**r, "weights": json.dumps(r["weights"]) if r["weights"] is not None else None}
+        for r in rows
+    ]
+    conn.execute(_UPSERT_BASKET, params)
 
 
 _UPSERT_BASKET_LOO = text("""
@@ -197,3 +211,11 @@ def upsert_basket_loo_return(
         "trade_date": trade_date, "model_version": model_version,
         "ret": br.ret, "n_members": br.n_members,
     })
+
+
+def upsert_basket_loo_returns_many(conn: Connection, rows: list[dict[str, Any]]) -> None:
+    """Batch upsert of leave-one-out basket returns (one round-trip). Each row
+    carries theme_id, excluded_symbol, trade_date, model_version, ret, n_members."""
+    if not rows:
+        return
+    conn.execute(_UPSERT_BASKET_LOO, rows)

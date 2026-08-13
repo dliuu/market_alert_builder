@@ -16,6 +16,7 @@ import statistics
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import numpy as np
 from sqlalchemy import text
@@ -29,8 +30,8 @@ from worker.baskets import (
     primary_theme_of,
     read_theme_members,
     screen_and_cap,
-    upsert_basket_loo_return,
-    upsert_basket_return,
+    upsert_basket_loo_returns_many,
+    upsert_basket_returns_many,
     weighted_return,
 )
 from worker.compute import _STORE_SCALE
@@ -409,6 +410,10 @@ def refit(
         t for s in scored if (t := primary_theme_of(by_theme, s, fit_date)) is not None
     }
 
+    basket_rows: list[dict[str, Any]] = []
+    loo_rows: list[dict[str, Any]] = []
+    fit_rows: list[dict[str, Any]] = []
+
     # Full capped/screened basket per theme per day; persisted with its weights.
     basket_full: dict[str, dict[date, tuple[float, int]]] = {}
     for tid in needed_themes:
@@ -424,10 +429,11 @@ def refit(
                 continue
             br = weighted_return(rets, weights)
             day_map[day] = (br.ret, br.n_members)
-            upsert_basket_return(
-                conn, tid, day, model_version, br,
-                synthetic=False, revised=False, weights=weights,
-            )
+            basket_rows.append({
+                "theme_id": tid, "trade_date": day, "model_version": model_version,
+                "ret": br.ret, "n_members": br.n_members,
+                "synthetic": False, "revised": False, "weights": weights,
+            })
         basket_full[tid] = day_map
 
     pending: list[tuple[str, str, TwoStageFit, date, date]] = []
@@ -468,7 +474,10 @@ def refit(
             r_x.append(r_sym[day])
             r_m.append(market[day])
             r_t.append(loo.ret)
-            upsert_basket_loo_return(conn, theme_id, symbol, day, model_version, loo)
+            loo_rows.append({
+                "theme_id": theme_id, "excluded_symbol": symbol, "trade_date": day,
+                "model_version": model_version, "ret": loo.ret, "n_members": loo.n_members,
+            })
 
         fit = fit_two_stage(r_x, r_m, r_t)
         pending.append((symbol, theme_id, fit, common[0], common[-1]))
@@ -491,7 +500,7 @@ def refit(
             "huber_converged": fit.huber_converged,
             "r2_collapsed": fit.r2_collapsed,
         }
-        conn.execute(_UPSERT_FIT, {
+        fit_rows.append({
             "symbol": symbol, "mv": model_version, "fit_date": fit_date,
             "window_start": w_start, "window_end": w_end,
             "beta_market": _q(fit.beta_market), "beta_theme": _q(beta_theta),
@@ -500,6 +509,11 @@ def refit(
             "diagnostics": json.dumps(diagnostics),
         })
         written += 1
+
+    upsert_basket_returns_many(conn, basket_rows)
+    upsert_basket_loo_returns_many(conn, loo_rows)
+    if fit_rows:
+        conn.execute(_UPSERT_FIT, fit_rows)
 
     return RefitResult(fits_written=written, symbols=[p[0] for p in pending], skipped=skipped)
 

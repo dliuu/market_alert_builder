@@ -126,7 +126,7 @@ def _seed_theme(conn: Connection, key: str, symbols: list[str]) -> str:
             "INSERT INTO theme_members (theme_id, symbol, effective_from) "
             "VALUES (:t, :s, :d)"
         ), {"t": tid, "s": s, "d": date(2019, 1, 1)})
-    return tid
+    return str(tid)
 
 
 def _hold(conn: Connection, symbol: str) -> None:
