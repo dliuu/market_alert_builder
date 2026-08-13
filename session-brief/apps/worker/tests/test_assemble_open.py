@@ -21,7 +21,7 @@ from worker.assemble_open import (
 )
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate
-from worker.premarket import TapeQuote
+from worker.premarket import PremarketQuote, TapeQuote
 
 _SESSION = date(2026, 8, 13)  # a Thursday
 _PRIOR = date(2026, 8, 12)
@@ -270,3 +270,70 @@ def test_an_empty_tape_still_says_so() -> None:
     section = _section(_assemble(tape=[]), "overnight_tape")
     assert section.tier.value == "suppressed"
     assert section.note is not None
+
+
+# --- §3 pre-market names, §5's premarket column, §1 salience (M15) ---------
+
+
+def _pm(
+    symbol: str, last: str, prev: str, v: int = 100_000, typical: str = "50000"
+) -> PremarketQuote:
+    return PremarketQuote(symbol, Decimal(last), v, Decimal(prev), Decimal(typical))
+
+
+def test_premarket_lists_only_names_over_the_threshold() -> None:
+    obj = _assemble(premarket=[
+        _pm("SNDK", "49.26", "47.32"),   # +4.1%
+        _pm("RKLB", "24.98", "25.00"),   # -0.1%
+    ])
+    section = _section(obj, "premarket")
+    assert [r.symbol for r in section.rows] == ["SNDK"]
+
+
+def test_a_row_carries_dollars_and_a_volume_multiple() -> None:
+    row = _section(_assemble(premarket=[_pm("SNDK", "49.26", "47.32", v=150_000)]),
+                   "premarket").rows[0]
+    assert row.gap_cents == 194
+    assert row.premarket_vol_mult == 3.0
+    assert row.rvol is None  # never the 30-day RVOL (D3, docs/05)
+    assert row.why is None   # narration fills it, stage ⑤
+
+
+def test_names_under_the_threshold_roll_up() -> None:
+    """The suppression principle (M5): the brief names what it skipped rather
+    than pretending the book is two stocks."""
+    obj = _assemble(premarket=[
+        _pm("SNDK", "49.26", "47.32"),
+        _pm("RKLB", "24.98", "25.00"),
+        _pm("MU", "100.10", "100.00"),
+    ])
+    assert set(obj.suppressed) == {"RKLB", "MU"}
+    assert _section(obj, "premarket").note is not None
+
+
+def test_a_quiet_premarket_is_a_roll_up_line_not_an_empty_table() -> None:
+    obj = _assemble(premarket=[_pm("RKLB", "24.98", "25.00")])
+    section = _section(obj, "premarket")
+    assert section.rows == []
+    assert section.tier.value == "suppressed"
+    assert "RKLB" in (section.note or "")
+
+
+def test_the_biggest_gap_leads() -> None:
+    """§1 salience: `one_thing` leads on the largest pre-market gap, so the row
+    order is the salience order the narration prompt reads."""
+    obj = _assemble(premarket=[
+        _pm("AAOI", "18.30", "18.06"),   # +1.3%
+        _pm("ASTS", "34.20", "36.08"),   # -5.2%
+        _pm("SNDK", "49.26", "47.32"),   # +4.1%
+    ])
+    assert [r.symbol for r in _section(obj, "premarket").rows] == ["ASTS", "SNDK", "AAOI"]
+
+
+def test_sector_setup_carries_the_premarket_column() -> None:
+    sector = SectorSetup(
+        sector_id="s1", name="Semis", benchmark_symbol="SMH",
+        ret_5d=Decimal("0.02"), vs_spy_5d=Decimal("0.01"), premarket=Decimal("0.004"),
+    )
+    row = _section(_assemble(sectors=[sector]), "sector_setup").rows[0]
+    assert row.premarket == 0.004

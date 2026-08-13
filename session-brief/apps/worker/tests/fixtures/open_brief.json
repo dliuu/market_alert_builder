@@ -18,7 +18,7 @@
     {
       "id": "premarket",
       "tier": "suppressed",
-      "note": "Pre-market moves land with the delayed-quote feed.",
+      "note": "No pre-market quotes captured for this session.",
       "rows": []
     },
     {

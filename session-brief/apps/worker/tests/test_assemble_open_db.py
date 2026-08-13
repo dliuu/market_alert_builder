@@ -173,11 +173,45 @@ def test_book_symbols_includes_sector_benchmarks(db_conn: Connection) -> None:
     assert "SPY" in symbols  # the market benchmark is always included
 
 
+def _seed_premarket(
+    conn: Connection, symbol: str, prev_close: Decimal, extended_last: Decimal
+) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO quotes (symbol, session_date, captured_at, prev_close, "
+            "extended_last, extended_v) "
+            "VALUES (:s, :d, :c, :p, :e, 100000)"
+        ),
+        {"s": symbol, "d": _SESSION, "c": _GENERATED_AT, "p": prev_close, "e": extended_last},
+    )
+
+
+def test_premarket_names_a_gap_in_dollars_and_suppresses_a_flat_one(
+    db_conn: Connection,
+) -> None:
+    """DoD 1: a name that clears the threshold gets a §3 row with a dollar gap;
+    a flat one rolls into suppressed[] instead."""
+    _seed_book(db_conn)
+    _seed_premarket(db_conn, "ZHELD", Decimal("50.00"), Decimal("52.00"))  # +4%
+    _seed_premarket(db_conn, "ZWATCH", Decimal("100.00"), Decimal("100.05"))  # +0.05%
+
+    obj = assemble_open_and_store(
+        db_conn, _USER, _SESSION, prior_session=_PRIOR, generated_at=_GENERATED_AT
+    )
+
+    section = next(s for s in obj.sections if s.id.value == "premarket")
+    assert [r.symbol for r in section.rows] == ["ZHELD"]
+    assert section.rows[0].gap_cents == 200
+    assert "ZWATCH" in obj.suppressed
+
+
 def test_calendar_tags_come_from_holding_status(db_conn: Connection) -> None:
     _seed_book(db_conn)
     seed_events(db_conn, session_date=_SESSION, symbols=["ZHELD", "ZWATCH"])
 
-    events, _sectors, holdings = read_open_inputs(db_conn, _USER, _SESSION, _PRIOR)
+    events, _sectors, holdings, _tape, _premarket = read_open_inputs(
+        db_conn, _USER, _SESSION, _PRIOR
+    )
 
     assert holdings == {"ZHELD": "owned", "ZWATCH": "watching"}
     assert any(e.symbol is None for e in events)  # macro rows survive the read
