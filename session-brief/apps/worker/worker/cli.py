@@ -93,6 +93,12 @@ def main() -> None:
     )
     a_maintenance.add_argument("--date", required=True, help="session date YYYY-MM-DD")
 
+    a_concordance = attr_sub.add_parser(
+        "concordance", help="reportable check: residual salience vs event dates (M13 Task 8)"
+    )
+    a_concordance.add_argument("--start", required=True, help="range start YYYY-MM-DD")
+    a_concordance.add_argument("--end", required=True, help="range end YYYY-MM-DD")
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -129,20 +135,40 @@ def main() -> None:
 
     if args.command == "attribution":
         _attribution(args.attr_command, date_arg=getattr(args, "date", None),
-                     pm=getattr(args, "pm", False))
+                     pm=getattr(args, "pm", False),
+                     start_arg=getattr(args, "start", None), end_arg=getattr(args, "end", None))
         return
 
     if args.command in (None, "hello"):
         print("worker: ok")
 
 
-def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) -> None:
+def _attribution(
+    attr_command: str | None, *, date_arg: str | None, pm: bool,
+    start_arg: str | None = None, end_arg: str | None = None,
+) -> None:
     from datetime import UTC, datetime
 
     from worker.constants import ATTRIBUTION_MODEL_VERSION
 
     engine = get_engine()
     now = datetime.now(UTC)
+
+    if attr_command == "concordance":
+        from worker.concordance import report_concordance
+
+        if start_arg is None or end_arg is None:
+            raise SystemExit("--start and --end are required")
+        start = date.fromisoformat(start_arg)
+        end = date.fromisoformat(end_arg)
+        with engine.connect() as conn:
+            report = report_concordance(conn, start, end, model_version=ATTRIBUTION_MODEL_VERSION)
+        print(
+            f"concordance {start}..{end}: observed {report.observed_rate:.3f} vs "
+            f"baseline {report.baseline_rate:.3f} (lift {report.lift:.2f}x), "
+            f"n_high={report.n_high} n_events={report.n_events}"
+        )
+        return
 
     if attr_command == "themes-seed":
         from worker.themes_seed import seed_themes
@@ -206,7 +232,7 @@ def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) ->
 
     raise SystemExit(
         "unknown attribution subcommand; try themes-seed|refit|score|reconcile|signals|"
-        "maintenance"
+        "maintenance|concordance"
     )
 
 
