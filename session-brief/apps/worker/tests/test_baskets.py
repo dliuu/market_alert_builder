@@ -60,6 +60,14 @@ def test_cap_stops_one_name_from_becoming_the_basket() -> None:
     assert sum(w.values()) == pytest.approx(1.0)  # excess redistributed
 
 
+def test_screen_and_cap_falls_back_to_equal_weight_when_cap_infeasible() -> None:
+    # Too few survivors to honor a 0.25 cap (n*cap < 1): equal weight, sums to 1.
+    liq = {"A": 90e6, "B": 10e6}
+    w = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=0.25)
+    assert w == pytest.approx({"A": 0.5, "B": 0.5})
+    assert sum(w.values()) == pytest.approx(1.0)
+
+
 def test_weighted_return_is_the_weighted_mean() -> None:
     br = weighted_return({"A": 0.02, "B": -0.01}, {"A": 0.75, "B": 0.25})
     assert br.ret == pytest.approx(0.75 * 0.02 + 0.25 * -0.01)

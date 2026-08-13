@@ -66,10 +66,16 @@ def screen_and_cap(
     redistributes to the uncapped survivors (proportional to their base weight),
     iterated to a fixed point. Equal weighting would make the cap vestigial — the
     cap is what stops one mega-cap from becoming the basket, and what breaks the
-    analytic leave-one-out."""
+    analytic leave-one-out. If the cap is infeasible for the survivor count
+    (`n * cap < 1`, e.g. fewer than 4 names at a 0.25 cap), the cap cannot hold
+    while summing to 1, so we fall back to equal weight — the least-concentrated
+    valid distribution."""
     survivors = sorted(s for s, dv in liquidity.items() if dv >= min_dollar_volume)
     if not survivors:
         return {}
+    n = len(survivors)
+    if cap < 1.0 and n * cap < 1.0:
+        return {s: 1.0 / n for s in survivors}
     dv_total = sum(liquidity[s] for s in survivors)
     base = {s: liquidity[s] / dv_total for s in survivors}
     if cap >= 1.0:
