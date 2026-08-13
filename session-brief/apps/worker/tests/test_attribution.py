@@ -107,3 +107,61 @@ def test_decompose_ortho_reconstructs_rho_from_stored_ab() -> None:
     rho = t - (fit.a + fit.b * m)
     d = decompose_ortho(fit, m, t, x)
     assert d.theme_bps == pytest.approx(fit.beta_theta * rho * 10_000, abs=1e-9)
+
+
+from datetime import UTC, date, datetime
+
+from sqlalchemy import text as _text
+from sqlalchemy.engine import Connection
+
+from tests.helpers_attribution import seed_bars_for
+
+
+def _seed_theme(conn: Connection, key: str, symbols: list[str]) -> str:
+    tid = conn.execute(_text(
+        "INSERT INTO themes (key, name) VALUES (:k, :k) RETURNING id::text"
+    ), {"k": key}).scalar_one()
+    for s in symbols:
+        conn.execute(_text(
+            "INSERT INTO theme_members (theme_id, symbol, effective_from) "
+            "VALUES (:t, :s, :d)"
+        ), {"t": tid, "s": s, "d": date(2019, 1, 1)})
+    return tid
+
+
+def _hold(conn: Connection, symbol: str) -> None:
+    from worker.constants import DEV_USER_ID
+    sector_id = conn.execute(_text(
+        "INSERT INTO sectors (user_id, name) VALUES (:u, :n) RETURNING id"
+    ), {"u": DEV_USER_ID, "n": symbol}).scalar_one()
+    hid = conn.execute(_text(
+        "INSERT INTO holdings (user_id, sector_id, symbol) VALUES (:u, :sec, :s) RETURNING id"
+    ), {"u": DEV_USER_ID, "sec": sector_id, "s": symbol}).scalar_one()
+    conn.execute(_text(
+        "INSERT INTO lots (user_id, holding_id, shares, cost_basis_cents, opened_on) "
+        "VALUES (:u, :h, 100, 100000, :d)"
+    ), {"u": DEV_USER_ID, "h": hid, "d": date(2019, 1, 1)})
+
+
+def test_refit_writes_diagnostics_and_loo_and_beats_joint_condition(db_conn: Connection) -> None:
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_semis_test", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    from worker.attribution import refit
+    res = refit(db_conn, date(2020, 6, 30), now_utc=datetime(2020, 6, 30, tzinfo=UTC),
+                model_version=2)
+    assert "AAA" in res.symbols
+
+    diag = db_conn.execute(_text(
+        "SELECT diagnostics FROM attribution_fits "
+        "WHERE symbol='AAA' AND model_version=2 AND fit_date='2020-06-30'"
+    )).scalar_one()
+    assert {"a", "b", "beta_se", "cond_number", "huber_converged"} <= set(diag)
+
+    loo_n = db_conn.execute(_text(
+        "SELECT count(*) FROM basket_loo_returns "
+        "WHERE excluded_symbol='AAA' AND model_version=2"
+    )).scalar_one()
+    assert loo_n > 0

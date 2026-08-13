@@ -133,11 +133,13 @@ _READ_MEMBERS = text("""
 
 _UPSERT_BASKET = text("""
     INSERT INTO basket_returns
-        (theme_id, trade_date, model_version, ret, n_members, synthetic, revised)
-    VALUES (:theme_id, :trade_date, :model_version, :ret, :n_members, :synthetic, :revised)
+        (theme_id, trade_date, model_version, ret, n_members, synthetic, revised, weights)
+    VALUES (:theme_id, :trade_date, :model_version, :ret, :n_members, :synthetic, :revised,
+            CAST(:weights AS jsonb))
     ON CONFLICT (theme_id, trade_date, model_version) DO UPDATE
         SET ret = EXCLUDED.ret, n_members = EXCLUDED.n_members,
-            synthetic = EXCLUDED.synthetic, revised = EXCLUDED.revised
+            synthetic = EXCLUDED.synthetic, revised = EXCLUDED.revised,
+            weights = EXCLUDED.weights
 """)
 
 
@@ -167,10 +169,13 @@ def primary_theme_of(
 def upsert_basket_return(
     conn: Connection, theme_id: str, trade_date: date, model_version: int,
     br: BasketReturn, *, synthetic: bool, revised: bool,
+    weights: dict[str, float] | None = None,
 ) -> None:
+    import json
     conn.execute(_UPSERT_BASKET, {
         "theme_id": theme_id, "trade_date": trade_date, "model_version": model_version,
         "ret": br.ret, "n_members": br.n_members, "synthetic": synthetic, "revised": revised,
+        "weights": json.dumps(weights) if weights is not None else None,
     })
 
 

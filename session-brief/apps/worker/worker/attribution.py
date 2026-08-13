@@ -10,6 +10,7 @@ market+theme+resid == total exactly (the invariant-3 analogue for attribution).
 
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from dataclasses import dataclass, field, replace
@@ -21,15 +22,22 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.baskets import (
+    BASKET_CAP,
+    MIN_DOLLAR_VOLUME,
     equal_weight_return,
     leave_one_out,
+    loo_weighted_return,
     members_on,
     primary_theme_of,
     read_theme_members,
+    screen_and_cap,
+    upsert_basket_loo_return,
     upsert_basket_return,
+    weighted_return,
 )
 from worker.compute import _STORE_SCALE
 from worker.constants import BENCHMARK_SYMBOL
+from worker.exclusions import contaminated_days
 from worker.robust import (
     beta_standard_errors,
     condition_number,
@@ -277,6 +285,12 @@ _WINDOW_RETURNS = text("""
     ORDER BY symbol, session_date
 """)
 
+_WINDOW_LIQUIDITY = text("""
+    SELECT symbol, session_date, (v * c) AS dv
+    FROM bars_daily
+    WHERE symbol = ANY(:syms) AND session_date > :start AND session_date <= :fit_date
+""")
+
 _DAY_RETURNS = text("""
     SELECT symbol, adj_c / prev_c - 1 AS ret FROM (
         SELECT symbol, session_date, adj_c,
@@ -301,12 +315,12 @@ _UPSERT_FIT = text("""
        beta_market, beta_theme, alpha, r2, resid_scale, n_obs, cold_start, diagnostics)
     VALUES (:symbol, :mv, :fit_date, :window_start, :window_end,
        :beta_market, :beta_theme, :alpha, :r2, :resid_scale, :n_obs, :cold_start,
-       '{}'::jsonb)
+       CAST(:diagnostics AS jsonb))
     ON CONFLICT (symbol, model_version, fit_date) DO UPDATE SET
        window_start=EXCLUDED.window_start, window_end=EXCLUDED.window_end,
        beta_market=EXCLUDED.beta_market, beta_theme=EXCLUDED.beta_theme,
        alpha=EXCLUDED.alpha, r2=EXCLUDED.r2, resid_scale=EXCLUDED.resid_scale,
-       n_obs=EXCLUDED.n_obs, cold_start=EXCLUDED.cold_start
+       n_obs=EXCLUDED.n_obs, cold_start=EXCLUDED.cold_start, diagnostics=EXCLUDED.diagnostics
 """)
 
 _UPSERT_ATTR = text("""
@@ -353,28 +367,46 @@ def _read_window_returns(
     return out
 
 
+def _read_window_liquidity(
+    conn: Connection, symbols: list[str], fit_date: date
+) -> dict[str, dict[date, float]]:
+    start = fit_date - timedelta(days=_LOOKBACK_DAYS)
+    out: dict[str, dict[date, float]] = {}
+    rows = conn.execute(
+        _WINDOW_LIQUIDITY, {"syms": symbols, "fit_date": fit_date, "start": start}
+    ).mappings()
+    for row in rows:
+        out.setdefault(row["symbol"], {})[row["session_date"]] = float(row["dv"])
+    return out
+
+
 def refit(
     conn: Connection, fit_date: date, *, now_utc: datetime, model_version: int
 ) -> RefitResult:
-    """Fit beta over the trailing FIT_WINDOW sessions for every scored symbol on
-    its is_primary theme's leave-one-out basket, and persist attribution_fits +
-    basket_returns for the window. Injected clock (now_utc unused today but kept
-    for the scheduler-ready signature). Symbols with no theme or too few
-    observations are skipped, not fatal."""
+    """Fit each scored symbol's two-stage orthogonalized model over its trailing
+    FIT_WINDOW *fit-eligible* sessions (contaminated days excluded), on its
+    is_primary theme's capped/liquidity-screened leave-one-out basket. Persists
+    attribution_fits (with diagnostics + MAD resid_scale), basket_returns (full
+    weighted series + weights), and basket_loo_returns. Injected clock; symbols
+    with no theme or too few observations are skipped, not fatal."""
     by_theme = read_theme_members(conn)
     member_symbols = {m.symbol for members in by_theme.values() for m in members}
     scored = _scored_universe(conn, fit_date, member_symbols)
 
     needed = sorted(set(scored) | member_symbols | {BENCHMARK_SYMBOL})
     returns = _read_window_returns(conn, needed, fit_date)
+    liquidity = _read_window_liquidity(conn, needed, fit_date)
     market = returns.get(BENCHMARK_SYMBOL, {})
 
-    # Only build baskets for themes that actually back a scored symbol.
+    start = fit_date - timedelta(days=_LOOKBACK_DAYS)
+    contaminated = contaminated_days(conn, sorted(scored), start, fit_date)
+
     needed_themes = {
         t for s in scored if (t := primary_theme_of(by_theme, s, fit_date)) is not None
     }
-    # basket[theme_id][day] = (full_ret, n_members); also persisted to basket_returns.
-    basket: dict[str, dict[date, tuple[float, int]]] = {}
+
+    # Full capped/screened basket per theme per day; persisted with its weights.
+    basket_full: dict[str, dict[date, tuple[float, int]]] = {}
     for tid in needed_themes:
         members = by_theme[tid]
         day_map: dict[date, tuple[float, int]] = {}
@@ -382,63 +414,86 @@ def refit(
         for day in days:
             live = members_on(members, day)
             rets = {s: returns[s][day] for s in live if day in returns.get(s, {})}
-            if not rets:
+            liq = {s: liquidity.get(s, {}).get(day, 0.0) for s in live}
+            weights = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP)
+            if not weights or not rets:
                 continue
-            br = equal_weight_return(rets)
+            br = weighted_return(rets, weights)
             day_map[day] = (br.ret, br.n_members)
             upsert_basket_return(
-                conn, tid, day, model_version, br, synthetic=False, revised=False
+                conn, tid, day, model_version, br,
+                synthetic=False, revised=False, weights=weights,
             )
-        basket[tid] = day_map
+        basket_full[tid] = day_map
 
-    # First pass: fit each scored symbol; collect non-cold betas per theme.
-    pending: list[tuple[str, str, Fit, date, date]] = []
+    pending: list[tuple[str, str, TwoStageFit, date, date]] = []
     skipped: list[str] = []
-    nonclod: dict[str, list[float]] = {}
+    noncold: dict[str, list[float]] = {}
     for symbol in scored:
         theme_id = primary_theme_of(by_theme, symbol, fit_date)
         if theme_id is None:
             skipped.append(symbol)
             continue
+        members = by_theme[theme_id]
         r_sym = returns.get(symbol, {})
-        theme_days = basket.get(theme_id, {})
-        common = sorted(set(r_sym) & set(market) & set(theme_days))
-        common = common[-FIT_WINDOW:]
+        bad = contaminated.get(symbol, set())
+
+        # Fit-eligible common days: symbol, market, and a basket value all present,
+        # minus the symbol's contaminated days. Then take the trailing window.
+        common = sorted(
+            d for d in (set(r_sym) & set(market) & set(basket_full.get(theme_id, {})))
+            if d not in bad
+        )[-FIT_WINDOW:]
         if len(common) < 2:
             skipped.append(symbol)
             continue
 
         r_x, r_m, r_t = [], [], []
-        members = by_theme[theme_id]
         for day in common:
-            full, n = theme_days[day]
-            is_member = symbol in members_on(members, day)
-            if is_member and n >= 2:
-                r_theme = leave_one_out(full, n, r_sym[day])
+            live = members_on(members, day)
+            rets = {s: returns[s][day] for s in live if day in returns.get(s, {})}
+            liq = {s: liquidity.get(s, {}).get(day, 0.0) for s in live}
+            if symbol in rets:
+                loo = loo_weighted_return(
+                    rets, liq, min_dollar_volume=MIN_DOLLAR_VOLUME,
+                    cap=BASKET_CAP, excluded=symbol,
+                )
             else:
-                r_theme = full
+                weights = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP)
+                loo = weighted_return(rets, weights)
             r_x.append(r_sym[day])
             r_m.append(market[day])
-            r_t.append(r_theme)
+            r_t.append(loo.ret)
+            upsert_basket_loo_return(conn, theme_id, symbol, day, model_version, loo)
 
-        fit = fit_ols(r_x, r_m, r_t)
+        fit = fit_two_stage(r_x, r_m, r_t)
         pending.append((symbol, theme_id, fit, common[0], common[-1]))
         if not fit.cold_start:
-            nonclod.setdefault(theme_id, []).append(fit.beta_theme)
+            noncold.setdefault(theme_id, []).append(fit.beta_theta)
 
-    # Second pass: shrink cold-start fits toward the theme median, then persist.
     written = 0
     for symbol, theme_id, fit, w_start, w_end in pending:
+        beta_theta = fit.beta_theta
         if fit.cold_start:
-            medians = nonclod.get(theme_id, [])
+            medians = noncold.get(theme_id, [])
             median_beta = statistics.median(medians) if medians else 0.0
-            fit = apply_cold_start(fit, median_beta)
+            w = min(1.0, fit.n_obs / FIT_WINDOW)
+            beta_theta = w * fit.beta_theta + (1.0 - w) * median_beta
+        diagnostics = {
+            "a": fit.a, "b": fit.b,
+            "beta_se": list(fit.beta_se),
+            "resid_autocorr": fit.durbin_watson,
+            "cond_number": fit.cond_number,
+            "huber_converged": fit.huber_converged,
+            "r2_collapsed": fit.r2_collapsed,
+        }
         conn.execute(_UPSERT_FIT, {
             "symbol": symbol, "mv": model_version, "fit_date": fit_date,
             "window_start": w_start, "window_end": w_end,
-            "beta_market": _q(fit.beta_market), "beta_theme": _q(fit.beta_theme),
+            "beta_market": _q(fit.beta_market), "beta_theme": _q(beta_theta),
             "alpha": _q(fit.alpha), "r2": _q(fit.r2), "resid_scale": _q(fit.resid_scale),
             "n_obs": fit.n_obs, "cold_start": fit.cold_start,
+            "diagnostics": json.dumps(diagnostics),
         })
         written += 1
 
