@@ -21,6 +21,7 @@ import json
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
+from typing import cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -28,6 +29,7 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
+from worker.attribution import material_residual, read_attribution_decomp
 from worker.claims import (
     Claim,
     ResolvedClaim,
@@ -36,14 +38,16 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
+from worker.constants import ATTRIBUTION_MODEL_VERSION
 from worker.flags import candidate_dict, record_flags, surface_flags
 from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
 
 # Object shape version. Bump on any shape change and keep old renderers
 # (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
-# section, populated `suppressed[]`).
-SCHEMA_VERSION = 2
+# section, populated `suppressed[]`). v3 = M13 (attribution decomposition +
+# |resid_z| salience).
+SCHEMA_VERSION = 3
 
 _BPS_PER_UNIT = 10_000
 
@@ -70,6 +74,7 @@ def assemble(
     flags: list[dict[str, object]] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
+    decomp: dict[str, dict[str, object]] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -77,7 +82,9 @@ def assemble(
     carries RVOL / range position per symbol. ``claims`` are emitted this
     session, ``resolved`` are prior ones graded now (M6). ``generated_at`` is
     injected (never ``datetime.now()``) so the object is deterministic and
-    snapshot-testable.
+    snapshot-testable. ``decomp`` is the per-symbol attribution decomposition
+    (M13), read from the DB by ``assemble_and_store`` — ``assemble`` itself is
+    pure and never queries it.
     """
     if kind not in ("open", "close"):
         raise ValueError(f"unknown brief kind {kind!r}")
@@ -91,7 +98,8 @@ def assemble(
             "(no prior-close value). Graceful degradation lands in M5."
         )
 
-    shown, suppressed = _tier_positions(result, tape)
+    decomp = decomp or {}
+    shown, suppressed = _tier_positions(result, tape, decomp)
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -103,7 +111,7 @@ def assemble(
         "subject": _subject(kind, session_date, book),
         "one_thing": None,  # narration, M8
         "book": _book(book),
-        "sections": [_attribution(shown, closes), _tape_quality(shown, tape)],
+        "sections": [_attribution(shown, closes, decomp), _tape_quality(shown, tape)],
         "flags": list(flags or []),
         "claims": [_claim_dict(c, user_id, session_date, kind) for c in claims or []],
         "resolved_claims": [_resolved_dict(r) for r in resolved or []],
@@ -115,16 +123,18 @@ def assemble(
 
 
 def _tier_positions(
-    result: ComputeResult, tape: dict[str, TapeMetrics]
+    result: ComputeResult, tape: dict[str, TapeMetrics], decomp: dict[str, dict[str, object]]
 ) -> tuple[list[tuple[PositionMetrics, str]], list[str]]:
     """Tier every held name. Suppressed names leave the rows and become one
     roll-up line; the survivors keep their tier for narration (M8), tape, and
-    claim emission (M6)."""
+    claim emission (M6). A residual-material name (M13) is always full-tier,
+    even on a flat raw move."""
     shown: list[tuple[PositionMetrics, str]] = []
     suppressed: list[str] = []
     for p in result.positions:
         rvol = tape[p.symbol].rvol if p.symbol in tape else None
-        tier = _tier(p.day_return, rvol)
+        resid_z = cast("float | None", decomp.get(p.symbol, {}).get("resid_z"))
+        tier = _tier(p.day_return, rvol, resid_z)
         if tier == "suppressed":
             suppressed.append(p.symbol)
         else:
@@ -155,8 +165,12 @@ def _resolved_dict(resolved: ResolvedClaim) -> dict[str, object]:
     }
 
 
-def _tier(day_return: Fraction | None, rvol: Fraction | None) -> str:
-    """Classify a name into full / brief / suppressed (docs/05)."""
+def _tier(day_return: Fraction | None, rvol: Fraction | None, resid_z: float | None = None) -> str:
+    """Classify a name into full / brief / suppressed (docs/05). A residual-
+    material move (M13 §2) is always full, even on a flat raw move or no RVOL
+    spike."""
+    if material_residual(resid_z):
+        return "full"
     moved = abs(day_return) if day_return is not None else Fraction(0)
     if moved > _FULL_MOVE or (rvol is not None and rvol > _RVOL_SPIKE):
         return "full"
@@ -195,7 +209,9 @@ def _book(book: BookMetrics) -> dict[str, int | float]:
 
 
 def _attribution(
-    shown: list[tuple[PositionMetrics, str]], closes: dict[str, Decimal]
+    shown: list[tuple[PositionMetrics, str]],
+    closes: dict[str, Decimal],
+    decomp: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     rows = [
         {
@@ -207,10 +223,23 @@ def _attribution(
             "contribution_bps": _round_bps(p.contribution_bps),
             "total_pnl_cents": p.total_pnl_cents,
             "total_pct": _row_total_pct(p),
+            "market_bps": decomp.get(p.symbol, {}).get("market_bps"),
+            "theme_bps": decomp.get(p.symbol, {}).get("theme_bps"),
+            "resid_bps": decomp.get(p.symbol, {}).get("resid_bps"),
+            "resid_z": decomp.get(p.symbol, {}).get("resid_z"),
+            "provisional": decomp.get(p.symbol, {}).get("provisional"),
         }
         for p, tier in shown
     ]
+    rows.sort(key=_resid_z_sort_key, reverse=True)
     return {"id": "attribution", "tier": "full", "note": None, "rows": rows}
+
+
+def _resid_z_sort_key(row: dict[str, object]) -> tuple[bool, float]:
+    """Rank attribution rows by |resid_z| descending; a row with no resid_z
+    (no attribution decomposition available) sorts last."""
+    resid_z = cast("float | None", row.get("resid_z"))
+    return (resid_z is not None, abs(resid_z) if resid_z is not None else 0.0)
 
 
 def _tape_quality(
@@ -307,10 +336,11 @@ def assemble_and_store(
     symbols = [p.symbol for p in result.positions]
     closes = _read_closes(conn, symbols, session_date)
     tape = compute_and_store_tape(conn, user_id, symbols, session_date)
+    decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
     resolved = resolve_due_claims(conn, user_id, session_date)
-    shown, _ = _tier_positions(result, tape)
+    shown, _ = _tier_positions(result, tape, decomp)
     emitted = emit_claims(shown, result.benchmark_return)
 
     # Which flags fire, after the weekly rate limit — read-only; last_seen is
@@ -330,6 +360,7 @@ def assemble_and_store(
         claims=emitted,
         resolved=resolved,
         flags=[candidate_dict(c) for c in surfaced],
+        decomp=decomp,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above), but emits none

@@ -4,7 +4,7 @@ builds the object, and upserts it into ``briefs`` — idempotently on
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.assemble import SCHEMA_VERSION, assemble_and_store
+from worker.constants import ATTRIBUTION_MODEL_VERSION
 
 # A throwaway user, distinct from the real dev tenant.
 _TEST_USER_ID = "00000000-0000-0000-0000-0000000000fd"
@@ -73,6 +74,26 @@ def _seed_book(conn: Connection) -> None:
     _seed_lot(conn, "ZZB", "20", 4000)  # cost $40
 
 
+def _seed_attribution(
+    conn: Connection, symbol: str, *, resid_bps: str, resid_z: str, provisional: bool = False
+) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO attribution "
+            "(symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, "
+            " resid_z, beta_market, beta_theme, r2, n_obs, provisional, cold_start, synthetic, "
+            " revised, computed_at) "
+            "VALUES (:sym, :d, :mv, 0, 0, :resid_bps, :resid_bps, :resid_z, 1, 0, 0.5, 60, "
+            " :provisional, false, false, false, :now)"
+        ),
+        {
+            "sym": symbol, "d": _SESSION, "mv": ATTRIBUTION_MODEL_VERSION,
+            "resid_bps": Decimal(resid_bps), "resid_z": Decimal(resid_z),
+            "provisional": provisional, "now": datetime.now(UTC),
+        },
+    )
+
+
 def _brief_rows(conn: Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         text(
@@ -101,6 +122,48 @@ def test_assemble_and_store_persists_the_object(db_conn: Connection) -> None:
     rows_by_symbol = {r["symbol"]: r for r in body["sections"][0]["rows"]}
     assert rows_by_symbol["ZZA"]["close"] == 110.0
     assert body["book"]["day_bps"] == 300
+
+
+def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:
+    # ZZC barely moves on the tape but has the largest |resid_z| (a
+    # residual-material name, M13 §2) → forced full tier and ranks first.
+    # ZZA is a big raw mover with a small residual; ZZB likewise, smaller still.
+    _seed_user(db_conn)
+    for symbol, prev_c, c in (
+        ("ZZA", "100", "110"),   # +10.0% raw move, small residual
+        ("ZZB", "50", "48"),     # -4.0% raw move, smaller residual
+        ("ZZC", "100", "100.05"),  # +0.05% raw move, large residual
+    ):
+        _seed_bar(db_conn, symbol, _PREV, prev_c)
+        _seed_bar(db_conn, symbol, _SESSION, c)
+    _seed_lot(db_conn, "ZZA", "10", 9000)
+    _seed_lot(db_conn, "ZZB", "20", 4000)
+    _seed_lot(db_conn, "ZZC", "5", 10000)
+
+    _seed_attribution(db_conn, "ZZA", resid_bps="30", resid_z="0.3")
+    _seed_attribution(db_conn, "ZZB", resid_bps="20", resid_z="-0.2")
+    _seed_attribution(db_conn, "ZZC", resid_bps="400", resid_z="4.0", provisional=True)
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None
+
+    body = _brief_rows(db_conn)[0]["body"]
+    rows = body["sections"][0]["rows"]
+    symbols_in_order = [r["symbol"] for r in rows]
+
+    # (a) the small-raw-move, large-|resid_z| name is first.
+    assert symbols_in_order[0] == "ZZC"
+    # (c) the large-raw-move, small-|resid_z| name is not first.
+    assert symbols_in_order[0] != "ZZA"
+
+    # (b) rows carry resid_bps / resid_z / provisional.
+    by_symbol = {r["symbol"]: r for r in rows}
+    assert by_symbol["ZZC"]["resid_bps"] == 400
+    assert by_symbol["ZZC"]["resid_z"] == 4.0
+    assert by_symbol["ZZC"]["provisional"] is True
+    assert by_symbol["ZZC"]["tier"] == "full"  # forced full despite the flat move
+    assert by_symbol["ZZA"]["resid_bps"] == 30
+    assert by_symbol["ZZA"]["resid_z"] == 0.3
 
 
 def test_reassembly_upserts_not_duplicates(db_conn: Connection) -> None:
