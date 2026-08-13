@@ -165,3 +165,24 @@ def test_refit_writes_diagnostics_and_loo_and_beats_joint_condition(db_conn: Con
         "WHERE excluded_symbol='AAA' AND model_version=2"
     )).scalar_one()
     assert loo_n > 0
+
+
+def test_score_writes_resid_z_and_additive_rows(db_conn: Connection) -> None:
+    syms = ["SPY", "AAA", "BBB", "CCC", "DDD"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_semis_test2", ["AAA", "BBB", "CCC", "DDD"])
+    _hold(db_conn, "AAA")
+
+    from worker.attribution import refit, score
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    refit(db_conn, date(2020, 6, 30), now_utc=now, model_version=2)
+    res = score(db_conn, date(2020, 6, 30), now_utc=now, model_version=2, synthetic=False)
+    assert res.rows_written >= 1
+
+    row = db_conn.execute(_text(
+        "SELECT market_bps, theme_bps, resid_bps, total_bps, resid_z FROM attribution "
+        "WHERE symbol='AAA' AND model_version=2 AND trade_date='2020-06-30'"
+    )).mappings().one()
+    assert row["resid_z"] is not None
+    got = float(row["market_bps"]) + float(row["theme_bps"]) + float(row["resid_bps"])
+    assert got == pytest.approx(float(row["total_bps"]), abs=1e-6)

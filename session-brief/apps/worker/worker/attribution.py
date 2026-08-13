@@ -24,8 +24,6 @@ from sqlalchemy.engine import Connection
 from worker.baskets import (
     BASKET_CAP,
     MIN_DOLLAR_VOLUME,
-    equal_weight_return,
-    leave_one_out,
     loo_weighted_return,
     members_on,
     primary_theme_of,
@@ -301,9 +299,15 @@ _DAY_RETURNS = text("""
     WHERE session_date = :d AND prev_c IS NOT NULL AND prev_c <> 0
 """)
 
+_DAY_LIQUIDITY = text("""
+    SELECT symbol, (v * c) AS dv FROM bars_daily
+    WHERE symbol = ANY(:syms) AND session_date = :d
+""")
+
 _LATEST_FITS = text("""
     SELECT DISTINCT ON (symbol)
-           symbol, beta_market, beta_theme, r2, n_obs, cold_start
+           symbol, beta_market, beta_theme, alpha, r2, resid_scale, n_obs,
+           cold_start, diagnostics
     FROM attribution_fits
     WHERE model_version = :mv AND fit_date <= :d
     ORDER BY symbol, fit_date DESC
@@ -326,14 +330,14 @@ _UPSERT_FIT = text("""
 _UPSERT_ATTR = text("""
     INSERT INTO attribution
       (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps,
-       beta_market, beta_theme, r2, n_obs, provisional, cold_start, synthetic, revised,
-       computed_at)
+       resid_z, beta_market, beta_theme, r2, n_obs, provisional, cold_start,
+       synthetic, revised, computed_at)
     VALUES (:symbol, :trade_date, :mv, :market_bps, :theme_bps, :resid_bps, :total_bps,
-       :beta_market, :beta_theme, :r2, :n_obs, :provisional, :cold_start, :synthetic,
-       :revised, :computed_at)
+       :resid_z, :beta_market, :beta_theme, :r2, :n_obs, :provisional, :cold_start,
+       :synthetic, :revised, :computed_at)
     ON CONFLICT (symbol, trade_date, model_version) DO UPDATE SET
        market_bps=EXCLUDED.market_bps, theme_bps=EXCLUDED.theme_bps,
-       resid_bps=EXCLUDED.resid_bps, total_bps=EXCLUDED.total_bps,
+       resid_bps=EXCLUDED.resid_bps, total_bps=EXCLUDED.total_bps, resid_z=EXCLUDED.resid_z,
        beta_market=EXCLUDED.beta_market, beta_theme=EXCLUDED.beta_theme, r2=EXCLUDED.r2,
        n_obs=EXCLUDED.n_obs, provisional=EXCLUDED.provisional, cold_start=EXCLUDED.cold_start,
        synthetic=EXCLUDED.synthetic, revised=EXCLUDED.revised, computed_at=EXCLUDED.computed_at
@@ -504,78 +508,73 @@ def score(
     conn: Connection, trade_date: date, *, now_utc: datetime, model_version: int,
     synthetic: bool,
 ) -> ScoreResult:
-    """Decompose each scored name's move on trade_date using its latest fit and
-    its is_primary theme's leave-one-out basket, and upsert attribution rows
-    (provisional = synthetic). Reads official adj_c returns; the synthetic flag
-    is metadata carried from the PM run and cleared at AM reconcile."""
+    """Decompose each scored name's move on trade_date using its latest fit's
+    stored stage-A (a, b) to reconstruct rho, and its is_primary theme's
+    capped/screened leave-one-out basket. Writes resid_z = resid_bps / resid_scale
+    (the MAD-scaled salience score M13 ranks on). Contaminated days are NOT
+    excluded here — they are scored (the residual is the point)."""
     by_theme = read_theme_members(conn)
     member_symbols = {m.symbol for members in by_theme.values() for m in members}
 
     fits = {
         row["symbol"]: row
-        for row in conn.execute(
-            _LATEST_FITS, {"mv": model_version, "d": trade_date}
-        ).mappings()
+        for row in conn.execute(_LATEST_FITS, {"mv": model_version, "d": trade_date}).mappings()
     }
     needed = sorted(set(fits) | member_symbols | {BENCHMARK_SYMBOL})
     day_returns = {
         row["symbol"]: float(row["ret"])
         for row in conn.execute(_DAY_RETURNS, {"syms": needed, "d": trade_date}).mappings()
     }
-    market_ret = day_returns.get(BENCHMARK_SYMBOL)
-
-    # Daily basket per theme that backs a fitted symbol.
-    needed_themes = {
-        t for s in fits
-        if (t := primary_theme_of(by_theme, s, trade_date)) is not None
+    day_liquidity = {
+        row["symbol"]: float(row["dv"])
+        for row in conn.execute(_DAY_LIQUIDITY, {"syms": needed, "d": trade_date}).mappings()
     }
-    basket: dict[str, tuple[float, int]] = {}
-    for tid in needed_themes:
-        members = by_theme[tid]
-        live = members_on(members, trade_date)
-        rets = {s: day_returns[s] for s in live if s in day_returns}
-        if not rets:
-            continue
-        br = equal_weight_return(rets)
-        basket[tid] = (br.ret, br.n_members)
-        upsert_basket_return(
-            conn, tid, trade_date, model_version, br,
-            synthetic=synthetic, revised=False,
-        )
+    market_ret = day_returns.get(BENCHMARK_SYMBOL)
 
     written = 0
     skipped: list[str] = []
     for symbol, frow in fits.items():
         r_x = day_returns.get(symbol)
         theme_id = primary_theme_of(by_theme, symbol, trade_date)
-        if r_x is None or market_ret is None or theme_id is None or theme_id not in basket:
+        if r_x is None or market_ret is None or theme_id is None:
             skipped.append(symbol)
             continue
-        full, n = basket[theme_id]
-        is_member = symbol in members_on(by_theme[theme_id], trade_date)
-        if is_member and n >= 2:
-            r_theme = leave_one_out(full, n, r_x)
-        elif is_member and n < 2:
-            skipped.append(symbol)
-            continue
+        members = by_theme[theme_id]
+        live = members_on(members, trade_date)
+        rets = {s: day_returns[s] for s in live if s in day_returns}
+        liq = {s: day_liquidity.get(s, 0.0) for s in live}
+        if symbol in rets:
+            loo = loo_weighted_return(
+                rets, liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP, excluded=symbol,
+            )
         else:
-            r_theme = full
+            weights = screen_and_cap(liq, min_dollar_volume=MIN_DOLLAR_VOLUME, cap=BASKET_CAP)
+            if not weights:
+                skipped.append(symbol)
+                continue
+            loo = weighted_return(rets, weights)
 
-        fit = Fit(
+        diag = frow["diagnostics"] or {}
+        fit = TwoStageFit(
+            alpha=float(frow["alpha"]) if frow["alpha"] is not None else 0.0,
             beta_market=float(frow["beta_market"]),
-            beta_theme=float(frow["beta_theme"]),
-            alpha=0.0,
+            beta_theta=float(frow["beta_theme"]),
+            a=float(diag.get("a", 0.0)), b=float(diag.get("b", 0.0)),
             r2=float(frow["r2"]) if frow["r2"] is not None else None,
-            resid_scale=None,
-            n_obs=int(frow["n_obs"]),
-            cold_start=bool(frow["cold_start"]),
+            resid_scale=float(frow["resid_scale"]) if frow["resid_scale"] is not None else None,
+            beta_se=(0.0, 0.0, 0.0), durbin_watson=0.0, cond_number=0.0,
+            huber_converged=True, r2_collapsed=False,
+            n_obs=int(frow["n_obs"]), cold_start=bool(frow["cold_start"]),
         )
-        d = decompose(fit, market_ret, r_theme, r_x)
+        d = decompose_ortho(fit, market_ret, loo.ret, r_x)
+        resid_z = None
+        if fit.resid_scale not in (None, 0.0):
+            resid_z = d.resid_bps / fit.resid_scale
         conn.execute(_UPSERT_ATTR, {
             "symbol": symbol, "trade_date": trade_date, "mv": model_version,
             "market_bps": _q(d.market_bps), "theme_bps": _q(d.theme_bps),
-            "resid_bps": _q(d.resid_bps), "total_bps": _q(d.total_bps),
-            "beta_market": _q(fit.beta_market), "beta_theme": _q(fit.beta_theme),
+            "resid_bps": _q(d.resid_bps), "total_bps": _q(d.total_bps), "resid_z": _q(resid_z),
+            "beta_market": _q(fit.beta_market), "beta_theme": _q(fit.beta_theta),
             "r2": _q(fit.r2), "n_obs": fit.n_obs,
             "provisional": synthetic, "cold_start": fit.cold_start,
             "synthetic": synthetic, "revised": False, "computed_at": now_utc,
