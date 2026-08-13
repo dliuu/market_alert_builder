@@ -86,6 +86,24 @@ class Row(BaseModel):
     why: str | None = Field(
         None, description='LLM-written. Prose only — must contain no figures.'
     )
+    market_bps: int | None = Field(
+        None,
+        description='Attribution: market factor contribution to the day move, bps (M13).',
+    )
+    theme_bps: int | None = Field(
+        None, description='Attribution: theme factor contribution, bps (M13).'
+    )
+    resid_bps: int | None = Field(
+        None,
+        description='Attribution: idiosyncratic residual = total - market - theme, bps (M13).',
+    )
+    resid_z: float | None = Field(
+        None, description='Attribution: MAD-scaled residual z-score; salience (M13).'
+    )
+    provisional: bool | None = Field(
+        None,
+        description='Attribution row is a provisional PM score, not yet reconciled (M13).',
+    )
 
 
 class Type(Enum):

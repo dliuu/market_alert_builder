@@ -159,3 +159,18 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
 
 def test_schema_version_is_two() -> None:
     assert _mixed().schema_version == SCHEMA_VERSION == 2
+
+
+def test_row_accepts_decomposition_fields() -> None:
+    from contracts.brief import Row
+    r = Row.model_validate({
+        "symbol": "SNDK", "tier": "full", "market_bps": 12, "theme_bps": -4,
+        "resid_bps": 88, "resid_z": 3.1, "provisional": True,
+    })
+    assert r.resid_bps == 88 and r.resid_z == 3.1 and r.provisional is True
+
+
+def test_row_without_decomposition_still_valid() -> None:
+    from contracts.brief import Row
+    r = Row.model_validate({"symbol": "MU", "tier": "brief"})  # v2-era row
+    assert r.symbol == "MU"

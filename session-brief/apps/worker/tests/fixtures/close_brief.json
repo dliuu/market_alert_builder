@@ -33,7 +33,12 @@
           "rvol": null,
           "range_position": null,
           "rel_strength": null,
-          "why": null
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null
         },
         {
           "symbol": "B",
@@ -47,7 +52,12 @@
           "rvol": null,
           "range_position": null,
           "rel_strength": null,
-          "why": null
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null
         }
       ]
     },
@@ -68,7 +78,12 @@
           "rvol": 2.0,
           "range_position": 0.8,
           "rel_strength": null,
-          "why": null
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null
         }
       ]
     }
