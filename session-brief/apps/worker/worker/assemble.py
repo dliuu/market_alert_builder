@@ -37,7 +37,6 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
-from worker.flags import candidate_dict, record_flags, surface_flags
 from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
 
@@ -279,18 +278,13 @@ def assemble_and_store(
     shown, _ = _tier_positions(result, tape)
     emitted = emit_claims(shown, result.benchmark_return)
 
-    # Which flags fire, after the weekly rate limit — read-only; last_seen is
-    # written below only once the brief is confirmed to send (a real mention).
-    surfaced = surface_flags(
-        conn,
-        user_id,
-        session_date,
-        symbols=[p.symbol for p in result.positions],
-        name_weights={p.symbol: p.weight for p in result.positions if p.weight is not None},
-    )
-
     from datetime import UTC
 
+    # No flags here since M14. §6 exposure check is the *open* brief's section
+    # (docs/05), and `flags.last_seen` is a single weekly clock — if both briefs
+    # surfaced flags, the 08:15 fire would spend the budget and the 16:45 one
+    # would silently render nothing. D18 only put them here because the open
+    # brief didn't exist yet. `flags[]` stays in the shape, empty.
     obj = assemble(
         result,
         closes,
@@ -301,18 +295,15 @@ def assemble_and_store(
         generated_at=datetime.now(UTC),
         claims=emitted,
         resolved=resolved,
-        flags=[candidate_dict(c) for c in surfaced],
     )
     if close_brief_should_skip(obj):
-        # A quiet session still resolved its due claims (above), but emits none
-        # and spends no rate-limit budget (flags aren't recorded).
+        # A quiet session still resolved its due claims (above) but emits none.
         return None
     # Stage ⑤: prose is added only to briefs that actually send, and never at
     # the cost of the send — a failed Claude call returns the object unchanged.
     obj = narrate_and_apply(obj, narrator)
     _store_brief(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
-    record_flags(conn, user_id, session_date, surfaced)
     return obj
 
 

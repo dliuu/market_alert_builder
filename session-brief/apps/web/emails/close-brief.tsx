@@ -1,4 +1,4 @@
-import type { Book, BriefObject, Claim, Flag, Row } from "@/lib/contracts/brief";
+import type { Book, BriefObject, Claim, Row } from "@/lib/contracts/brief";
 import { Body, Container, Head, Hr, Html, Link, Preview, Section } from "@react-email/components";
 import { font, palette, signColor } from "./theme";
 
@@ -80,15 +80,9 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
             </Section>
           )}
 
-          {/* exposure check */}
-          {brief.flags.length > 0 && (
-            <Section style={sec}>
-              <SectionHead title="Exposure check" />
-              {brief.flags.map((f, i) => (
-                <FlagRow key={`${f.type}-${i}`} flag={f} />
-              ))}
-            </Section>
-          )}
+          {/* No exposure check here since M14: §6 is the open brief's section
+              (docs/05), and the weekly flag cap is one clock that cannot serve
+              both briefs. `brief.flags` is empty on a close brief. */}
 
           {/* yesterday's flag, resolved */}
           {brief.resolved_claims.length > 0 && (
@@ -307,22 +301,6 @@ function RangeBar({ position }: { position: number | null | undefined }) {
   );
 }
 
-function FlagRow({ flag }: { flag: Flag }) {
-  const label = flag.type.replace(/_/g, " ");
-  const valueStr = flag.value != null ? ` — ${round2(flag.value)}` : "";
-  const suffix = flag.symbol ? ` (${flag.symbol})` : "";
-  return (
-    <div style={flagBox}>
-      <div style={flagLabel}>{label}</div>
-      <p style={flagText}>
-        {capitalize(label)}
-        {suffix}
-        {valueStr}.
-      </p>
-    </div>
-  );
-}
-
 function ResolvedRow({ claim }: { claim: Claim }) {
   const correct = claim.outcome === "correct";
   return (
@@ -385,12 +363,6 @@ function signedPct(pct: number): string {
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
-}
-function round2(v: number): string {
-  return Number.isInteger(v) ? String(v) : v.toFixed(2);
-}
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // ─── styles ───
@@ -549,28 +521,6 @@ const why: React.CSSProperties = {
   fontWeight: 400,
 };
 const barCell: React.CSSProperties = { height: 7, fontSize: 0, lineHeight: "0px" };
-const flagBox: React.CSSProperties = {
-  borderLeft: `3px solid ${palette.ox}`,
-  padding: "10px 0 10px 13px",
-  marginTop: 12,
-  backgroundColor: "#FBF7F6",
-};
-const flagLabel: React.CSSProperties = {
-  fontFamily: font.mono,
-  fontSize: 9.5,
-  letterSpacing: "0.13em",
-  textTransform: "uppercase",
-  color: palette.ox,
-  marginBottom: 5,
-  fontWeight: 600,
-};
-const flagText: React.CSSProperties = {
-  margin: 0,
-  fontFamily: font.body,
-  fontSize: 14,
-  lineHeight: 1.5,
-  color: palette.ink,
-};
 const resolvedRow: React.CSSProperties = {
   padding: "6px 0",
   borderBottom: `1px solid ${palette.rule2}`,

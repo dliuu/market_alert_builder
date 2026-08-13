@@ -11,7 +11,7 @@ DB-backed (skipped without DATABASE_URL); rolled back per test.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from fractions import Fraction
 
 from sqlalchemy import text
@@ -83,3 +83,63 @@ def test_a_symbol_with_no_weight_still_gets_position_risk(db_conn: Connection) -
     )
 
     assert [c.text_key for c in surfaced] == ["supply_event_soon"]
+
+
+# --- The mechanism moved: the close brief no longer surfaces flags ---------
+
+
+def _seed_a_sending_close_session(db_conn: Connection) -> date:
+    """A one-name book that moves +10%, so the close brief is a real send and
+    not a skipped quiet session. Returns the session date."""
+    prev, session = date(2099, 9, 1), date(2099, 9, 2)
+    holding_id = db_conn.execute(
+        text("SELECT id FROM holdings WHERE user_id = :u AND symbol = 'ZOPN'"), {"u": _USER}
+    ).scalar_one()
+    db_conn.execute(
+        text(
+            "INSERT INTO lots (user_id, holding_id, shares, cost_basis_cents, opened_on) "
+            "VALUES (:u, :h, 100, 10000, :d)"
+        ),
+        {"u": _USER, "h": holding_id, "d": prev - timedelta(days=1)},
+    )
+    for d, c in [(prev, "100"), (session, "110")]:
+        db_conn.execute(
+            text(
+                "INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v, adj_c) "
+                "VALUES ('ZOPN', :d, :c, :c, :c, :c, 1000, :c) ON CONFLICT DO NOTHING"
+            ),
+            {"d": d, "c": c},
+        )
+    return session
+
+
+def test_close_brief_surfaces_no_flags(db_conn: Connection) -> None:
+    """§6 is the open brief's section (docs/05). `flags.last_seen` is a single
+    clock, so if both briefs surfaced flags the earlier fire would spend the
+    week's budget and the later one would silently render nothing. The close
+    brief therefore stops surfacing them entirely (M14)."""
+    from worker.assemble import assemble_and_store
+
+    _seed_book(db_conn)
+    session = _seed_a_sending_close_session(db_conn)
+
+    obj = assemble_and_store(db_conn, _USER, session, "close")
+
+    assert obj is not None  # it sent — this is not a skipped quiet session
+    assert obj.flags == []
+
+
+def test_close_brief_spends_no_flag_budget(db_conn: Connection) -> None:
+    """Following from the above: a close brief leaves `last_seen` untouched, so
+    the morning's §6 gets the full weekly budget."""
+    from worker.assemble import assemble_and_store
+
+    _seed_book(db_conn)
+    session = _seed_a_sending_close_session(db_conn)
+
+    assemble_and_store(db_conn, _USER, session, "close")
+
+    recorded = db_conn.execute(
+        text("SELECT count(*) FROM flags WHERE user_id = :u"), {"u": _USER}
+    ).scalar_one()
+    assert recorded == 0
