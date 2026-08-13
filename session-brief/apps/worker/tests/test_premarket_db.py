@@ -3,7 +3,7 @@ database (skipped without DATABASE_URL). Rolled back per test."""
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -126,3 +126,55 @@ def test_a_live_provider_takes_the_same_path(db_conn: Connection) -> None:
     (quote,) = read_premarket(db_conn, ["ZLIVE"], _SESSION)
     assert quote.extended_last == Decimal("11.00")
     assert quote.extended_v == 999
+
+
+def test_typical_volume_excludes_today_and_respects_the_window(db_conn: Connection) -> None:
+    """`_typical_volume` is the riskiest SQL in this module: it must exclude
+    today's session, order by session_date DESC, and take only the most recent
+    PREMARKET_VOL_WINDOW prior sessions. The pure tests never reach this SQL —
+    they hand `PremarketQuote` a `typical_v` directly — so this seeds `quotes`
+    for real and reads back through `read_premarket`.
+
+    Seeded so any of the three ways this could silently break moves the
+    answer far from the expected 100_000, not just slightly:
+    - flip `<` to `<=` (today included) → today's 9_000_000 pulls the mean
+      to 990_000.
+    - flip `DESC` to `ASC` (wrong end of the window) → the 5_000_000 outlier
+      11 sessions back is pulled in instead of the most recent session,
+      pulling the mean to 590_000.
+    - drop the `LIMIT` (whole history averaged) → the outlier pulls the mean
+      to ~545_454.
+    """
+    from worker import config
+    from worker.premarket import read_premarket
+
+    symbol = "ZVOL"
+    insert = text("""
+        INSERT INTO quotes (symbol, session_date, captured_at, last, prev_close,
+                            extended_last, extended_v)
+        VALUES (:s, :d, :t, :last, :prev, :ext, :extv)
+    """)
+
+    # The PREMARKET_VOL_WINDOW most recent prior sessions — the ones that must
+    # be averaged.
+    for i in range(1, config.PREMARKET_VOL_WINDOW + 1):
+        db_conn.execute(insert, {
+            "s": symbol, "d": _SESSION - timedelta(days=i), "t": _CAPTURED,
+            "last": None, "prev": None, "ext": None, "extv": 100_000,
+        })
+
+    # One session older than the window — must be excluded by the LIMIT/ORDER.
+    db_conn.execute(insert, {
+        "s": symbol, "d": _SESSION - timedelta(days=config.PREMARKET_VOL_WINDOW + 1),
+        "t": _CAPTURED, "last": None, "prev": None, "ext": None, "extv": 5_000_000,
+    })
+
+    # Today's row — must be excluded from the volume base, though it is still
+    # the row `read_premarket` itself returns.
+    db_conn.execute(insert, {
+        "s": symbol, "d": _SESSION, "t": _CAPTURED,
+        "last": None, "prev": Decimal("10.00"), "ext": Decimal("10.50"), "extv": 9_000_000,
+    })
+
+    (quote,) = read_premarket(db_conn, [symbol], _SESSION)
+    assert quote.typical_v == Decimal("100000")
