@@ -200,6 +200,7 @@ function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
           <th style={thR}>Day</th>
           <th style={thR}>Day P&amp;L</th>
           <th style={thR}>bps</th>
+          <th style={thR}>Resid</th>
           <th style={thR}>Total P&amp;L</th>
         </tr>
       </thead>
@@ -208,6 +209,11 @@ function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
           <tr key={r.symbol}>
             <td style={tdL}>
               <span style={sym}>{r.symbol}</span>
+              {r.provisional && (
+                <sup style={provMarker} title="provisional — not yet reconciled with fills">
+                  p
+                </sup>
+              )}
               {r.why && <span style={why}>{r.why}</span>}
             </td>
             <td style={tdR}>{r.close != null ? r.close.toFixed(2) : "—"}</td>
@@ -217,6 +223,9 @@ function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
             </td>
             <td style={{ ...tdR, color: signColor(r.contribution_bps) }}>
               {r.contribution_bps != null ? signedInt(r.contribution_bps) : "—"}
+            </td>
+            <td style={{ ...tdR, color: signColor(r.resid_bps) }}>
+              {r.resid_bps != null ? signedInt(r.resid_bps) : "—"}
             </td>
             <td style={{ ...tdR, color: signColor(r.total_pnl_cents) }}>
               {r.total_pnl_cents != null ? signedDollarsRound(r.total_pnl_cents) : "—"}
@@ -236,6 +245,7 @@ function Attribution({ rows, book }: { rows: Row[]; book: BriefObject }) {
           <td style={{ ...totR, color: signColor(book.book.day_bps) }}>
             {signedInt(book.book.day_bps)}
           </td>
+          <td style={totR}>—</td>
           <td style={{ ...totR, color: signColor(book.book.total_pnl_cents) }}>
             {signedDollarsRound(book.book.total_pnl_cents)}
             {book.book.total_pct != null && (
@@ -541,6 +551,12 @@ const totL: React.CSSProperties = {
 const totR: React.CSSProperties = { ...totBase, textAlign: "right", paddingLeft: 8 };
 const sym: React.CSSProperties = { fontWeight: 600, fontSize: 12 };
 const mut: React.CSSProperties = { color: palette.ink3 };
+const provMarker: React.CSSProperties = {
+  fontSize: 8,
+  color: palette.ink3,
+  marginLeft: 2,
+  fontWeight: 600,
+};
 const why: React.CSSProperties = {
   display: "block",
   fontFamily: font.body,

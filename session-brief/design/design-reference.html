@@ -230,6 +230,9 @@ table.d tr.tot td:first-child{font-size:9px;letter-spacing:.11em;text-transform:
   display:block;font-family:var(--body);font-size:12.5px;color:var(--ink2);
   margin-top:2px;line-height:1.4;font-weight:400;max-width:30ch;
 }
+.prov{
+  font-size:8px;vertical-align:super;color:var(--ink3);margin-left:2px;font-weight:600;
+}
 .bar{display:inline-block;height:7px;background:var(--rule);position:relative;width:44px;vertical-align:middle}
 .bar i{position:absolute;top:0;bottom:0;display:block}
 .bar i.p{background:var(--pine)}
@@ -608,14 +611,14 @@ ul.cal .tag{
         <div class="sec">
           <h3>Attribution <em>contribution to book return</em></h3>
           <table class="d">
-            <thead><tr><th>Name</th><th>Close</th><th>Day</th><th>Day P&amp;L</th><th>bps</th><th>Total P&amp;L</th></tr></thead>
+            <thead><tr><th>Name</th><th>Close</th><th>Day</th><th>Day P&amp;L</th><th>bps</th><th>Resid</th><th>Total P&amp;L</th></tr></thead>
             <tbody>
-              <tr><td class="sym">SNDK</td><td>49.71</td><td class="up">+5.9%</td><td class="up">+2,216</td><td class="up">+140</td><td class="up">+4,408 <span class="mut">+12.5%</span></td></tr>
-              <tr><td class="sym">AAOI</td><td>18.44</td><td class="up">+2.4%</td><td class="up">+731</td><td class="up">+46</td><td class="up">+2,873 <span class="mut">+10.1%</span></td></tr>
-              <tr><td class="sym">SYM</td><td>36.02</td><td class="up">+0.7%</td><td class="up">+277</td><td class="up">+18</td><td class="up">+5,082 <span class="mut">+14.7%</span></td></tr>
-              <tr><td class="sym">RKLB</td><td>21.06</td><td class="dn">−0.9%</td><td class="dn">−285</td><td class="dn">−18</td><td class="up">+1,815 <span class="mut">+6.1%</span></td></tr>
-              <tr><td class="sym">ASTS</td><td>32.94</td><td class="dn">−6.4%</td><td class="dn">−1,193</td><td class="dn">−75</td><td class="up">+4,685 <span class="mut">+36.7%</span></td></tr>
-              <tr class="tot"><td>Book</td><td>—</td><td class="up">+1.10%</td><td class="up">+1,746</td><td class="up">+111</td><td class="up">+18,863 <span class="mut">+13.4%</span></td></tr>
+              <tr><td class="sym">SNDK</td><td>49.71</td><td class="up">+5.9%</td><td class="up">+2,216</td><td class="up">+140</td><td class="up">+88</td><td class="up">+4,408 <span class="mut">+12.5%</span></td></tr>
+              <tr><td class="sym">AAOI</td><td>18.44</td><td class="up">+2.4%</td><td class="up">+731</td><td class="up">+46</td><td class="up">+30</td><td class="up">+2,873 <span class="mut">+10.1%</span></td></tr>
+              <tr><td class="sym">SYM<sup class="prov" title="provisional — not yet reconciled with fills">p</sup></td><td>36.02</td><td class="up">+0.7%</td><td class="up">+277</td><td class="up">+18</td><td class="up">+5</td><td class="up">+5,082 <span class="mut">+14.7%</span></td></tr>
+              <tr><td class="sym">RKLB</td><td>21.06</td><td class="dn">−0.9%</td><td class="dn">−285</td><td class="dn">−18</td><td class="dn">−3</td><td class="up">+1,815 <span class="mut">+6.1%</span></td></tr>
+              <tr><td class="sym">ASTS</td><td>32.94</td><td class="dn">−6.4%</td><td class="dn">−1,193</td><td class="dn">−75</td><td class="dn">−52</td><td class="up">+4,685 <span class="mut">+36.7%</span></td></tr>
+              <tr class="tot"><td>Book</td><td>—</td><td class="up">+1.10%</td><td class="up">+1,746</td><td class="up">+111</td><td class="mut">—</td><td class="up">+18,863 <span class="mut">+13.4%</span></td></tr>
             </tbody>
           </table>
         </div>

@@ -84,6 +84,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                 <th style={S.thR}>Day %</th>
                 <th style={S.thR}>Day P&L</th>
                 <th style={S.thR}>Contrib</th>
+                <th style={S.thR}>Resid</th>
                 <th style={S.thR}>Total P&L</th>
                 <th style={S.thR}>Total %</th>
               </tr>
@@ -91,7 +92,14 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
             <tbody>
               {attribution.rows.map((r: Row) => (
                 <tr key={r.symbol}>
-                  <td style={S.td}>{r.symbol}</td>
+                  <td style={S.td}>
+                    {r.symbol}
+                    {r.provisional && (
+                      <sup style={S.provMarker} title="provisional — not yet reconciled with fills">
+                        p
+                      </sup>
+                    )}
+                  </td>
                   <td style={S.tdR}>{r.close != null ? `$${r.close.toFixed(2)}` : "—"}</td>
                   <td style={{ ...S.tdR, ...signColor(r.day_return) }}>
                     {pctOrDash(r.day_return)}
@@ -101,6 +109,9 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.contribution_bps) }}>
                     {r.contribution_bps != null ? bps(r.contribution_bps) : "—"}
+                  </td>
+                  <td style={{ ...S.tdR, ...signColor(r.resid_bps) }}>
+                    {r.resid_bps != null ? bps(r.resid_bps) : "—"}
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.total_pnl_cents) }}>
                     {r.total_pnl_cents != null ? signedDollars(r.total_pnl_cents) : "—"}
@@ -121,6 +132,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                 <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
                   {bps(brief.book.day_bps)}
                 </td>
+                <td style={S.tdRTotal}>—</td>
                 <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
                   {signedDollars(brief.book.total_pnl_cents)}
                 </td>
@@ -307,6 +319,7 @@ const S: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
   },
   tdTotal: { padding: "7px 8px 5px 0", borderTop: "2px solid #ddd", fontWeight: 700 },
+  provMarker: { fontSize: "0.65rem", color: "#888", marginLeft: 2, fontWeight: 600 },
   tdRTotal: {
     padding: "7px 0 5px 8px",
     borderTop: "2px solid #ddd",
