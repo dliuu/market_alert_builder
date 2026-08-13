@@ -71,6 +71,20 @@ def main() -> None:
         help="render and report size; do not touch Resend or the deliveries table",
     )
 
+    attribution = sub.add_parser("attribution", help="return attribution stages (M11)")
+    attr_sub = attribution.add_subparsers(dest="attr_command")
+    attr_sub.add_parser("themes-seed", help="seed reference themes + PIT members")
+    a_refit = attr_sub.add_parser("refit", help="weekly: fit beta over trailing 120 sessions")
+    a_refit.add_argument("--date", required=True, help="fit date YYYY-MM-DD")
+    a_score = attr_sub.add_parser("score", help="decompose today's move from the current fit")
+    a_score.add_argument("--date", required=True, help="trade date YYYY-MM-DD")
+    a_score.add_argument(
+        "--pm", action="store_true", help="score from synthetic PM bars (provisional)"
+    )
+    a_recon = attr_sub.add_parser("reconcile", help="reconcile synthetic vs official; mark revised")
+    a_recon.add_argument("--date", required=True, help="trade date YYYY-MM-DD")
+    a_recon.add_argument("--am", action="store_true", help="AM run against the official bar")
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -105,8 +119,65 @@ def main() -> None:
         )
         return
 
+    if args.command == "attribution":
+        _attribution(args.attr_command, date_arg=getattr(args, "date", None),
+                     pm=getattr(args, "pm", False))
+        return
+
     if args.command in (None, "hello"):
         print("worker: ok")
+
+
+def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) -> None:
+    from datetime import UTC, datetime
+
+    from worker.constants import ATTRIBUTION_MODEL_VERSION
+
+    engine = get_engine()
+    now = datetime.now(UTC)
+
+    if attr_command == "themes-seed":
+        from worker.themes_seed import seed_themes
+
+        with engine.begin() as conn:
+            n = seed_themes(conn)
+        print(f"seeded {n} new theme members")
+        return
+
+    if date_arg is None:
+        raise SystemExit("--date is required")
+    trade_date = date.fromisoformat(date_arg)
+
+    if attr_command == "refit":
+        from worker.attribution import refit
+
+        with engine.begin() as conn:
+            refit_result = refit(conn, trade_date, now_utc=now,
+                                 model_version=ATTRIBUTION_MODEL_VERSION)
+        print(f"refit: {refit_result.fits_written} symbol(s); "
+              f"skipped (no data/theme): {refit_result.skipped}")
+        return
+
+    if attr_command == "score":
+        from worker.attribution import score
+
+        with engine.begin() as conn:
+            score_result = score(conn, trade_date, now_utc=now,
+                                 model_version=ATTRIBUTION_MODEL_VERSION, synthetic=pm)
+        print(f"score: {score_result.rows_written} row(s) (synthetic={pm})")
+        return
+
+    if attr_command == "reconcile":
+        from worker.reconcile import reconcile
+
+        with engine.begin() as conn:
+            recon_result = reconcile(conn, trade_date, now_utc=now,
+                                     model_version=ATTRIBUTION_MODEL_VERSION)
+        print(f"reconcile: revised {recon_result.revised}; "
+              f"unchanged {len(recon_result.unchanged)}")
+        return
+
+    raise SystemExit("unknown attribution subcommand; try themes-seed|refit|score|reconcile")
 
 
 def _backfill(symbols_arg: str | None, days: int) -> None:

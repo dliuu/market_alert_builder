@@ -49,3 +49,9 @@ class TiingoProvider:
 
     def news(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError("company news is a TBD source gap (M8)")
+
+    def latest_minute(self, symbol: str) -> dict[str, Any]:
+        raise NotImplementedError("Tiingo free tier has no minute data; use FdnProvider (M11)")
+
+    def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError("dividends feed is an M12 concern")

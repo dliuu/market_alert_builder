@@ -35,6 +35,12 @@ class _FakeProvider:
     def news(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError
 
+    def latest_minute(self, symbol: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
 
 def _record(session: str, close: str) -> dict[str, Any]:
     return {
