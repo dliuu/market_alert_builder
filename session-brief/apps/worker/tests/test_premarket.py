@@ -10,6 +10,13 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from worker.premarket import (
+    PremarketQuote,
+    clears_threshold,
+    gap_cents,
+    pre_pct,
+    premarket_vol_mult,
+)
 from worker.providers.synthetic import SyntheticPremarketProvider
 
 _SESSION = date(2026, 8, 13)
@@ -67,3 +74,51 @@ def test_synthetic_provider_satisfies_the_protocol() -> None:
                   provider.get_forex_quotes):
         (row,) = fetch(["SNDK"])
         assert set(row) == {"symbol", "last", "prev_close"}
+
+
+def _q(last: str, prev: str, v: int = 100_000, typical: str | None = "50000") -> PremarketQuote:
+    return PremarketQuote(
+        symbol="SNDK",
+        extended_last=Decimal(last),
+        extended_v=v,
+        prev_close=Decimal(prev),
+        typical_v=Decimal(typical) if typical is not None else None,
+    )
+
+
+def test_pre_pct_is_extended_last_against_the_prior_close() -> None:
+    assert pre_pct(_q("50.00", "40.00")) == Decimal("0.25")
+
+
+def test_pre_pct_is_none_without_a_base() -> None:
+    assert pre_pct(_q("50.00", "0")) is None
+
+
+def test_gap_is_dollars_in_integer_cents() -> None:
+    """The dollars-not-percent rule (docs/01): +$1.94 on a 47.32 close."""
+    assert gap_cents(_q("49.26", "47.32")) == 194
+    assert gap_cents(_q("46.00", "47.32")) == -132
+
+
+def test_volume_multiple_is_against_typical_premarket_volume() -> None:
+    """Not the 30-day RVOL: the base is prior sessions' pre-market volume at the
+    same point in the morning, because pre-market volume is too thin for a
+    daily-volume ratio to mean anything (D3, docs/05)."""
+    assert premarket_vol_mult(_q("50.00", "49.00", v=150_000, typical="50000")) == Decimal("3")
+
+
+def test_volume_multiple_is_none_without_enough_history() -> None:
+    assert premarket_vol_mult(_q("50.00", "49.00", typical=None)) is None
+
+
+def test_threshold_takes_names_over_one_percent() -> None:
+    assert clears_threshold(_q("48.00", "47.32")) is True    # +1.4%
+    assert clears_threshold(_q("47.50", "47.32")) is False   # +0.4%
+    assert clears_threshold(_q("46.60", "47.32")) is True    # -1.5%, direction-blind
+
+
+def test_news_clears_the_threshold_on_its_own() -> None:
+    """docs/05: ">1% pre-market **or** carrying news". No news feed exists
+    (docs/02 marks it Premium and unwired), so the predicate takes the flag and
+    nothing sets it yet — the D18 short_interest precedent."""
+    assert clears_threshold(_q("47.35", "47.32"), has_news=True) is True
