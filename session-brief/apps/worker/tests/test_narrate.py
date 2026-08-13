@@ -308,13 +308,22 @@ def test_why_fills_premarket_rows() -> None:
     assert row.why == "Memory pricing read-through."
 
 
-def test_a_why_for_an_unlisted_symbol_is_dropped() -> None:
+def test_parse_drops_a_why_for_an_unlisted_symbol() -> None:
+    """Mixes one valid symbol in with the invalid one on purpose: an
+    unlisted-only payload would pass even with the parser's `if symbol in
+    symbols` filter deleted, because `apply_narration`'s row lookup is keyed
+    on the row's own symbol and would find nothing to attach it to either
+    way. Pairing it with a real symbol is what makes the filter's drop
+    observable — mirrors the close brief's `test_parse_drops_unknown_symbols`."""
     obj = _open_object_with_premarket("SNDK")
-    narrated = narrate_open_and_apply(
-        obj, lambda _p: json.dumps({"why": {"NVDA": "Not in this brief."}})
-    )
-    section = next(s for s in narrated.sections if s.id.value == "premarket")
-    assert all(r.why is None for r in section.rows)
+    raw = json.dumps({"why": {
+        "SNDK": "Memory pricing read-through.",
+        "NVDA": "Not in this brief.",
+    }})
+    narration = parse_narration(raw, obj)
+    assert narration.why == {
+        "SNDK": "Memory pricing read-through."
+    }
 
 
 def test_narration_stays_non_fatal_for_the_open_brief() -> None:
