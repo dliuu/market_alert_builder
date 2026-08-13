@@ -50,3 +50,28 @@ class MarketDataProvider(Protocol):
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         ...
+
+    # --- Pre-market and the overnight tape (open brief §2/§3, M15) ---------
+    #
+    # Premium-tier, licensing-sensitive data (D8): delayed pre-market quotes and
+    # overnight futures/macro. Declared here so the sections are written against
+    # the seam; `SyntheticPremarketProvider` satisfies it today and a licensed
+    # `FdnProvider` satisfies it later, with no change above this line.
+
+    def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Pre-market print and summed pre-market volume per symbol. Returns
+        ``{"symbol", "extended_last": Decimal, "extended_v": int,
+        "prev_close": Decimal}``; symbols with no prior close are omitted."""
+        ...
+
+    def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """``{"symbol", "last": Decimal, "prev_close": Decimal}`` for futures."""
+        ...
+
+    def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Same shape, for index and yield series (VIX, 10Y)."""
+        ...
+
+    def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Same shape, for currency series (DXY)."""
+        ...
