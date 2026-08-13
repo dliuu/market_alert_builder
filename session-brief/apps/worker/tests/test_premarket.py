@@ -56,5 +56,14 @@ def test_synthetic_provider_satisfies_the_protocol() -> None:
     """The point of the seam: the seed and the licensed feed are interchangeable."""
     from worker.providers.base import MarketDataProvider
 
-    provider: MarketDataProvider = SyntheticPremarketProvider({}, _SESSION)  # type: ignore[assignment]
-    assert callable(provider.get_latest_prices)
+    provider: MarketDataProvider = SyntheticPremarketProvider(
+        {"SNDK": Decimal("47.32")}, _SESSION
+    )
+    (pre,) = provider.get_latest_prices(["SNDK"])
+    assert set(pre) == {"symbol", "extended_last",
+                        "extended_v", "prev_close"}
+    for fetch in (provider.get_futures_prices,
+                  provider.get_index_quotes,
+                  provider.get_forex_quotes):
+        (row,) = fetch(["SNDK"])
+        assert set(row) == {"symbol", "last", "prev_close"}
