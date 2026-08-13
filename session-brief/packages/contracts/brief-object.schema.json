@@ -18,8 +18,8 @@
     "subject": { "type": "string", "maxLength": 160 },
     "one_thing": { "type": ["string", "null"] },
     "book": {
-      "description": "Absent on the open brief, which carries no performance or P&L (M14). Always present on the close brief.",
-      "$ref": "#/$defs/book"
+      "description": "Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.",
+      "anyOf": [{ "$ref": "#/$defs/book" }, { "type": "null" }]
     },
     "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
     "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } },
@@ -75,8 +75,8 @@
           "description": "Absent on rows that name no security — a macro release in the open brief's calendar section has no ticker (M14)."
         },
         "tier": {
-          "enum": ["full", "brief"],
-          "description": "Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality)."
+          "enum": ["full", "brief", null],
+          "description": "Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup)."
         },
         "close": { "type": ["number", "null"] },
         "day_return": { "type": ["number", "null"] },

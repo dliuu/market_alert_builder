@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from fractions import Fraction
 
 from sqlalchemy import text
@@ -28,6 +28,7 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
+from worker.assemble_shared import claim_dict, resolved_dict, round_bps, session_label
 from worker.claims import (
     Claim,
     ResolvedClaim,
@@ -107,8 +108,8 @@ def assemble(
         "book": _book(book),
         "sections": [_attribution(shown, closes), _tape_quality(shown, tape)],
         "flags": list(flags or []),
-        "claims": [_claim_dict(c, user_id, session_date, kind) for c in claims or []],
-        "resolved_claims": [_resolved_dict(r) for r in resolved or []],
+        "claims": [claim_dict(c, user_id, session_date, kind) for c in claims or []],
+        "resolved_claims": [resolved_dict(r) for r in resolved or []],
         "suppressed": sorted(suppressed),
         "data_quality": {"missing": missing or [], "stale": stale or []},
     }
@@ -134,29 +135,6 @@ def _tier_positions(
     return shown, suppressed
 
 
-def _claim_dict(claim: Claim, user_id: str, session_date: date, kind: str) -> dict[str, object]:
-    # Emitted claims have no DB id yet; a deterministic slug identifies them.
-    return {
-        "id": f"{user_id}-{session_date.isoformat()}-{kind}-{claim.symbol}-{claim.claim_type}",
-        "symbol": claim.symbol,
-        "type": claim.claim_type,
-        "direction": claim.direction,
-        "horizon_sessions": claim.horizon_sessions,
-        "outcome": None,
-    }
-
-
-def _resolved_dict(resolved: ResolvedClaim) -> dict[str, object]:
-    return {
-        "id": resolved.id,
-        "symbol": resolved.symbol,
-        "type": resolved.claim_type,
-        "direction": resolved.direction,
-        "horizon_sessions": resolved.horizon_sessions,
-        "outcome": resolved.outcome,
-    }
-
-
 def _tier(day_return: Fraction | None, rvol: Fraction | None) -> str:
     """Classify a name into full / brief / suppressed (docs/05)."""
     moved = abs(day_return) if day_return is not None else Fraction(0)
@@ -180,7 +158,7 @@ def close_brief_should_skip(obj: BriefObject) -> bool:
 
 
 def _book(book: BookMetrics) -> dict[str, int | float]:
-    day_bps = _round_bps(book.day_bps)
+    day_bps = round_bps(book.day_bps)
     assert day_bps is not None  # precondition: assemble() checks book.day_bps first
     out: dict[str, int | float] = {
         "value_cents": book.value_cents,
@@ -190,7 +168,7 @@ def _book(book: BookMetrics) -> dict[str, int | float]:
     }
     if book.total_pct is not None:
         out["total_pct"] = float(book.total_pct)
-    vs_spy = _round_bps(book.vs_spy_bps)
+    vs_spy = round_bps(book.vs_spy_bps)
     if vs_spy is not None:
         out["vs_spy_bps"] = vs_spy
     return out
@@ -206,7 +184,7 @@ def _attribution(
             "close": float(closes[p.symbol]) if p.symbol in closes else None,
             "day_return": float(p.day_return) if p.day_return is not None else None,
             "day_pnl_cents": p.day_pnl_cents,
-            "contribution_bps": _round_bps(p.contribution_bps),
+            "contribution_bps": round_bps(p.contribution_bps),
             "total_pnl_cents": p.total_pnl_cents,
             "total_pct": _row_total_pct(p),
         }
@@ -249,7 +227,7 @@ def _row_total_pct(p: PositionMetrics) -> float | None:
 
 def _subject(kind: str, session_date: date, book: BookMetrics) -> str:
     label = kind.capitalize()
-    when = f"{session_date:%a} {session_date:%b} {session_date.day}"
+    when = session_label(session_date)
     pct = float(book.day_bps) / 100 if book.day_bps is not None else 0.0
     dollars = book.day_pnl_cents / 100
     return f"{label} · {when} — book {pct:+.1f}% ({_signed_dollars(dollars)})"
@@ -258,20 +236,6 @@ def _subject(kind: str, session_date: date, book: BookMetrics) -> str:
 def _signed_dollars(dollars: float) -> str:
     sign = "+" if dollars >= 0 else "-"
     return f"{sign}${abs(dollars):,.2f}"
-
-
-def _round_bps(value: Fraction | None) -> int | None:
-    """Round an exact bps Fraction to the contract's integer. The exact
-    sum identity (Σ contribution_bps == day_bps) lives in stage ③ over
-    Fractions; the rounded integers here are for display and need not re-sum
-    (documented as D15)."""
-    if value is None:
-        return None
-    return int(
-        (Decimal(value.numerator) / Decimal(value.denominator)).quantize(
-            Decimal("1"), rounding=ROUND_HALF_UP
-        )
-    )
 
 
 # --- Database layer -------------------------------------------------------

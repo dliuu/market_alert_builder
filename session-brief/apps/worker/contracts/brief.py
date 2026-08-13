@@ -66,6 +66,7 @@ class Tier(Enum):
 class Tier1(Enum):
     full = 'full'
     brief = 'brief'
+    NoneType_None = None
 
 
 class EventType(Enum):
@@ -93,7 +94,7 @@ class Row(BaseModel):
     )
     tier: Tier1 | None = Field(
         None,
-        description='Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).',
+        description="Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup).",
     )
     close: float | None = None
     day_return: float | None = None
@@ -228,7 +229,7 @@ class BriefObject(BaseModel):
     one_thing: str | None = None
     book: Book | None = Field(
         None,
-        description='Absent on the open brief, which carries no performance or P&L (M14). Always present on the close brief.',
+        description='Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.',
     )
     sections: list[Section]
     flags: list[Flag]

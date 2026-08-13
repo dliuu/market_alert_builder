@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from contracts.brief import BriefObject
+from worker import calendar
 from worker.assemble import assemble_and_store
+from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
 from worker.constants import DEV_USER_ID
 from worker.db import get_engine
@@ -232,10 +235,21 @@ def _events_seed(date_arg: str | None, symbols_arg: str | None) -> None:
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
+    """Held names *plus every sector benchmark*. The benchmarks are settable in
+    the book UI but were never ingested, so §5's trailing-5d line had no bars to
+    read (M14)."""
     if symbols_arg:
         return [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT DISTINCT symbol FROM holdings ORDER BY symbol")).all()
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT symbol FROM holdings "
+                "UNION "
+                "SELECT DISTINCT benchmark_symbol FROM sectors "
+                "WHERE benchmark_symbol IS NOT NULL "
+                "ORDER BY symbol"
+            )
+        ).all()
     return [str(row[0]) for row in rows]
 
 
@@ -291,10 +305,25 @@ def _brief(
     # run degrades to tables-only rather than failing (M8).
     narrator = default_narrator() if narrate else None
 
+    # Only the close path can return None (its quiet-session skip gate); the
+    # open brief always sends, so the union comes from `assemble_and_store`.
+    obj: BriefObject | None
     conn = engine.connect()
     trans = conn.begin()
     try:
-        obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
+        if kind == "open":
+            # The open brief is *for* session_date but reads the prior close; it
+            # has no skip gate and never returns None (docs/05).
+            obj = assemble_open_and_store(
+                conn,
+                user_id,
+                session_date,
+                prior_session=calendar.previous_session(session_date),
+                generated_at=datetime.now(UTC),
+                narrator=narrator,
+            )
+        else:
+            obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
         if dry_run:
             trans.rollback()  # --dry-run assembles but writes nothing
         else:

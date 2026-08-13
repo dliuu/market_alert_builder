@@ -17,7 +17,10 @@ export interface BriefObject {
   generated_at: string;
   subject: string;
   one_thing?: string | null;
-  book?: Book;
+  /**
+   * Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.
+   */
+  book?: Book | null;
   sections: Section[];
   flags: Flag[];
   claims: Claim[];
@@ -29,7 +32,7 @@ export interface BriefObject {
   };
 }
 /**
- * Absent on the open brief, which carries no performance or P&L (M14). Always present on the close brief.
+ * All monetary values are integer cents. Never float.
  */
 export interface Book {
   value_cents: number;
@@ -63,9 +66,9 @@ export interface Row {
    */
   symbol?: string | null;
   /**
-   * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).
+   * Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup).
    */
-  tier?: "full" | "brief";
+  tier?: "full" | "brief" | null;
   close?: number | null;
   day_return?: number | null;
   day_pnl_cents?: number | null;

@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from worker import calendar, config
 from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID
@@ -88,16 +88,22 @@ def next_fire(now_utc: datetime, delay: timedelta) -> datetime:
 # --- The daily job ----------------------------------------------------------
 
 
-def book_symbols(engine: Engine, user_id: str = DEV_USER_ID) -> list[str]:
-    """The symbols to refresh: every held name plus the benchmark. The benchmark
-    is *always* needed for the vs-SPY line even when it isn't in the book — the
-    manual ``backfill`` omits it, which is a latent gap the unattended run can't
-    afford."""
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u ORDER BY symbol"),
-            {"u": user_id},
-        ).all()
+def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """The symbols to refresh: every held name, every sector benchmark, plus the
+    market benchmark. SPY is *always* needed for the vs-SPY line even when it
+    isn't in the book — the manual ``backfill`` omits it, which is a latent gap
+    the unattended run can't afford. The sector benchmarks are the same trap one
+    level down: settable in the book UI since M1, never ingested, so the open
+    brief's §5 trailing-5d line had nothing to read (M14)."""
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT symbol FROM holdings WHERE user_id = :u "
+            "UNION "
+            "SELECT DISTINCT benchmark_symbol FROM sectors "
+            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
+        ),
+        {"u": user_id},
+    ).all()
     return sorted({str(r[0]) for r in rows} | {BENCHMARK_SYMBOL})
 
 
@@ -168,7 +174,8 @@ def run_session_job(
             ping_success(hc)
             return "skipped-holiday"
 
-        symbols = book_symbols(engine, user_id)
+        with engine.connect() as conn:
+            symbols = book_symbols(conn, user_id)
         if poll:
             prov = provider or _default_provider()
             missing = ensure_todays_bars(
