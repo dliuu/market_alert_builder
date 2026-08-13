@@ -13,6 +13,7 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 - [x] **M8 — Narration.** *Done when:* prose appears, and revoking the Claude API key still produces a valid, sendable brief.
 - [x] **M9 — React Email + Resend + DNS.** *Done when:* it lands in your inbox looking like the design reference, in Gmail *and* Outlook, under 80KB, with a plaintext part.
 - [ ] **M10 — Scheduler + dead-man's switch.** *Done when:* it runs five consecutive sessions untouched, including one market holiday it correctly skips.
+- [ ] **M11 — Return attribution (walking skeleton).** Two-factor (market + raw theme) decomposition over point-in-time, leave-one-out baskets, with PM-synthesize / AM-reconcile plumbing; CLI-driven, scheduler-ready. *Done when:* given a seeded theme and 120 sessions of bars, `attribution refit` then `score` produces additive (`market + theme + resid == total`), snapshot-stable residuals for held names; a synthetic PM run followed by an AM reconcile against a divergent official bar flips `revised` and converges; the null-test (shuffled calendar → flat residuals) and known-answer (earnings-day → large residual) tests pass. Orthogonalization, robust scaling, and consumers are M12/M13. See `docs/superpowers/specs/2026-08-13-m11-attribution-design.md`.
 
 **M3 is the one to be pedantic about.** If contribution bps don't sum to the book return, every downstream insight is quietly wrong and you won't notice for a month.
 
