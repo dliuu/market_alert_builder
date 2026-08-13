@@ -40,6 +40,11 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 metrics  (user_id, symbol, session_date, metric, value)   -- PK (user_id, symbol, session_date, metric)
 flags    (id, user_id, flag_type, symbol, sector_id, first_seen, last_seen,
           severity, payload jsonb)
+         -- flag_type CHECK: concentration | correlation | runway | dilution |
+         --   earnings_soon | supply_event | short_interest | theme_misfit |
+         --   beta_instability. The last two (M13 Task 7, docs/07 D24) are
+         --   dashboard-only: written straight to this table from
+         --   attribution_fits/attribution_signals, never into a BriefObject.
 claims   (id, user_id, brief_id, symbol, claim_type, direction, horizon_sessions,
           resolved_at, outcome, graded_model_version)  -- outcome: correct | wrong | unresolved
 briefs   (id, user_id, session_date, kind, schema_version, body jsonb, created_at)

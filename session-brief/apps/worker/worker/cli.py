@@ -88,6 +88,11 @@ def main() -> None:
     a_signals = attr_sub.add_parser("signals", help="weekly derived signals + theme dispersion")
     a_signals.add_argument("--date", required=True, help="trade date YYYY-MM-DD")
 
+    a_maintenance = attr_sub.add_parser(
+        "maintenance", help="dashboard-only theme_misfit + beta_instability flags (M13 Task 7)"
+    )
+    a_maintenance.add_argument("--date", required=True, help="session date YYYY-MM-DD")
+
     args = parser.parse_args()
 
     if args.command == "backfill":
@@ -189,8 +194,19 @@ def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) ->
         print(f"signals: {sig.names_written} name(s), {sig.themes_written} theme(s)")
         return
 
+    if attr_command == "maintenance":
+        from worker.maintenance import surface_maintenance_flags
+
+        with engine.begin() as conn:
+            surfaced = surface_maintenance_flags(
+                conn, DEV_USER_ID, trade_date, ATTRIBUTION_MODEL_VERSION
+            )
+        print(f"maintenance: {len(surfaced)} flag(s) surfaced")
+        return
+
     raise SystemExit(
-        "unknown attribution subcommand; try themes-seed|refit|score|reconcile|signals"
+        "unknown attribution subcommand; try themes-seed|refit|score|reconcile|signals|"
+        "maintenance"
     )
 
 

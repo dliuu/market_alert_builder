@@ -271,14 +271,19 @@ def run_refit_job(
     model_version: int = ATTRIBUTION_MODEL_VERSION,
     healthcheck_url: str | None = None,
 ) -> str:
-    """Weekend refit over every scored symbol, at the last completed session."""
+    """Weekend refit over every scored symbol, at the last completed session. Once
+    the refit commits, surface the dashboard-only maintenance flags (Task 7,
+    M13) — theme_misfit + beta_instability — for the dev user's held names."""
     from worker.attribution import refit
+    from worker.maintenance import surface_maintenance_flags
 
     hc = config.HEALTHCHECKS_REFIT_URL if healthcheck_url is None else healthcheck_url
     try:
         fit_date = calendar.previous_session(calendar.today_et(now_utc) + timedelta(days=1))
         with engine.begin() as conn:
             refit(conn, fit_date, now_utc=now_utc, model_version=model_version)
+        with engine.begin() as conn:
+            surface_maintenance_flags(conn, DEV_USER_ID, fit_date, model_version)
         ping_success(hc)
         return "refit"
     except Exception as exc:

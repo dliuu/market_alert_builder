@@ -237,11 +237,14 @@ def test_run_refit_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> None:
     pings: list[Any] = []
     monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
     monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
-    from worker import attribution
+    from worker import attribution, maintenance
 
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
         attribution, "refit", lambda conn, fit_date, **k: seen.update(fit_date=fit_date)
+    )
+    monkeypatch.setattr(
+        maintenance, "surface_maintenance_flags", lambda conn, user_id, session_date, mv: []
     )
     out = scheduler.run_refit_job(
         _FakeEngine(),  # type: ignore[arg-type]
@@ -250,6 +253,34 @@ def test_run_refit_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert out == "refit"
     assert seen["fit_date"] == date(2026, 9, 4)  # last session before Saturday
+    assert pings == [("ok", "https://hc.example/refit")]
+
+
+def test_run_refit_job_surfaces_maintenance_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution, maintenance
+    from worker.constants import DEV_USER_ID
+
+    monkeypatch.setattr(attribution, "refit", lambda conn, fit_date, **k: None)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        maintenance,
+        "surface_maintenance_flags",
+        lambda conn, user_id, session_date, model_version: seen.update(
+            user_id=user_id, session_date=session_date, model_version=model_version
+        )
+        or [],
+    )
+    out = scheduler.run_refit_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),  # Saturday
+        healthcheck_url="https://hc.example/refit",
+    )
+    assert out == "refit"
+    assert seen["user_id"] == DEV_USER_ID
+    assert seen["session_date"] == date(2026, 9, 4)  # last session before Saturday
     assert pings == [("ok", "https://hc.example/refit")]
 
 
