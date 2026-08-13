@@ -67,8 +67,34 @@ def test_build_prompt_names_residual_lead() -> None:
     )
     prompt = build_prompt(obj)
     assert "BBB" in prompt
-    # The lead instruction must single out the top-|resid_z| name.
-    assert "BBB" in prompt.split("one_thing")[1][:200]
+    # The lead clause itself must single out the top-|resid_z| name.
+    assert "It must be about BBB, today's single largest idiosyncratic mover." in prompt
+
+
+def test_build_prompt_lead_clause_picks_max_resid_z_not_symbol_order() -> None:
+    # AAA is first in row order and alphabetically first; MMM is alphabetically
+    # between; ZZZ has the largest |resid_z| but is last in both row order and
+    # alphabetical order. Only a true max-|resid_z| selection lands on ZZZ —
+    # "first row" or "first alphabetically" regressions would land on AAA.
+    obj = _obj_with_attribution(
+        [
+            {"symbol": "AAA", "resid_z": 0.4},
+            {"symbol": "MMM", "resid_z": 1.0},
+            {"symbol": "ZZZ", "resid_z": 3.5},
+        ]
+    )
+    prompt = build_prompt(obj)
+    assert "It must be about ZZZ, today's single largest idiosyncratic mover." in prompt
+    assert "about AAA" not in prompt
+    assert "about MMM" not in prompt
+
+
+def test_build_prompt_omits_lead_clause_when_no_row_has_resid_z() -> None:
+    obj = _obj_with_attribution(
+        [{"symbol": "AAA", "resid_z": None}, {"symbol": "BBB", "resid_z": None}]
+    )
+    prompt = build_prompt(obj)  # must not raise
+    assert "It must be about" not in prompt
 
 
 def test_build_prompt_still_lists_all_symbols_for_why() -> None:
