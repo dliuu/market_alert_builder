@@ -26,3 +26,11 @@ class MarketDataProvider(Protocol):
 
     def news(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         ...
+
+    def latest_minute(self, symbol: str) -> dict[str, Any]:
+        """Most recent minute bar's close as a synthetic session-close proxy
+        (PM synthesis, M11). Returns ``{"symbol", "ts", "price": Decimal}``."""
+        ...
+
+    def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        ...
