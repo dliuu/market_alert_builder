@@ -52,6 +52,18 @@ def next_session(d: date) -> date:
     return nxt
 
 
+def previous_session(d: date) -> date:
+    """The last trading session strictly before ``d`` — ``d`` need not itself be
+    a session (``exchange_calendars.previous_session`` requires a session as
+    input, so a non-session ``d`` is rolled back via ``date_to_session`` first)."""
+    cal = _calendar()
+    if is_session(d):
+        prev: date = cal.previous_session(d.isoformat()).date()
+        return prev
+    rolled: date = cal.date_to_session(d.isoformat(), direction="previous").date()
+    return rolled
+
+
 def today_et(now_utc: datetime) -> date:
     """The ET calendar date for a UTC instant — the session a run belongs to."""
     return now_utc.astimezone(ET).date()

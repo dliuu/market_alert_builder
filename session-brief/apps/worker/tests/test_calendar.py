@@ -49,6 +49,11 @@ def test_next_session_skips_weekend_and_holiday() -> None:
     assert calendar.next_session(date(2026, 9, 4)) == date(2026, 9, 8)
 
 
+def test_previous_session_walks_back_over_weekend() -> None:
+    # 2026-09-07 is Labor Day (holiday); the prior session is Fri 2026-09-04.
+    assert calendar.previous_session(date(2026, 9, 8)) == date(2026, 9, 4)
+
+
 def test_today_et_rolls_back_across_midnight_utc() -> None:
     # 2026-09-05 01:30 UTC is still 2026-09-04 21:30 ET.
     assert calendar.today_et(datetime(2026, 9, 5, 1, 30, tzinfo=UTC)) == date(2026, 9, 4)

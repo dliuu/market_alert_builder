@@ -25,6 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from datetime import time as _time
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -32,7 +33,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from worker import calendar, config
-from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID
+from worker.calendar import ET
+from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, DEV_USER_ID
 from worker.providers.base import MarketDataProvider
 
 UTC = ZoneInfo("UTC")
@@ -83,6 +85,34 @@ def next_fire(now_utc: datetime, delay: timedelta) -> datetime:
             return ft
         d = d + timedelta(days=1)
     raise RuntimeError(f"no fire time within 8 days of {now_utc}")  # pragma: no cover
+
+
+def _et_fire(d: date, at_et: _time) -> datetime:
+    return datetime.combine(d, at_et, tzinfo=ET).astimezone(UTC)
+
+
+def next_session_fire(now_utc: datetime, at_et: _time) -> datetime:
+    """Next trading-session day at ``at_et`` (ET wall-clock), strictly after now."""
+    d = calendar.today_et(now_utc)
+    for _ in range(8):
+        if calendar.is_session(d):
+            ft = _et_fire(d, at_et)
+            if ft > now_utc:
+                return ft
+        d = d + timedelta(days=1)
+    raise RuntimeError(f"no session fire within 8 days of {now_utc}")  # pragma: no cover
+
+
+def next_weekly_fire(now_utc: datetime, weekday: int, at_et: _time) -> datetime:
+    """Next ``weekday`` (Mon=0..Sun=6) at ``at_et`` (ET), strictly after now."""
+    d = calendar.today_et(now_utc)
+    for _ in range(8):
+        if d.weekday() == weekday:
+            ft = _et_fire(d, at_et)
+            if ft > now_utc:
+                return ft
+        d = d + timedelta(days=1)
+    raise RuntimeError(f"no weekly fire within 8 days of {now_utc}")  # pragma: no cover
 
 
 # --- The daily job ----------------------------------------------------------
@@ -231,13 +261,98 @@ def _default_provider() -> MarketDataProvider:
     return TiingoProvider()
 
 
+# --- Attribution refit / PM-score / AM-reconcile jobs (M13) -----------------
+
+
+def run_refit_job(
+    engine: Engine,
+    *,
+    now_utc: datetime,
+    model_version: int = ATTRIBUTION_MODEL_VERSION,
+    healthcheck_url: str | None = None,
+) -> str:
+    """Weekend refit over every scored symbol, at the last completed session."""
+    from worker.attribution import refit
+
+    hc = config.HEALTHCHECKS_REFIT_URL if healthcheck_url is None else healthcheck_url
+    try:
+        fit_date = calendar.previous_session(calendar.today_et(now_utc) + timedelta(days=1))
+        with engine.begin() as conn:
+            refit(conn, fit_date, now_utc=now_utc, model_version=model_version)
+        ping_success(hc)
+        return "refit"
+    except Exception as exc:
+        ping_fail(hc, f"refit {now_utc:%Y-%m-%d}: {exc!r}")
+        raise
+
+
+def run_pm_score_job(
+    engine: Engine,
+    *,
+    now_utc: datetime,
+    model_version: int = ATTRIBUTION_MODEL_VERSION,
+    healthcheck_url: str | None = None,
+) -> str:
+    """PM score (provisional/synthetic) for today's session."""
+    from worker.attribution import score
+
+    hc = config.HEALTHCHECKS_PM_URL if healthcheck_url is None else healthcheck_url
+    session_date = calendar.today_et(now_utc)
+    try:
+        if not calendar.is_session(session_date):
+            ping_success(hc)
+            return "skipped-holiday"
+        with engine.begin() as conn:
+            score(
+                conn,
+                session_date,
+                now_utc=now_utc,
+                model_version=model_version,
+                synthetic=True,
+            )
+        ping_success(hc)
+        return "pm-scored"
+    except Exception as exc:
+        ping_fail(hc, f"pm-score {session_date}: {exc!r}")
+        raise
+
+
+def run_reconcile_job(
+    engine: Engine,
+    *,
+    now_utc: datetime,
+    model_version: int = ATTRIBUTION_MODEL_VERSION,
+    healthcheck_url: str | None = None,
+) -> str:
+    """AM reconcile of the prior session's synthetic rows against the official bar."""
+    from worker.reconcile import reconcile
+
+    hc = config.HEALTHCHECKS_AM_URL if healthcheck_url is None else healthcheck_url
+    today = calendar.today_et(now_utc)
+    try:
+        if not calendar.is_session(today):
+            ping_success(hc)
+            return "skipped-holiday"
+        trade_date = calendar.previous_session(today)
+        with engine.begin() as conn:
+            reconcile(conn, trade_date, now_utc=now_utc, model_version=model_version)
+        ping_success(hc)
+        return "reconciled"
+    except Exception as exc:
+        ping_fail(hc, f"reconcile {today}: {exc!r}")
+        raise
+
+
 # --- The blocking loop ------------------------------------------------------
 
 
 def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live, not in unit tests
     """Start the self-rescheduling daily loop. A single one-shot job fires at the
     next close+delay, runs the day's job, then schedules the following day —
-    rather than a fixed cron, so the send tracks half-days automatically."""
+    rather than a fixed cron, so the send tracks half-days automatically. Also
+    schedules the M13 attribution fires: a weekly weekend refit, a PM synthetic
+    score, and an AM reconcile, each self-rescheduling and independently pinging
+    its own Healthchecks check."""
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.date import DateTrigger
 
@@ -254,7 +369,50 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
             sched.add_job(tick, DateTrigger(run_date=nxt), id="daily", replace_existing=True)
             print(f"scheduler: next fire at {nxt.isoformat()}")
 
+    def tick_refit() -> None:
+        try:
+            run_refit_job(engine, now_utc=datetime.now(UTC))
+        except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad fire
+            print(f"scheduler: refit failed: {exc!r}")
+        finally:
+            nxt = next_weekly_fire(datetime.now(UTC) + timedelta(seconds=1), 5, _time(8, 0))
+            sched.add_job(tick_refit, DateTrigger(run_date=nxt), id="refit", replace_existing=True)
+            print(f"scheduler: next refit fire at {nxt.isoformat()}")
+
+    def tick_pm() -> None:
+        try:
+            run_pm_score_job(engine, now_utc=datetime.now(UTC))
+        except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad fire
+            print(f"scheduler: pm-score failed: {exc!r}")
+        finally:
+            nxt = next_session_fire(datetime.now(UTC) + timedelta(seconds=1), _time(18, 30))
+            sched.add_job(tick_pm, DateTrigger(run_date=nxt), id="pm", replace_existing=True)
+            print(f"scheduler: next pm-score fire at {nxt.isoformat()}")
+
+    def tick_am() -> None:
+        try:
+            run_reconcile_job(engine, now_utc=datetime.now(UTC))
+        except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad fire
+            print(f"scheduler: reconcile failed: {exc!r}")
+        finally:
+            nxt = next_session_fire(datetime.now(UTC) + timedelta(seconds=1), _time(7, 0))
+            sched.add_job(tick_am, DateTrigger(run_date=nxt), id="am", replace_existing=True)
+            print(f"scheduler: next reconcile fire at {nxt.isoformat()}")
+
     first = next_fire(datetime.now(UTC), delay)
     sched.add_job(tick, DateTrigger(run_date=first), id="daily")
     print(f"scheduler: started; first fire at {first.isoformat()}")
+
+    first_refit = next_weekly_fire(datetime.now(UTC), 5, _time(8, 0))
+    sched.add_job(tick_refit, DateTrigger(run_date=first_refit), id="refit")
+    print(f"scheduler: first refit fire at {first_refit.isoformat()}")
+
+    first_pm = next_session_fire(datetime.now(UTC), _time(18, 30))
+    sched.add_job(tick_pm, DateTrigger(run_date=first_pm), id="pm")
+    print(f"scheduler: first pm-score fire at {first_pm.isoformat()}")
+
+    first_am = next_session_fire(datetime.now(UTC), _time(7, 0))
+    sched.add_job(tick_am, DateTrigger(run_date=first_am), id="am")
+    print(f"scheduler: first reconcile fire at {first_am.isoformat()}")
+
     sched.start()

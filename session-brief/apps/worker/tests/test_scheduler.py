@@ -5,7 +5,7 @@ a network, or a database."""
 from __future__ import annotations
 
 import contextlib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -50,6 +50,31 @@ def test_next_fire_lands_on_holiday_as_heartbeat() -> None:
     # skip the send, but the dead-man's switch must still check in).
     now = datetime(2026, 9, 6, 21, 0, tzinfo=UTC)
     assert scheduler.next_fire(now, _DELAY) == datetime(2026, 9, 7, 20, 45, tzinfo=UTC)
+
+
+# --- next_session_fire / next_weekly_fire (pure) ----------------------------
+
+
+def test_next_weekly_fire_hits_next_saturday_0800_et() -> None:
+    # Fri 2026-09-04 12:00 UTC → Sat 2026-09-05 08:00 ET == 12:00 UTC.
+    now = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    ft = scheduler.next_weekly_fire(now, weekday=5, at_et=time(8, 0))
+    assert ft == datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+
+
+def test_next_session_fire_pm_1830_et_skips_holiday() -> None:
+    # Sat 2026-09-05 → next session is Tue 2026-09-08 (Mon is Labor Day);
+    # 18:30 ET == 22:30 UTC.
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+    ft = scheduler.next_session_fire(now, at_et=time(18, 30))
+    assert ft == datetime(2026, 9, 8, 22, 30, tzinfo=UTC)
+
+
+def test_next_session_fire_rolls_when_time_passed() -> None:
+    # Fri 2026-09-04 23:00 UTC is past 18:30 ET (22:30 UTC) → next session Tue.
+    now = datetime(2026, 9, 4, 23, 0, tzinfo=UTC)
+    ft = scheduler.next_session_fire(now, at_et=time(18, 30))
+    assert ft == datetime(2026, 9, 8, 22, 30, tzinfo=UTC)
 
 
 # --- dead-man's switch pings ------------------------------------------------
@@ -203,3 +228,122 @@ def test_run_session_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch
             healthcheck_url="https://hc.example/abc",
         )
     assert pings == [("fail", "https://hc.example/abc")]  # /fail pinged, then raised
+
+
+# --- run_refit_job / run_pm_score_job / run_reconcile_job -------------------
+
+
+def test_run_refit_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        attribution, "refit", lambda conn, fit_date, **k: seen.update(fit_date=fit_date)
+    )
+    out = scheduler.run_refit_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),  # Saturday
+        healthcheck_url="https://hc.example/refit",
+    )
+    assert out == "refit"
+    assert seen["fit_date"] == date(2026, 9, 4)  # last session before Saturday
+    assert pings == [("ok", "https://hc.example/refit")]
+
+
+def test_run_pm_score_job_scores_today_synthetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        attribution,
+        "score",
+        lambda conn, trade_date, **k: seen.update(trade_date=trade_date, **k),
+    )
+    out = scheduler.run_pm_score_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 22, 30, tzinfo=UTC),  # Friday, a session day
+        healthcheck_url="https://hc.example/pm",
+    )
+    assert out == "pm-scored"
+    assert seen["trade_date"] == date(2026, 9, 4)
+    assert seen["synthetic"] is True
+    assert pings == [("ok", "https://hc.example/pm")]
+
+
+def test_run_pm_score_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+
+    # Labor Day — no session; scoring must not run at all.
+    out = scheduler.run_pm_score_job(
+        object(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 7, 22, 30, tzinfo=UTC),
+        healthcheck_url="https://hc.example/pm",
+    )
+    assert out == "skipped-holiday"
+    assert pings == [("ok", "https://hc.example/pm")]
+
+
+def test_run_reconcile_job_reconciles_prev_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import reconcile as recon_mod
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        recon_mod,
+        "reconcile",
+        lambda conn, trade_date, **k: seen.update(trade_date=trade_date),
+    )
+    # Tue 2026-09-08 07:00 ET; prior session is Fri 2026-09-04 (Mon holiday).
+    out = scheduler.run_reconcile_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 8, 11, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/am",
+    )
+    assert out == "reconciled"
+    assert seen["trade_date"] == date(2026, 9, 4)
+    assert pings == [("ok", "https://hc.example/am")]
+
+
+def test_run_reconcile_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+
+    # Labor Day — no session; reconcile must not run at all.
+    out = scheduler.run_reconcile_job(
+        object(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 7, 11, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/am",
+    )
+    assert out == "skipped-holiday"
+    assert pings == [("ok", "https://hc.example/am")]
+
+
+def test_run_refit_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution
+
+    def _boom(conn: Any, fit_date: date, **k: Any) -> None:
+        raise RuntimeError("refit exploded")
+
+    monkeypatch.setattr(attribution, "refit", _boom)
+
+    with pytest.raises(RuntimeError, match="refit exploded"):
+        scheduler.run_refit_job(
+            _FakeEngine(),  # type: ignore[arg-type]
+            now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+            healthcheck_url="https://hc.example/refit",
+        )
+    assert pings == [("fail", "https://hc.example/refit")]
