@@ -4,6 +4,9 @@ import numpy as np
 import pytest
 
 from worker.robust import (
+    beta_standard_errors,
+    condition_number,
+    durbin_watson,
     ewma_weights,
     huber_weights,
     irls_huber,
@@ -67,3 +70,28 @@ def test_irls_huber_reports_non_convergence_without_raising() -> None:
     assert res.iters == 1
     assert res.converged is False
     assert res.beta.shape == (2,)
+
+
+def test_beta_standard_errors_shrink_with_a_tighter_fit() -> None:
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=100)
+    X = np.column_stack([np.ones(100), x])
+    w = np.ones(100)
+    tight = beta_standard_errors(X, rng.normal(scale=0.001, size=100), w)
+    loose = beta_standard_errors(X, rng.normal(scale=0.1, size=100), w)
+    assert np.all(tight < loose)
+    assert tight.shape == (2,)
+
+
+def test_durbin_watson_near_two_for_white_noise() -> None:
+    rng = np.random.default_rng(4)
+    assert durbin_watson(rng.normal(size=500)) == pytest.approx(2.0, abs=0.2)
+
+
+def test_condition_number_high_for_collinear_columns() -> None:
+    rng = np.random.default_rng(5)
+    m = rng.normal(size=200)
+    near = m + rng.normal(scale=1e-4, size=200)  # ~market, as in the M11 joint fit
+    collinear = np.column_stack([np.ones(200), m, near])
+    orthogonal = np.column_stack([np.ones(200), m, rng.normal(size=200)])
+    assert condition_number(collinear) > 10 * condition_number(orthogonal)

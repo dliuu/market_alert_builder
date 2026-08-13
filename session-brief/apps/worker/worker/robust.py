@@ -89,3 +89,29 @@ def irls_huber(
             break
         beta = new_beta
     return IRLSResult(beta=beta, resid=resid, weights=w, scale=scale, converged=converged, iters=it)
+
+
+def beta_standard_errors(X: np.ndarray, resid: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """Weighted OLS coefficient standard errors: sqrt(diag(sigma2 * (X^T W X)^-1)),
+    sigma2 = sum(w * resid^2) / (n - p). Uses pinv for near-singular designs."""
+    n, p = X.shape
+    dof = max(n - p, 1)
+    sigma2 = float(np.sum(w * resid**2) / dof)
+    xtwx = X.T @ (w[:, None] * X)
+    cov = sigma2 * np.linalg.pinv(xtwx)
+    return np.sqrt(np.abs(np.diag(cov)))
+
+
+def durbin_watson(resid: np.ndarray) -> float:
+    """Lag-1 residual autocorrelation read: sum((e_t - e_{t-1})^2) / sum(e_t^2).
+    ~2 = no autocorrelation; ->0 = positive autocorrelation (look-ahead smell)."""
+    denom = float(np.sum(resid**2))
+    if denom == 0:
+        return 2.0
+    return float(np.sum(np.diff(resid) ** 2) / denom)
+
+
+def condition_number(X: np.ndarray) -> float:
+    """2-norm condition number of the design matrix — the direct collinearity
+    read. High = 'market and theme are fighting' (spec)."""
+    return float(np.linalg.cond(X))
