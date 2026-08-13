@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.compute import PositionMetrics
-from worker.constants import BENCHMARK_SYMBOL
+from worker.constants import ATTRIBUTION_MODEL_VERSION
 
 # A full-tier name must beat/lag the benchmark by more than this (1d relative)
 # to be worth a claim. A tunable placeholder for the mechanism (D17).
@@ -97,19 +97,17 @@ _RESOLVE_SESSION = text("""
     LIMIT 1 OFFSET :offset
 """)
 
-# Same-session day returns for the name and the benchmark (LAG for prev close).
-_RETURNS = text("""
-    SELECT symbol, c, prev_c FROM (
-        SELECT symbol, session_date, c,
-               LAG(c) OVER (PARTITION BY symbol ORDER BY session_date) AS prev_c
-        FROM bars_daily
-    ) ranked
-    WHERE session_date = :session_date AND symbol = ANY(:symbols)
+# Realized residual for the graded session (M13 §3: grade against the SIGN of
+# resid_bps, not the raw sym-vs-benchmark return — beta shouldn't earn credit).
+_RESID_ON = text("""
+    SELECT resid_bps FROM attribution
+    WHERE symbol = :symbol AND trade_date = :d AND model_version = :mv
 """)
 
 _UPDATE_RESOLVED = text("""
     UPDATE claims
-    SET outcome = :outcome, resolved_at = now(), resolved_session = :resolved_session
+    SET outcome = :outcome, resolved_at = now(), resolved_session = :resolved_session,
+        graded_model_version = :graded_mv
     WHERE id = :id
 """)
 
@@ -149,11 +147,18 @@ def resolve_due_claims(
         )
         if resolve_on is None or resolve_on > session_date:
             continue  # the horizon hasn't elapsed yet
-        outcome = _grade(conn, row["symbol"], row["direction"], resolve_on)
-        if outcome is None:
-            continue  # can't grade (missing benchmark bar) — leave for next run
+        graded = _grade(conn, row["symbol"], row["direction"], resolve_on)
+        if graded is None:
+            continue  # can't grade (no realized residual yet) — leave for next run
+        outcome, graded_mv = graded
         conn.execute(
-            _UPDATE_RESOLVED, {"id": row["id"], "outcome": outcome, "resolved_session": resolve_on}
+            _UPDATE_RESOLVED,
+            {
+                "id": row["id"],
+                "outcome": outcome,
+                "resolved_session": resolve_on,
+                "graded_mv": graded_mv,
+            },
         )
         resolved.append(
             ResolvedClaim(
@@ -176,31 +181,21 @@ def _resolve_session(
     ).scalar()
 
 
-def _grade(conn: Connection, symbol: str, direction: str, resolve_on: date) -> str | None:
-    """Did relative strength persist? correct/wrong for the claimed direction,
-    or None when the data to judge isn't there."""
-    returns = {
-        row["symbol"]: _day_return(row["c"], row["prev_c"])
-        for row in conn.execute(
-            _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
-        ).mappings()
-    }
-    sym = returns.get(symbol)
-    bench = returns.get(BENCHMARK_SYMBOL)
-    if sym is None or bench is None:
+def _grade(
+    conn: Connection, symbol: str, direction: str, resolve_on: date
+) -> tuple[str, int] | None:
+    """Grade the claimed direction against the SIGN of the realized residual
+    (M13 §3): an overnight/relative call shouldn't get credit for market beta.
+    Returns (outcome, model_version), or None when no residual is stored yet."""
+    row = conn.execute(
+        _RESID_ON,
+        {"symbol": symbol, "d": resolve_on, "mv": ATTRIBUTION_MODEL_VERSION},
+    ).mappings().first()
+    if row is None or row["resid_bps"] is None:
         return None
-    rel = sym - bench
+    resid = float(row["resid_bps"])
     if direction == "up":
-        return "correct" if rel > 0 else "wrong"
+        return ("correct" if resid > 0 else "wrong", ATTRIBUTION_MODEL_VERSION)
     if direction == "down":
-        return "correct" if rel < 0 else "wrong"
+        return ("correct" if resid < 0 else "wrong", ATTRIBUTION_MODEL_VERSION)
     return None
-
-
-def _day_return(c: object, prev_c: object) -> Fraction | None:
-    if prev_c is None:
-        return None
-    prev = Fraction(str(prev_c))
-    if prev == 0:
-        return None
-    return (Fraction(str(c)) - prev) / prev

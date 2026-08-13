@@ -41,7 +41,7 @@ metrics  (user_id, symbol, session_date, metric, value)   -- PK (user_id, symbol
 flags    (id, user_id, flag_type, symbol, sector_id, first_seen, last_seen,
           severity, payload jsonb)
 claims   (id, user_id, brief_id, symbol, claim_type, direction, horizon_sessions,
-          resolved_at, outcome)                  -- outcome: correct | wrong | unresolved
+          resolved_at, outcome, graded_model_version)  -- outcome: correct | wrong | unresolved
 briefs   (id, user_id, session_date, kind, schema_version, body jsonb, created_at)
 jobs     (id, user_id, job_type, payload jsonb, status, locked_at, attempts, created_at)
 deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
@@ -54,6 +54,8 @@ deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
 `flags.last_seen` is what enforces the once-a-week rate limit on the correlation flag. Rate limiting belongs in the data, not the renderer — otherwise you can't answer "when did I last warn myself about this?"
 
 `UNIQUE (brief_id, recipient)` is what stops a crashed worker's retry from mailing the same brief four times.
+
+`claims.graded_model_version` (M13, nullable) stamps the `attribution.model_version` a claim was graded against — mirrors the attribution table's own versioning (D21) so a future model re-spec never silently rewrites past grades.
 
 ## Metric definitions
 
