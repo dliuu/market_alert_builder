@@ -317,7 +317,13 @@ def assemble_and_store(
 
     # Which flags fire, after the weekly rate limit — read-only; last_seen is
     # written below only once the brief is confirmed to send (a real mention).
-    surfaced = surface_flags(conn, user_id, session_date, result)
+    surfaced = surface_flags(
+        conn,
+        user_id,
+        session_date,
+        symbols=[p.symbol for p in result.positions],
+        name_weights={p.symbol: p.weight for p in result.positions if p.weight is not None},
+    )
 
     from datetime import UTC
 
