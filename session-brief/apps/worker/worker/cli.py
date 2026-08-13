@@ -68,7 +68,13 @@ def main() -> None:
     schedule.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the next few fire times and exit; nothing runs or sends",
+        help="print the next few fire times (both kinds) and exit; nothing runs or sends",
+    )
+    schedule.add_argument(
+        "--kind",
+        default="close",
+        choices=("open", "close"),
+        help="which job --once runs (default close); ignored by the blocking loop",
     )
 
     send = sub.add_parser("send", help="render a stored brief and email it via Resend")
@@ -121,7 +127,7 @@ def main() -> None:
         return
 
     if args.command == "schedule":
-        _schedule(once=args.once, dry_run=args.dry_run)
+        _schedule(once=args.once, dry_run=args.dry_run, kind=args.kind)
         return
 
     if args.command == "send":
@@ -400,30 +406,44 @@ def _send(kind: str, date_arg: str | None, user_id: str, to: str | None, dry_run
         print(f"send: {kind} {session_date} → {recipient} sent (msg {result.provider_msg_id})")
 
 
-def _schedule(once: bool, dry_run: bool) -> None:
+def _schedule(once: bool, dry_run: bool, kind: str) -> None:
     from datetime import timedelta
 
     from worker import config
-    from worker.scheduler import next_fire, run_scheduler, run_session_job
+    from worker.scheduler import (
+        next_kind_fire,
+        run_open_session_job,
+        run_scheduler,
+        run_session_job,
+    )
 
     if dry_run:
-        from datetime import UTC, datetime
-
         delay = timedelta(minutes=config.SEND_DELAY_MINUTES)
         now = datetime.now(UTC)
-        print(f"schedule: now {now.isoformat()}, send delay {config.SEND_DELAY_MINUTES}min")
-        for _ in range(5):
-            now = next_fire(now, delay)
-            print(f"  next fire: {now.isoformat()}")
-            now = now + timedelta(seconds=1)
+        print(
+            f"schedule: now {now.isoformat()}  "
+            f"(close = session close +{config.SEND_DELAY_MINUTES}min, "
+            f"open = {config.OPEN_SEND_ET_HOUR:02d}:{config.OPEN_SEND_ET_MINUTE:02d} ET fixed)"
+        )
+        for _ in range(8):
+            when, kind = next_kind_fire(now, delay)
+            et = when.astimezone(calendar.ET)
+            session = "session" if calendar.is_session(et.date()) else "non-session"
+            print(
+                f"  {kind:5}  {when.isoformat()}   "
+                f"{et:%a %Y-%m-%d %H:%M} ET   ({session})"
+            )
+            now = when + timedelta(seconds=1)
         return
 
     engine = get_engine()
     if once:
-        from datetime import UTC, datetime
-
-        outcome = run_session_job(engine, now_utc=datetime.now(UTC))
-        print(f"schedule --once: {outcome}")
+        now = datetime.now(UTC)
+        if kind == "open":
+            outcome = run_open_session_job(engine, now_utc=now)
+        else:
+            outcome = run_session_job(engine, now_utc=now)
+        print(f"schedule --once ({kind}): {outcome}")
         return
 
     run_scheduler(engine)

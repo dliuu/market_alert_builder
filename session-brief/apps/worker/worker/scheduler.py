@@ -25,6 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from datetime import time as clock_time  # `time` is already the stdlib module here
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -36,6 +37,7 @@ from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID
 from worker.providers.base import MarketDataProvider
 
 UTC = ZoneInfo("UTC")
+ET = calendar.ET  # America/New_York — the tz all wall-clock scheduling uses
 
 
 # --- Dead-man's switch (Healthchecks.io) ------------------------------------
@@ -73,7 +75,7 @@ def fire_time(d: date, delay: timedelta) -> datetime:
 
 
 def next_fire(now_utc: datetime, delay: timedelta) -> datetime:
-    """The next fire instant strictly after ``now_utc``. Walks forward from
+    """The next close fire instant strictly after ``now_utc``. Walks forward from
     today's ET date until a day's fire time is in the future — so a run that
     finishes at/after its own fire time rolls cleanly to the next day."""
     d = calendar.today_et(now_utc)
@@ -81,6 +83,49 @@ def next_fire(now_utc: datetime, delay: timedelta) -> datetime:
         ft = fire_time(d, delay)
         if ft > now_utc:
             return ft
+        d = d + timedelta(days=1)
+    raise RuntimeError(f"no fire time within 8 days of {now_utc}")  # pragma: no cover
+
+
+def open_fire_time(d: date) -> datetime | None:
+    """When the open brief for session ``d`` fires: a **fixed 08:15 ET**, or
+    ``None`` if ``d`` isn't a trading session.
+
+    This is deliberately *not* the close fire's construction. The close is
+    anchored on the real session close plus a delay, which is what makes a
+    half-day move the send automatically (D20). The open brief has no such
+    anchor — it is read before the bell, and a half-day is still a normal
+    morning — so it is a wall-clock time converted through ``America/New_York``
+    (invariant 8, so DST doesn't shift it twice a year).
+
+    Unlike the close fire it also does not run on non-sessions. The close fire
+    keeps firing daily because it carries the dead-man's-switch heartbeat; the
+    open brief has its own check and nothing to say on a holiday.
+    """
+    if not calendar.is_session(d):
+        return None
+    et_time = clock_time(config.OPEN_SEND_ET_HOUR, config.OPEN_SEND_ET_MINUTE)
+    return datetime.combine(d, et_time, tzinfo=ET).astimezone(UTC)
+
+
+def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
+    """The next fire of *either* kind, as ``(instant, kind)``.
+
+    One loop over both schedules rather than two independent triggers: the
+    scheduler stays a single self-rescheduling one-shot (D20's shape), and the
+    ordering between the morning and evening runs is explicit rather than
+    emergent from two timers racing.
+    """
+    d = calendar.today_et(now_utc)
+    for _ in range(8):
+        candidates: list[tuple[datetime, str]] = [(fire_time(d, delay), "close")]
+        open_at = open_fire_time(d)
+        if open_at is not None:
+            candidates.append((open_at, "open"))
+
+        future = sorted(c for c in candidates if c[0] > now_utc)
+        if future:
+            return future[0]
         d = d + timedelta(days=1)
     raise RuntimeError(f"no fire time within 8 days of {now_utc}")  # pragma: no cover
 
@@ -232,6 +277,77 @@ def run_session_job(
         raise
 
 
+def run_open_session_job(
+    engine: Engine,
+    *,
+    now_utc: datetime,
+    user_id: str = DEV_USER_ID,
+    recipient: str | None = None,
+    sender: str | None = None,
+    healthcheck_url: str | None = None,
+) -> str:
+    """The 08:15 ET run. Returns ``skipped-holiday`` or ``sent``.
+
+    Deliberately simpler than the close job: there is **no bar poll**, because
+    the open brief reads the *prior* close, which was already cached last night,
+    and **no skip gate**, because the open brief always sends (docs/05). M15
+    gives the pre-open stage real ingest work; in M14 it has none.
+    """
+    from worker.assemble_open import assemble_open_and_store
+    from worker.deliver import deliver_brief
+    from worker.narrate import default_narrator
+
+    hc = config.HEALTHCHECKS_OPEN_URL if healthcheck_url is None else healthcheck_url
+    session_date = calendar.today_et(now_utc)
+    try:
+        if not calendar.is_session(session_date):
+            print(f"open {session_date}: not a trading session — skipping.")
+            ping_success(hc)
+            return "skipped-holiday"
+
+        prior = calendar.previous_session(session_date)
+
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                obj = assemble_open_and_store(
+                    conn,
+                    user_id,
+                    session_date,
+                    prior_session=prior,
+                    generated_at=now_utc,
+                    narrator=default_narrator(),
+                )
+                trans.commit()
+            except Exception:
+                trans.rollback()
+                raise
+
+        to = recipient or config.BRIEF_RECIPIENT
+        frm = sender or config.BRIEF_FROM
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                result = deliver_brief(
+                    conn,
+                    user_id=user_id,
+                    session_date=session_date,
+                    kind="open",
+                    recipient=to,
+                    sender=frm,
+                )
+                trans.commit()
+            except Exception:
+                trans.rollback()
+                raise
+        print(f"open {session_date}: {result.status} → {to} ({obj.brief_id}).")
+        ping_success(hc)
+        return "sent"
+    except Exception as exc:
+        ping_fail(hc, f"{session_date} open: {exc!r}")
+        raise
+
+
 def _default_provider() -> MarketDataProvider:
     from worker.providers.tiingo import TiingoProvider
 
@@ -242,26 +358,39 @@ def _default_provider() -> MarketDataProvider:
 
 
 def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live, not in unit tests
-    """Start the self-rescheduling daily loop. A single one-shot job fires at the
-    next close+delay, runs the day's job, then schedules the following day —
-    rather than a fixed cron, so the send tracks half-days automatically."""
+    """Start the self-rescheduling loop. Still a **single** one-shot job rather
+    than a cron or two competing triggers (D20's shape): each tick runs whichever
+    kind is due, then asks ``next_kind_fire`` for the next one of either kind.
+
+    That keeps the half-day behaviour automatic for the close, the wall-clock
+    behaviour exact for the open, and the ordering between them explicit."""
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.date import DateTrigger
 
     delay = timedelta(minutes=config.SEND_DELAY_MINUTES)
     sched = BlockingScheduler(timezone="UTC")
 
-    def tick() -> None:
+    def tick(kind: str) -> None:
         try:
-            run_session_job(engine, now_utc=datetime.now(UTC))
+            now = datetime.now(UTC)
+            if kind == "open":
+                run_open_session_job(engine, now_utc=now)
+            else:
+                run_session_job(engine, now_utc=now)
         except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
-            print(f"scheduler: run failed: {exc!r}")
+            print(f"scheduler: {kind} run failed: {exc!r}")
         finally:
-            nxt = next_fire(datetime.now(UTC) + timedelta(seconds=1), delay)
-            sched.add_job(tick, DateTrigger(run_date=nxt), id="daily", replace_existing=True)
-            print(f"scheduler: next fire at {nxt.isoformat()}")
+            nxt, nxt_kind = next_kind_fire(datetime.now(UTC) + timedelta(seconds=1), delay)
+            sched.add_job(
+                tick,
+                DateTrigger(run_date=nxt),
+                args=[nxt_kind],
+                id="brief",
+                replace_existing=True,
+            )
+            print(f"scheduler: next fire {nxt_kind} at {nxt.isoformat()}")
 
-    first = next_fire(datetime.now(UTC), delay)
-    sched.add_job(tick, DateTrigger(run_date=first), id="daily")
-    print(f"scheduler: started; first fire at {first.isoformat()}")
+    first, first_kind = next_kind_fire(datetime.now(UTC), delay)
+    sched.add_job(tick, DateTrigger(run_date=first), args=[first_kind], id="brief")
+    print(f"scheduler: started; first fire {first_kind} at {first.isoformat()}")
     sched.start()
