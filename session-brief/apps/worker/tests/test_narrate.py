@@ -30,6 +30,24 @@ def _why(obj: BriefObject, symbol: str) -> str | None:
     return row.why
 
 
+def _obj_with_attribution(rows: list[dict[str, object]]) -> BriefObject:
+    """Build a BriefObject whose attribution rows carry the given resid_z
+    (and optionally theme_bps/resid_bps), for prompt-salience tests."""
+    payload = json.loads(_FIXTURE.read_text())
+    base_row = payload["sections"][0]["rows"][0]
+    payload["sections"][0]["rows"] = [
+        {
+            **base_row,
+            "symbol": row["symbol"],
+            "resid_z": row.get("resid_z"),
+            "theme_bps": row.get("theme_bps"),
+            "resid_bps": row.get("resid_bps"),
+        }
+        for row in rows
+    ]
+    return BriefObject.model_validate(payload)
+
+
 # --- build_prompt ---------------------------------------------------------
 
 
@@ -37,6 +55,34 @@ def test_prompt_lists_the_attribution_symbols_and_forbids_numbers() -> None:
     prompt = build_prompt(_obj())
     assert "'A'" in prompt and "'B'" in prompt  # both attribution rows named
     assert "prose only" in prompt.lower()
+
+
+def test_build_prompt_names_residual_lead() -> None:
+    obj = _obj_with_attribution(
+        [
+            {"symbol": "AAA", "resid_z": 0.4},
+            {"symbol": "BBB", "resid_z": 3.5},
+            {"symbol": "CCC", "resid_z": -1.1},
+        ]
+    )
+    prompt = build_prompt(obj)
+    assert "BBB" in prompt
+    # The lead instruction must single out the top-|resid_z| name.
+    assert "BBB" in prompt.split("one_thing")[1][:200]
+
+
+def test_build_prompt_still_lists_all_symbols_for_why() -> None:
+    obj = _obj_with_attribution(
+        [{"symbol": "AAA", "resid_z": 1.0}, {"symbol": "BBB", "resid_z": 2.0}]
+    )
+    prompt = build_prompt(obj)
+    assert "AAA" in prompt and "BBB" in prompt
+
+
+def test_parse_still_drops_digits() -> None:  # guard unchanged
+    obj = _obj_with_attribution([{"symbol": "AAA", "resid_z": 2.0}])
+    parsed = parse_narration('{"one_thing":"Up 5% today","why":{}}', obj)
+    assert parsed.one_thing is None
 
 
 # --- parse_narration ------------------------------------------------------
