@@ -100,14 +100,15 @@ Stage ⑤ sends the *computed* object and expects JSON back, keyed by section id
 ```jsonc
 {
   "one_thing": "…",
-  "why": { "SNDK": "…", "ASTS": "…" },
+  "tape_read": "…",          // open brief §2, lands in the section's note (M15)
+  "why": { "SNDK": "…" },    // close: attribution rows · open: pre-market rows
   "sector_notes": { "semis": "…" }
 }
 ```
 
 Three rules:
 
-1. **The model never produces a number.** Prompt it to write causal prose and let the tables carry the figures. Any digit in its output is a hallucination surface.
+1. **The model never produces a number.** Prompt it to write causal prose and let the tables carry the figures. Any digit in its output is a hallucination surface. `tape_read` is subject to the same digit guard; a read containing a figure is dropped and §2 renders as a table alone.
 2. **Give it the news headlines** — attributing a move to a cause is the one thing it does better than the pipeline.
 3. **Failure is non-fatal.** Malformed JSON or a 500 means render tables-only with a one-line note.
 

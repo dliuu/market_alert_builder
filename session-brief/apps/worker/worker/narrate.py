@@ -1,5 +1,5 @@
 """Stage ⑤ narrate: Claude writes the prose fields (``one_thing`` + per-name
-``why``) and nothing else.
+``why`` + the open brief's ``tape_read``) and nothing else.
 
 The stage is deliberately **non-fatal** (docs/02 pipeline, docs/04 narration
 contract): if the Claude call fails for any reason — no API key, auth error,
@@ -17,12 +17,13 @@ invariant 2 "the LLM never produces a number"):
 
 - **No numbers.** Any narration string containing a digit is dropped — a digit
   is a hallucination surface; every figure is carried by the tables.
-- **No stray keys.** A ``why`` for a symbol that isn't in the attribution rows,
-  or any key the response schema doesn't define, is dropped.
+- **No stray keys.** A ``why`` for a symbol that isn't in the attribution rows
+  (close) or the pre-market rows (open), or any key the response schema
+  doesn't define, is dropped.
 
-Only ``one_thing`` and the attribution rows' ``why`` are populated here.
-``sector_notes`` (docs/04) waits on a sector section, which the close brief
-doesn't build yet.
+``one_thing``, the attribution/pre-market rows' ``why``, and the open brief's
+§2 ``tape_read`` (M15) are populated here. ``sector_notes`` (docs/04) waits on
+a sector section, which the close brief doesn't build yet.
 """
 
 from __future__ import annotations
@@ -57,12 +58,16 @@ class _Narration(BaseModel):
 
     one_thing: str | None = None
     why: dict[str, str] = {}
+    # §2's "read" paragraph (M15). It lands in the overnight_tape section's
+    # `note`, which is why it needs no schema change — the section already
+    # carries a note, and the digit guard applies to it like everything else.
+    tape_read: str | None = None
 
 
 def build_prompt(obj: BriefObject) -> str:
     """The user turn: the computed object as context plus an explicit request for
     prose-only JSON. The model reads the figures but must not restate them."""
-    symbols = sorted(_attribution_symbols(obj))
+    symbols = sorted(_narratable_symbols(obj))
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
@@ -81,17 +86,25 @@ def build_prompt(obj: BriefObject) -> str:
 def build_open_prompt(obj: BriefObject) -> str:
     """The open brief's user turn (M14). Same contract, opposite tense: the close
     brief explains a session that happened, the open brief reads the one about to
-    start. It asks only for ``one_thing`` — docs/05 gives §4/§5/§6 no ``why``
-    line, so requesting per-name prose would invite text the object cannot
-    carry."""
+    start. It asks for ``one_thing``, §2's ``tape_read``, and §3's per-name
+    ``why`` — docs/05 gives §4/§5/§6 no ``why`` line, so requesting prose for
+    those would invite text the object cannot carry."""
+    symbols = sorted(_narratable_symbols(obj))
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
     return (
         "Write the prose for this morning's pre-open brief. Return ONLY a JSON "
-        'object with one key:\n'
+        "object:\n"
         '  "one_thing": one short paragraph (2-3 sentences) naming what matters '
         "most about the day ahead — what to be ready for, and why it matters for "
         "this book. Look forward, not back: this is written before the bell and "
-        "there is no performance to report.\n\n"
+        "there is no performance to report.\n"
+        '  "tape_read": one short paragraph reading the overnight tape against '
+        "this book's sectors — what the macro backdrop implies for how these "
+        "names open. Direction and cause in words; no figures.\n"
+        f'  "why": an object mapping each of these tickers exactly — {symbols} — '
+        "to one causal sentence explaining its pre-market move.\n"
+        "Lead `one_thing` with the first pre-market row: it is the largest gap "
+        "in the book this morning.\n\n"
         "Rules: prose only. Never write a number, percentage, price, or basis "
         "point — describe direction and cause in words and let the tables carry "
         "the figures. Do not invent news or events you were not given.\n\n"
@@ -120,7 +133,7 @@ def parse_narration(raw: str, obj: BriefObject) -> _Narration:
     data = json.loads(raw)
     narration = _Narration.model_validate(data)
 
-    symbols = _attribution_symbols(obj)
+    symbols = _narratable_symbols(obj)
     why = {
         symbol: prose
         for symbol, prose in narration.why.items()
@@ -129,7 +142,10 @@ def parse_narration(raw: str, obj: BriefObject) -> _Narration:
     one_thing = narration.one_thing
     if one_thing is not None and _HAS_DIGIT.search(one_thing):
         one_thing = None
-    return _Narration(one_thing=one_thing, why=why)
+    tape_read = narration.tape_read
+    if tape_read is not None and _HAS_DIGIT.search(tape_read):
+        tape_read = None
+    return _Narration(one_thing=one_thing, why=why, tape_read=tape_read)
 
 
 def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
@@ -139,11 +155,13 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
     if narration.one_thing is not None:
         payload["one_thing"] = narration.one_thing
     for section in payload["sections"]:
-        if section["id"] == SectionId.attribution.value:
+        if section["id"] in {s.value for s in _WHY_SECTIONS}:
             for row in section["rows"]:
                 prose = narration.why.get(row["symbol"])
                 if prose is not None:
                     row["why"] = prose
+        if section["id"] == SectionId.overnight_tape.value and narration.tape_read:
+            section["note"] = narration.tape_read
     return BriefObject.model_validate(payload)
 
 
@@ -160,15 +178,21 @@ def narrate_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObjec
     return apply_narration(obj, narration)
 
 
-def _attribution_symbols(obj: BriefObject) -> set[str]:
+_WHY_SECTIONS = (SectionId.attribution, SectionId.premarket)
+
+
+def _narratable_symbols(obj: BriefObject) -> set[str]:
+    """Symbols narration may key a `why` to: the close brief's attribution rows
+    and the open brief's pre-market rows. A brief has one or the other."""
+    out: set[str] = set()
     for section in obj.sections:
-        if section.id is SectionId.attribution:
+        if section.id in _WHY_SECTIONS:
             # `symbol` is optional since v3 (a macro calendar row names no
-            # security). Attribution rows always have one; skipping the None
-            # case keeps the set typed and can only ever drop a row that has
-            # no ticker for narration to key on.
-            return {row.symbol for row in section.rows if row.symbol is not None}
-    return set()
+            # security). Attribution and pre-market rows always have one;
+            # skipping the None case keeps the set typed and can only ever
+            # drop a row that has no ticker for narration to key on.
+            out |= {row.symbol for row in section.rows if row.symbol is not None}
+    return out
 
 
 # --- The impure edge ------------------------------------------------------
