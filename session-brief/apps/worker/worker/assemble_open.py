@@ -40,8 +40,10 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from worker.assemble import SCHEMA_VERSION
 from worker.assemble_shared import session_label
+from worker.claims import Claim
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
+from worker.premarket import PremarketQuote, TapeQuote, tape_change
 
 # §5's trailing window (docs/05: "benchmark 5d, vs SPY 5d").
 _SECTOR_WINDOW = 5
@@ -50,7 +52,7 @@ _SECTOR_WINDOW = 5
 # that only ever showed today would bury a Monday lockup on Friday afternoon.
 _CALENDAR_WINDOW_DAYS = 7
 
-_OMITTED_TAPE = "Overnight tape lands with the futures and macro feed."
+_OMITTED_TAPE = "No overnight tape captured for this session."
 _OMITTED_PREMARKET = "Pre-market moves land with the delayed-quote feed."
 _CLEAR_CALENDAR = "Nothing on the calendar."
 _NO_FLAGS = "Nothing over threshold."
@@ -86,10 +88,13 @@ def assemble_open(
     sectors: list[SectorSetup],
     flags: list[FlagCandidate],
     holdings: dict[str, str],
+    tape: list[TapeQuote],
     user_id: str,
     session_date: date,
     prior_session: date,
     generated_at: datetime,
+    premarket: list[PremarketQuote] | None = None,
+    claims: list[Claim] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
 ) -> BriefObject:
@@ -100,6 +105,10 @@ def assemble_open(
     08:15 on ``session_date`` the last close is the previous trading day's, which
     is not always yesterday (a Tuesday after a Monday holiday looks back to
     Friday). ``generated_at`` is injected, never ``datetime.now()``.
+
+    ``premarket`` and ``claims`` are accepted now so the helper shape is stable
+    across M15's remaining tasks (§3, the horizon-0 claim); this task fills only
+    §2 and leaves both unused.
     """
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -112,7 +121,7 @@ def assemble_open(
         "one_thing": None,  # narration, stage ⑤
         # `book` is deliberately absent, not null: no performance, no P&L.
         "sections": [
-            _omitted("overnight_tape", _OMITTED_TAPE),
+            _overnight_tape(tape),
             _omitted("premarket", _OMITTED_PREMARKET),
             _calendar(events, holdings, session_date),
             _sector_setup(sectors),
@@ -141,6 +150,28 @@ def _omitted(section_id: str, note: str) -> dict[str, object]:
     """A section M14 can't fill, saying so. Suppressed with a note beats absent:
     the reader learns the brief is incomplete by design, not broken."""
     return {"id": section_id, "tier": "suppressed", "note": note, "rows": []}
+
+
+def _overnight_tape(tape: list[TapeQuote]) -> dict[str, object]:
+    """§2 Overnight tape — the macro backdrop plus the foreign proxies this
+    book's sectors make relevant (docs/05). The narrated "read" paragraph lands
+    in ``note`` at stage ⑤; assembly leaves it None."""
+    rows = []
+    for quote in tape:
+        pct, absolute = tape_change(quote)
+        rows.append({
+            "symbol": quote.symbol,
+            "label": quote.label,
+            "level": _float(quote.last),
+            "overnight_pct": _float(pct),
+            "overnight_abs": _float(absolute),
+        })
+    return {
+        "id": "overnight_tape",
+        "tier": "full" if rows else "suppressed",
+        "note": None if rows else _OMITTED_TAPE,
+        "rows": rows,
+    }
 
 
 def _calendar(
@@ -358,6 +389,7 @@ def assemble_open_and_store(
         sectors=sectors,
         flags=surfaced,
         holdings=holdings,
+        tape=[],  # the capture/ingest wiring for §2 is a later M15 task
         user_id=user_id,
         session_date=session_date,
         prior_session=prior_session,

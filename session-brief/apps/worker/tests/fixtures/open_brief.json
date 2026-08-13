@@ -12,7 +12,7 @@
     {
       "id": "overnight_tape",
       "tier": "suppressed",
-      "note": "Overnight tape lands with the futures and macro feed.",
+      "note": "No overnight tape captured for this session.",
       "rows": []
     },
     {
