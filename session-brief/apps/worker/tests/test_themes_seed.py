@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from worker.themes_seed import seed_themes
 
 
-def test_seed_is_idempotent_and_pit(db_conn):
+def test_seed_is_idempotent_and_pit(db_conn: Connection) -> None:
     seed_themes(db_conn)
     first = db_conn.execute(text("SELECT count(*) FROM theme_members")).scalar_one()
     seed_themes(db_conn)  # re-run

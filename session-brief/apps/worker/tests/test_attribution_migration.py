@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 
-def test_attribution_tables_exist_and_are_shared(db_conn):
+def test_attribution_tables_exist_and_are_shared(db_conn: Connection) -> None:
     for table in ("themes", "theme_members", "basket_returns",
                   "attribution_fits", "attribution"):
         db_conn.execute(text(f"SELECT * FROM {table} LIMIT 0"))  # no error = exists

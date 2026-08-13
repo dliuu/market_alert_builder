@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from tests.helpers_attribution import seed_bars_for
 from worker.attribution import refit, score
@@ -13,7 +16,7 @@ D = date(2020, 6, 30)
 NOW = datetime(2020, 6, 30, 22, 0, tzinfo=UTC)
 
 
-def test_refit_then_score_writes_additive_rows(db_conn):
+def test_refit_then_score_writes_additive_rows(db_conn: Connection) -> None:
     seed_themes(db_conn)
     seed_bars_for(db_conn, SYMBOLS, sessions=121)
 
@@ -32,7 +35,7 @@ def test_refit_then_score_writes_additive_rows(db_conn):
         assert abs(total - r["total_bps"]) < Decimal("0.01")
 
 
-def test_refit_writes_basket_returns(db_conn):
+def test_refit_writes_basket_returns(db_conn: Connection) -> None:
     seed_themes(db_conn)
     seed_bars_for(db_conn, SYMBOLS, sessions=121)
     refit(db_conn, D, now_utc=NOW, model_version=MV)
@@ -42,7 +45,7 @@ def test_refit_writes_basket_returns(db_conn):
     assert n > 0
 
 
-def test_score_is_idempotent(db_conn):
+def test_score_is_idempotent(db_conn: Connection) -> None:
     seed_themes(db_conn)
     seed_bars_for(db_conn, SYMBOLS, sessions=121)
     refit(db_conn, D, now_utc=NOW, model_version=MV)

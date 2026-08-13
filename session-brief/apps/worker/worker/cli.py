@@ -152,28 +152,29 @@ def _attribution(attr_command: str | None, *, date_arg: str | None, pm: bool) ->
         from worker.attribution import refit
 
         with engine.begin() as conn:
-            result = refit(conn, trade_date, now_utc=now,
-                           model_version=ATTRIBUTION_MODEL_VERSION)
-        print(f"refit: {result.fits_written} symbol(s); "
-              f"skipped (no data/theme): {result.skipped}")
+            refit_result = refit(conn, trade_date, now_utc=now,
+                                 model_version=ATTRIBUTION_MODEL_VERSION)
+        print(f"refit: {refit_result.fits_written} symbol(s); "
+              f"skipped (no data/theme): {refit_result.skipped}")
         return
 
     if attr_command == "score":
         from worker.attribution import score
 
         with engine.begin() as conn:
-            result = score(conn, trade_date, now_utc=now,
-                           model_version=ATTRIBUTION_MODEL_VERSION, synthetic=pm)
-        print(f"score: {result.rows_written} row(s) (synthetic={pm})")
+            score_result = score(conn, trade_date, now_utc=now,
+                                 model_version=ATTRIBUTION_MODEL_VERSION, synthetic=pm)
+        print(f"score: {score_result.rows_written} row(s) (synthetic={pm})")
         return
 
     if attr_command == "reconcile":
         from worker.reconcile import reconcile
 
         with engine.begin() as conn:
-            result = reconcile(conn, trade_date, now_utc=now,
-                               model_version=ATTRIBUTION_MODEL_VERSION)
-        print(f"reconcile: revised {result.revised}; unchanged {len(result.unchanged)}")
+            recon_result = reconcile(conn, trade_date, now_utc=now,
+                                     model_version=ATTRIBUTION_MODEL_VERSION)
+        print(f"reconcile: revised {recon_result.revised}; "
+              f"unchanged {len(recon_result.unchanged)}")
         return
 
     raise SystemExit("unknown attribution subcommand; try themes-seed|refit|score|reconcile")

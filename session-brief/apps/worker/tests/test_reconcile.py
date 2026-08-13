@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from datetime import UTC, date, datetime
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from tests.helpers_attribution import seed_bars_for
 from worker.attribution import refit, score
@@ -13,12 +16,12 @@ D = date(2020, 6, 30)
 NOW = datetime(2020, 6, 30, 22, 0, tzinfo=UTC)
 
 
-def test_needs_revision_threshold():
+def test_needs_revision_threshold() -> None:
     assert needs_revision(0.05, 0.02, tol=0.001) is True
     assert needs_revision(0.0201, 0.02, tol=0.001) is False
 
 
-def test_pm_synth_then_am_reconcile_flips_revised_and_converges(db_conn):
+def test_pm_synth_then_am_reconcile_flips_revised_and_converges(db_conn: Connection) -> None:
     seed_themes(db_conn)
     seed_bars_for(db_conn, SYMBOLS, sessions=121)
     refit(db_conn, D, now_utc=NOW, model_version=MV)
