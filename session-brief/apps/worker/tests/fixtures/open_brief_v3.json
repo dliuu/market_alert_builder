@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 3,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-13-open",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-13",
@@ -48,13 +48,7 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null,
-          "level": null,
-          "overnight_pct": null,
-          "overnight_abs": null,
-          "pre_pct": null,
-          "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket": null
         },
         {
           "symbol": null,
@@ -78,13 +72,7 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null,
-          "level": null,
-          "overnight_pct": null,
-          "overnight_abs": null,
-          "pre_pct": null,
-          "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket": null
         },
         {
           "symbol": "ASTS",
@@ -108,13 +96,7 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null,
-          "level": null,
-          "overnight_pct": null,
-          "overnight_abs": null,
-          "pre_pct": null,
-          "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket": null
         }
       ]
     },
@@ -145,13 +127,7 @@
           "benchmark_symbol": "SMH",
           "ret_5d": 0.031,
           "vs_spy_5d": 0.012,
-          "premarket": null,
-          "level": null,
-          "overnight_pct": null,
-          "overnight_abs": null,
-          "pre_pct": null,
-          "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket": null
         },
         {
           "symbol": null,
@@ -175,13 +151,7 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null,
-          "level": null,
-          "overnight_pct": null,
-          "overnight_abs": null,
-          "pre_pct": null,
-          "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket": null
         }
       ]
     },

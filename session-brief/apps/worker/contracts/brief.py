@@ -141,6 +141,30 @@ class Row(BaseModel):
         None,
         description='Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15.',
     )
+    level: float | None = Field(
+        None,
+        description="Open brief §2 (overnight tape): the symbol's overnight level — a futures price, a yield, an index level (M15).",
+    )
+    overnight_pct: float | None = Field(
+        None,
+        description='Open brief §2: overnight change as a fraction, last vs prior close. Null for level-quoted symbols (10Y, VIX), where a percent change reads as noise and the absolute move is the figure (M15).',
+    )
+    overnight_abs: float | None = Field(
+        None,
+        description="Open brief §2: overnight change in the symbol's own units — index points, yield points, volatility points (M15).",
+    )
+    pre_pct: float | None = Field(
+        None,
+        description='Open brief §3 (pre-market): extended_last vs prior close, as a fraction (M15).',
+    )
+    gap_cents: int | None = Field(
+        None,
+        description='Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).',
+    )
+    premarket_vol_mult: float | None = Field(
+        None,
+        description='Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15).',
+    )
 
 
 class Type(Enum):
@@ -175,6 +199,7 @@ class Type1(Enum):
     relative_strength = 'relative_strength'
     supply_overhang = 'supply_overhang'
     breadth = 'breadth'
+    premarket_gap = 'premarket_gap'
 
 
 class Direction(Enum):
@@ -198,7 +223,10 @@ class Claim(BaseModel):
     symbol: str
     type: Type1
     direction: Direction
-    horizon_sessions: conint(ge=1)
+    horizon_sessions: conint(ge=0) = Field(
+        ...,
+        description="Sessions until the claim is due. 0 is the open brief's morning claim, resolved at the same session's close — the same-day loop D16b built the engine for (M15).",
+    )
     outcome: Outcome
 
 

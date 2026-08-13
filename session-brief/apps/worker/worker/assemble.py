@@ -45,7 +45,9 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 # section, populated `suppressed[]`). v3 = M14 (nullable `book` so the open brief
 # can omit P&L, plus the §4 calendar / §5 sector-setup row fields and an optional
 # row `symbol` for macro releases).
-SCHEMA_VERSION = 3
+# v4 (M15): §2/§3 row fields and the horizon-0 morning claim. Coordinate with
+# M13, which also bumps — landing order assigns the number (D22).
+SCHEMA_VERSION = 4
 
 _BPS_PER_UNIT = 10_000
 

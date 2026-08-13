@@ -122,6 +122,30 @@ export interface Row {
    * Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15.
    */
   premarket?: number | null;
+  /**
+   * Open brief §2 (overnight tape): the symbol's overnight level — a futures price, a yield, an index level (M15).
+   */
+  level?: number | null;
+  /**
+   * Open brief §2: overnight change as a fraction, last vs prior close. Null for level-quoted symbols (10Y, VIX), where a percent change reads as noise and the absolute move is the figure (M15).
+   */
+  overnight_pct?: number | null;
+  /**
+   * Open brief §2: overnight change in the symbol's own units — index points, yield points, volatility points (M15).
+   */
+  overnight_abs?: number | null;
+  /**
+   * Open brief §3 (pre-market): extended_last vs prior close, as a fraction (M15).
+   */
+  pre_pct?: number | null;
+  /**
+   * Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).
+   */
+  gap_cents?: number | null;
+  /**
+   * Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15).
+   */
+  premarket_vol_mult?: number | null;
 }
 export interface Flag {
   type: "concentration" | "correlation" | "runway" | "dilution" | "earnings_soon" | "supply_event" | "short_interest";
@@ -134,8 +158,11 @@ export interface Flag {
 export interface Claim {
   id: string;
   symbol: string;
-  type: "catalyst_pending" | "relative_strength" | "supply_overhang" | "breadth";
+  type: "catalyst_pending" | "relative_strength" | "supply_overhang" | "breadth" | "premarket_gap";
   direction: "up" | "down" | "neutral";
+  /**
+   * Sessions until the claim is due. 0 is the open brief's morning claim, resolved at the same session's close — the same-day loop D16b built the engine for (M15).
+   */
   horizon_sessions: number;
   outcome: "correct" | "wrong" | "unresolved" | null;
 }

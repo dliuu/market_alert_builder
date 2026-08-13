@@ -133,6 +133,30 @@
         "premarket": {
           "type": ["number", "null"],
           "description": "Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15."
+        },
+        "level": {
+          "type": ["number", "null"],
+          "description": "Open brief §2 (overnight tape): the symbol's overnight level — a futures price, a yield, an index level (M15)."
+        },
+        "overnight_pct": {
+          "type": ["number", "null"],
+          "description": "Open brief §2: overnight change as a fraction, last vs prior close. Null for level-quoted symbols (10Y, VIX), where a percent change reads as noise and the absolute move is the figure (M15)."
+        },
+        "overnight_abs": {
+          "type": ["number", "null"],
+          "description": "Open brief §2: overnight change in the symbol's own units — index points, yield points, volatility points (M15)."
+        },
+        "pre_pct": {
+          "type": ["number", "null"],
+          "description": "Open brief §3 (pre-market): extended_last vs prior close, as a fraction (M15)."
+        },
+        "gap_cents": {
+          "type": ["integer", "null"],
+          "description": "Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15)."
+        },
+        "premarket_vol_mult": {
+          "type": ["number", "null"],
+          "description": "Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15)."
         }
       }
     },
@@ -158,9 +182,13 @@
         "id": { "type": "string" },
         "symbol": { "type": "string" },
         "type": { "enum": ["catalyst_pending", "relative_strength",
-                           "supply_overhang", "breadth"] },
+                           "supply_overhang", "breadth", "premarket_gap"] },
         "direction": { "enum": ["up", "down", "neutral"] },
-        "horizon_sessions": { "type": "integer", "minimum": 1 },
+        "horizon_sessions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sessions until the claim is due. 0 is the open brief's morning claim, resolved at the same session's close — the same-day loop D16b built the engine for (M15)."
+        },
         "outcome": { "enum": ["correct", "wrong", "unresolved", null] }
       }
     }

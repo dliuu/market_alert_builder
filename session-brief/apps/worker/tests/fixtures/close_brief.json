@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-11-close",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-11",
@@ -43,7 +43,13 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null
+          "premarket": null,
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         },
         {
           "symbol": "B",
@@ -67,7 +73,13 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null
+          "premarket": null,
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         }
       ]
     },
@@ -98,7 +110,13 @@
           "benchmark_symbol": null,
           "ret_5d": null,
           "vs_spy_5d": null,
-          "premarket": null
+          "premarket": null,
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         }
       ]
     }

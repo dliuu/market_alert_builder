@@ -13,6 +13,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from worker.assemble import SCHEMA_VERSION
 from worker.assemble_open import assemble_open_and_store, read_open_inputs
 from worker.events_seed import seed_events
 
@@ -91,7 +92,7 @@ def test_open_brief_stores_a_book_less_body(db_conn: Connection) -> None:
         text("SELECT body FROM briefs WHERE user_id = :u AND kind = 'open'"), {"u": _USER}
     ).scalar_one()
     assert stored["book"] is None
-    assert stored["schema_version"] == 3
+    assert stored["schema_version"] == SCHEMA_VERSION
 
 
 def test_sector_setup_reads_real_bars(db_conn: Connection) -> None:
