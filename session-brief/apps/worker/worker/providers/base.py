@@ -51,12 +51,14 @@ class MarketDataProvider(Protocol):
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         ...
 
-    # --- Pre-market and the overnight tape (open brief §2/§3, M15) ---------
-    #
-    # Premium-tier, licensing-sensitive data (D8): delayed pre-market quotes and
-    # overnight futures/macro. Declared here so the sections are written against
-    # the seam; `SyntheticPremarketProvider` satisfies it today and a licensed
-    # `FdnProvider` satisfies it later, with no change above this line.
+
+class PremarketProvider(Protocol):
+    """Pre-market prints and the overnight macro tape.
+
+    A separate protocol from MarketDataProvider because it is a separate,
+    premium, licensing-gated feed (D8) — a vendor may serve either, both, or
+    neither, and the EOD provider structurally cannot serve this.
+    """
 
     def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
         """Pre-market print and summed pre-market volume per symbol. Returns

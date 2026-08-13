@@ -119,7 +119,7 @@ def test_a_live_provider_takes_the_same_path(db_conn: Connection) -> None:
         get_forex_quotes = get_futures_prices
 
     ingest_premarket(
-        db_conn, MockLive(),  # type: ignore[arg-type]
+        db_conn, MockLive(),
         held=["ZLIVE"], tape=[], session_date=_SESSION,
         captured_at=capture_stamp(_SESSION),
     )

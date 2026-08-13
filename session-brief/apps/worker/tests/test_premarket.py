@@ -61,9 +61,9 @@ def test_symbol_without_a_prior_close_is_skipped() -> None:
 
 def test_synthetic_provider_satisfies_the_protocol() -> None:
     """The point of the seam: the seed and the licensed feed are interchangeable."""
-    from worker.providers.base import MarketDataProvider
+    from worker.providers.base import PremarketProvider
 
-    provider: MarketDataProvider = SyntheticPremarketProvider(
+    provider: PremarketProvider = SyntheticPremarketProvider(
         {"SNDK": Decimal("47.32")}, _SESSION
     )
     (pre,) = provider.get_latest_prices(["SNDK"])

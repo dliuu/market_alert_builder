@@ -25,7 +25,7 @@ from sqlalchemy.engine import Connection
 
 from worker import config
 from worker.constants import PREMARKET_THRESHOLD, TAPE_SYMBOLS
-from worker.providers.base import MarketDataProvider
+from worker.providers.base import PremarketProvider
 
 
 @dataclass(frozen=True)
@@ -187,7 +187,7 @@ def prior_closes(
 
 def ingest_premarket(
     conn: Connection,
-    provider: MarketDataProvider,
+    provider: PremarketProvider,
     *,
     held: list[str],
     tape: list[tuple[str, str, str]],
