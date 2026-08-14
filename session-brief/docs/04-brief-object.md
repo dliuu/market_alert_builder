@@ -47,7 +47,9 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
         { "symbol": "SNDK", "close": 49.71, "day_return": 0.059,
           "day_pnl_cents": 221600, "contribution_bps": 140,
           "total_pnl_cents": 440800, "total_pct": 0.125,
-          "why": null }                    // filled by the narration stage
+          "why": null,                     // filled by the narration stage
+          "market_bps": 34, "theme_bps": 18, "resid_bps": 88,
+          "resid_z": 3.1, "provisional": false }
       ]
     }
   ],
@@ -78,6 +80,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 - **Money is integer cents.** Never float, anywhere in the object.
 - **Bump `schema_version` on any shape change** and keep old renderers. You will want to read year-old briefs.
 - **`tier` drives suppression.** The renderer never decides what to hide; assembly does.
+- **v4 (M13): `market_bps`/`theme_bps`/`resid_bps`/`resid_z`/`provisional`** decompose each attribution row's move (`market + theme + resid == total_bps`, read verbatim from the shared `attribution` table, never recomputed in assembly). Attribution rows are ordered by `|resid_z|` descending, with `null` (no decomposition yet) sorted last — the largest idiosyncratic mover leads. A residual-material name (`|resid_z| >= 2.0`) is always `full` tier, even on a flat raw move.
 - **The JSON Schema is the contract, not the generated Pydantic.** Codegen types a
   non-required property as `T | None = None`, so Pydantic will happily emit a
   `null` the schema's own `type`/`enum` rejects — and only the TypeScript side
@@ -92,6 +95,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 1 | M4 | `book` + `attribution` |
 | 2 | M5 | per-row `tier`, `tape_quality` section, populated `suppressed[]` |
 | 3 | M14 | `book` nullable (the open brief omits P&L); §4 calendar and §5 sector-setup row fields; `row.symbol` optional for macro releases |
+| 4 | M13 | attribution decomposition (`market_bps`/`theme_bps`/`resid_bps`/`resid_z`/`provisional`) + `|resid_z|` salience ordering on the close brief's attribution rows |
 
 ## Narration contract
 

@@ -52,6 +52,13 @@ BPS = 10_000
 HALF_LIFE = 60.0
 R2_COLLAPSE_FLOOR = 0.05
 
+RESID_MATERIAL_Z = 2.0  # |resid_z| for a residual-material name (M13 tunable).
+
+
+def material_residual(resid_z: float | None) -> bool:
+    """A name whose idiosyncratic move is large enough to lead/gate on (M13 §2/§5)."""
+    return resid_z is not None and abs(resid_z) >= RESID_MATERIAL_Z
+
 
 @dataclass(frozen=True)
 class Fit:
@@ -329,6 +336,43 @@ _UPSERT_FIT = text("""
        alpha=EXCLUDED.alpha, r2=EXCLUDED.r2, resid_scale=EXCLUDED.resid_scale,
        n_obs=EXCLUDED.n_obs, cold_start=EXCLUDED.cold_start, diagnostics=EXCLUDED.diagnostics
 """)
+
+_READ_DECOMP = text("""
+    SELECT symbol, market_bps, theme_bps, resid_bps, resid_z, provisional
+    FROM attribution
+    WHERE trade_date = :d AND model_version = :mv AND symbol = ANY(:syms)
+""")
+
+
+def read_attribution_decomp(
+    conn: Connection, symbols: list[str], trade_date: date, model_version: int
+) -> dict[str, dict[str, object]]:
+    """The latest stored decomposition per held symbol for the session — the
+    shared table filtered to held names (M11/D21: no per-user compute)."""
+    if not symbols:
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    for row in conn.execute(
+        _READ_DECOMP, {"d": trade_date, "mv": model_version, "syms": symbols}
+    ).mappings():
+        out[row["symbol"]] = {
+            "market_bps": _round_half_up(row["market_bps"]),
+            "theme_bps": _round_half_up(row["theme_bps"]),
+            "resid_bps": _round_half_up(row["resid_bps"]),
+            "resid_z": float(row["resid_z"]) if row["resid_z"] is not None else None,
+            "provisional": bool(row["provisional"]),
+        }
+    return out
+
+
+def _round_half_up(value: Decimal | None) -> int | None:
+    """Round a fractional stored *_bps to the nearest integer, ties away from
+    zero — matches assemble._round_bps's convention. Plain ``int()`` truncates
+    toward zero and is wrong-direction for negatives (int(-34.7) == -34)."""
+    if value is None:
+        return None
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
 
 _UPSERT_ATTR = text("""
     INSERT INTO attribution

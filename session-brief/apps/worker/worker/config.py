@@ -34,6 +34,12 @@ BRIEF_RECIPIENT: str = os.environ.get("BRIEF_RECIPIENT", "")
 # (including a correctly-skipped holiday) and GETs `<url>/fail` on a crash — so a
 # dead worker stops pinging and the check goes red (docs/02). Empty ⇒ no ping.
 HEALTHCHECKS_URL: str = os.environ.get("HEALTHCHECKS_URL", "")
+# Per-fire dead-man's-switch checks for the attribution schedule (M13). Each
+# attribution fire pings its own check, so a missed refit or a stuck reconcile is
+# visible independently of the daily close heartbeat. Empty ⇒ no ping.
+HEALTHCHECKS_REFIT_URL: str = os.environ.get("HEALTHCHECKS_REFIT_URL", "")
+HEALTHCHECKS_PM_URL: str = os.environ.get("HEALTHCHECKS_PM_URL", "")
+HEALTHCHECKS_AM_URL: str = os.environ.get("HEALTHCHECKS_AM_URL", "")
 # Minutes after the session close to send the close brief (docs/02: send 16:45,
 # i.e. close + 45). Moves with half-days because it's added to the real close.
 SEND_DELAY_MINUTES: int = int(os.environ.get("SEND_DELAY_MINUTES", "45"))

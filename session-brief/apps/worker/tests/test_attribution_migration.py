@@ -40,3 +40,24 @@ def test_m12_econometrics_schema_present_and_shared(db_conn: Connection) -> None
             "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
         ), {"t": table}).scalars().all()
         assert "user_id" not in cols
+
+
+def test_m13_claims_graded_model_version_and_flag_types(db_conn: Connection) -> None:
+    claims_cols = db_conn.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'claims'"
+    )).scalars().all()
+    assert "graded_model_version" in claims_cols
+
+    # The expanded flags.flag_type CHECK accepts the two new M13 values (Task 7).
+    user_id = db_conn.execute(
+        text("INSERT INTO users (id, email) VALUES (gen_random_uuid(), "
+             "'test-m13-migration@example.invalid') RETURNING id")
+    ).scalar_one()
+    for flag_type in ("theme_misfit", "beta_instability"):
+        db_conn.execute(
+            text(
+                "INSERT INTO flags (user_id, flag_type, first_seen, last_seen, severity) "
+                "VALUES (:u, :ft, CURRENT_DATE, CURRENT_DATE, 'info')"
+            ),
+            {"u": user_id, "ft": flag_type},
+        )

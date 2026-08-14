@@ -53,12 +53,19 @@ def next_session(d: date) -> date:
 
 
 def previous_session(d: date) -> date:
-    """The last trading session strictly before ``d`` — the session the open
-    brief reads. At 08:15 on session D every figure comes from D-1's close
-    (M14), and "the day before" is not "yesterday": a Tuesday after a Monday
-    holiday looks back to Friday."""
-    prev: date = _calendar().previous_session(d.isoformat()).date()
-    return prev
+    """The last trading session strictly before ``d``. ``d`` need not itself be a
+    session: the open brief reads it with a session ``D`` (at 08:15 every figure
+    comes from D-1's close — M14), while the attribution weekend refit passes a
+    non-session date (M13). ``exchange_calendars.previous_session`` requires a
+    session as input, so a non-session ``d`` is rolled back via
+    ``date_to_session`` first. "The day before" is not "yesterday": a Tuesday
+    after a Monday holiday looks back to Friday."""
+    cal = _calendar()
+    if is_session(d):
+        prev: date = cal.previous_session(d.isoformat()).date()
+        return prev
+    rolled: date = cal.date_to_session(d.isoformat(), direction="previous").date()
+    return rolled
 
 
 def today_et(now_utc: datetime) -> date:

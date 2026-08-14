@@ -33,7 +33,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel
 
-from contracts.brief import BriefObject
+from contracts.brief import BriefObject, Row
 from contracts.brief import Id as SectionId
 
 # prompt -> raw JSON text. The single impure edge lives in default_narrator().
@@ -62,17 +62,26 @@ class _Narration(BaseModel):
 def build_prompt(obj: BriefObject) -> str:
     """The user turn: the computed object as context plus an explicit request for
     prose-only JSON. The model reads the figures but must not restate them."""
-    symbols = sorted(_attribution_symbols(obj))
+    rows = _attribution_rows(obj)
+    symbols = sorted(row.symbol for row in rows if row.symbol is not None)
+    lead = _lead_symbol(rows)
+    lead_clause = (
+        f" It must be about {lead}, today's single largest idiosyncratic mover."
+        if lead is not None
+        else ""
+    )
+    framing = _theme_framing(rows)
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
         '  "one_thing": one short paragraph (2-3 sentences) naming the single '
-        "most consequential fact of the session and why it happened.\n"
+        f"most consequential fact of the session and why it happened.{lead_clause}\n"
         f'  "why": an object mapping each of these tickers exactly — {symbols} — '
         "to one causal sentence explaining its move.\n\n"
         "Rules: prose only. Never write a number, percentage, price, or basis "
         "point — describe direction and cause in words and let the tables carry "
         "the figures. Do not invent news you were not given.\n\n"
+        f"{framing}"
         "Session data, for context only — do not restate its figures:\n"
         f"{context}"
     )
@@ -169,6 +178,46 @@ def _attribution_symbols(obj: BriefObject) -> set[str]:
             # no ticker for narration to key on.
             return {row.symbol for row in section.rows if row.symbol is not None}
     return set()
+
+
+def _attribution_rows(obj: BriefObject) -> list[Row]:
+    for section in obj.sections:
+        if section.id is SectionId.attribution:
+            return list(section.rows)
+    return []
+
+
+def _lead_symbol(rows: list[Row]) -> str | None:
+    """The attribution row with the largest |resid_z| — the required subject
+    of one_thing (docs/04: the residual-material name leads)."""
+    lead: Row | None = None
+    lead_abs = -1.0
+    for row in rows:
+        if row.resid_z is None:
+            continue
+        magnitude = abs(row.resid_z)
+        if magnitude > lead_abs:
+            lead_abs = magnitude
+            lead = row
+    return lead.symbol if lead is not None else None
+
+
+def _theme_framing(rows: list[Row]) -> str:
+    """A compact, number-free line per name: did it move with its theme, or on
+    its own? Rows without both bps figures are skipped rather than guessed."""
+    parts = []
+    for row in sorted(rows, key=lambda r: r.symbol or ""):
+        if row.theme_bps is None or row.resid_bps is None:
+            continue
+        moved = (
+            "moved with the theme"
+            if abs(row.theme_bps) >= abs(row.resid_bps)
+            else "moved on its own"
+        )
+        parts.append(f"{row.symbol} {moved}")
+    if not parts:
+        return ""
+    return "Context (words only, no figures): " + "; ".join(parts) + ".\n\n"
 
 
 # --- The impure edge ------------------------------------------------------

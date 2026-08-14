@@ -91,7 +91,7 @@ def test_open_brief_stores_a_book_less_body(db_conn: Connection) -> None:
         text("SELECT body FROM briefs WHERE user_id = :u AND kind = 'open'"), {"u": _USER}
     ).scalar_one()
     assert stored["book"] is None
-    assert stored["schema_version"] == 3
+    assert stored["schema_version"] == 4
 
 
 def test_sector_setup_reads_real_bars(db_conn: Connection) -> None:
