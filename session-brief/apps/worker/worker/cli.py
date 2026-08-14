@@ -14,10 +14,11 @@ from worker import calendar
 from worker.assemble import assemble_and_store
 from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
-from worker.constants import DEV_USER_ID
+from worker.constants import DEV_USER_ID, FDN_TAPE_IDENTIFIERS
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
+from worker.providers.fdn import FEED_ERRORS, FdnClient
 from worker.providers.tiingo import TiingoProvider
 
 
@@ -49,6 +50,12 @@ def main() -> None:
         help="capture a session's pre-market quotes + macro tape (M15 bootstrap)",
     )
     seed_premarket.add_argument("--date", help="session date YYYY-MM-DD; defaults to today")
+
+    fdn_probe = sub.add_parser(
+        "fdn-probe",
+        help="verify FDN_API_KEY, identifier mapping, and feed assumptions (read-only)",
+    )
+    fdn_probe.add_argument("--symbols", help="held symbols to probe, comma-separated")
 
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
@@ -138,6 +145,10 @@ def main() -> None:
 
     if args.command == "seed-premarket":
         _seed_premarket(date_arg=args.date)
+        return
+
+    if args.command == "fdn-probe":
+        _fdn_probe_cmd(symbols_arg=args.symbols)
         return
 
     if args.command == "brief":
@@ -318,6 +329,102 @@ def _seed_premarket(date_arg: str | None) -> None:
     )
 
     print(f"seed-premarket: {written} quote(s) captured for {session_date}")
+
+
+def _fdn_probe_cmd(symbols_arg: str | None) -> None:
+    engine = get_engine()
+    symbols = _resolve_symbols(symbols_arg, engine)
+    client = FdnClient()  # raises a clear message if FDN_API_KEY is unset
+    _fdn_probe(client, symbols=symbols)
+
+
+def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
+    """Day-one verification (M16 Task 8): the handful of vendor assumptions
+    that could not be checked offline. Read-only — no database writes, no
+    raw_payloads capture — and every check is independently fault-tolerant so
+    one bad endpoint never stops the rest from reporting. Always exits 0;
+    a human reads the ✓/✗ lines and decides whether FDN_TAPE_IDENTIFIERS or
+    the parsing code needs an edit before the first live send."""
+    print(f"fdn-probe: now={datetime.now(UTC).isoformat()}")
+
+    # 1. Every FDN_TAPE_IDENTIFIERS entry: fetch, record count, first
+    # trading_symbol — verifies each futures/index/forex identifier guess.
+    for symbol, (endpoint, identifier) in FDN_TAPE_IDENTIFIERS.items():
+        label = f"tape {symbol} -> {endpoint} identifier={identifier}"
+        try:
+            param = "identifier" if endpoint == "futures-prices" else "identifiers"
+            records = client.fetch(endpoint, **{param: identifier})
+            first_symbol = records[0].get("trading_symbol") if records else "n/a"
+            print(f"✓ {label}: {len(records)} record(s), first trading_symbol={first_symbol!r}")
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {exc}")
+
+    # 2. latest-prices for one held symbol: the two most recent `time` values
+    # next to datetime.now(UTC) — confirms the UTC assumption in
+    # _parse_fdn_time by eye.
+    if symbols:
+        held = symbols[0]
+        label = f"latest-prices {held} (UTC assumption)"
+        try:
+            records = client.fetch("latest-prices", identifier=held)
+            times = sorted(str(r.get("time")) for r in records)[-2:]
+            print(f"✓ {label}: latest times={times}  now(UTC)={datetime.now(UTC).isoformat()}")
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {exc}")
+    else:
+        print("✗ latest-prices: no held symbols to probe")
+
+    # 3. futures-prices for ES: latest bar's date vs today — verifies the
+    # session-dated-bar assumption at pre-open time.
+    label = "futures-prices ES (session-dated bar)"
+    try:
+        bars = client.fetch("futures-prices", identifier="ES")
+        bars.sort(key=lambda r: str(r.get("date", "")), reverse=True)
+        latest_date = bars[0].get("date") if bars else "n/a"
+        print(f"✓ {label}: latest bar date={latest_date}  today={date.today().isoformat()}")
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {exc}")
+
+    # 4. stock-quotes for one proxy ETF: raw record keys — verifies the
+    # price/change field assumption.
+    label = "stock-quotes EWT (raw record keys)"
+    try:
+        records = client.fetch("stock-quotes", identifiers="EWT")
+        keys = sorted(records[0].keys()) if records else []
+        print(f"✓ {label}: keys={keys}")
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {exc}")
+
+    # 5. Each calendar + latest-news for today: record counts (also proves
+    # the key's tier covers Premium).
+    today = date.today().isoformat()
+    for endpoint in ("earnings-calendar", "dividends-calendar", "economic-calendar"):
+        label = f"{endpoint} {today}"
+        try:
+            records = client.fetch(endpoint, date=today)
+            print(f"✓ {label}: {len(records)} record(s)")
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {exc}")
+
+    label = f"latest-news {today}"
+    try:
+        records = client.fetch("latest-news", date=today)
+        print(f"✓ {label}: {len(records)} record(s)")
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {exc}")
+
+    # 6. latest-news page size (Task 7 review finding): news_fdn.py hardcodes
+    # offset=page*10, assuming 10 records per page. Confirm live, and confirm
+    # the `date` param is accepted (not silently ignored).
+    label = "latest-news page size (news_fdn.py assumes 10/page)"
+    try:
+        records = client.fetch("latest-news", date=today, offset="0")
+        print(
+            f"✓ {label}: expected=10  got={len(records)}  "
+            f"date param accepted (200 for date={today})"
+        )
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {exc}")
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
