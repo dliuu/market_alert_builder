@@ -467,10 +467,30 @@ def run_open_session_job(
 
         prior = calendar.previous_session(session_date)
 
+        from worker.providers.fdn import FdnClient
+
+        client = FdnClient() if config.FDN_API_KEY else None
         written = ingest_premarket_for_session(
-            engine, session_date=session_date, prior_session=prior, user_id=user_id
+            engine, session_date=session_date, prior_session=prior,
+            user_id=user_id, client=client,
         )
         print(f"open {session_date}: captured {written} pre-market quotes.")
+
+        news: dict[str, list[str]] = {}
+        if client is not None:
+            from worker.events_fdn import ingest_events_for_session
+            from worker.news_fdn import fetch_held_news
+            from worker.providers.fdn import store_captured_payloads
+
+            n_events = ingest_events_for_session(
+                engine, client, session_date=session_date, user_id=user_id
+            )
+            with engine.connect() as conn:
+                held = set(book_symbols(conn, user_id))
+            news = fetch_held_news(client, session_date=session_date, held=held)
+            with engine.begin() as conn:
+                store_captured_payloads(conn, client, as_of=session_date)
+            print(f"open {session_date}: {n_events} calendar events, news for {sorted(news)}.")
 
         with engine.connect() as conn:
             trans = conn.begin()
@@ -482,6 +502,7 @@ def run_open_session_job(
                     prior_session=prior,
                     generated_at=now_utc,
                     narrator=default_narrator(),
+                    news=news,
                 )
                 trans.commit()
             except Exception:

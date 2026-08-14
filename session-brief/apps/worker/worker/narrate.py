@@ -95,7 +95,9 @@ def build_prompt(obj: BriefObject) -> str:
     )
 
 
-def build_open_prompt(obj: BriefObject) -> str:
+def build_open_prompt(
+    obj: BriefObject, headlines: dict[str, list[str]] | None = None
+) -> str:
     """The open brief's user turn (M14). Same contract, opposite tense: the close
     brief explains a session that happened, the open brief reads the one about to
     start. It asks for ``one_thing``, §2's ``tape_read``, and §3's per-name
@@ -108,6 +110,11 @@ def build_open_prompt(obj: BriefObject) -> str:
     can't catch prose. Not asking is the fix at the source — ``apply_narration``
     also refuses to merge a stray ``tape_read`` onto an empty section as a
     second, independent guard.
+
+    ``headlines`` (M16) is symbol → held-name news, folded into the context as
+    plain text — invariant 2 still holds: headlines are prose context the model
+    may draw causal language from, never a source of figures, and the digit
+    guard downstream polices the reply exactly as before.
     """
     symbols = sorted(_narratable_symbols(obj))
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
@@ -118,6 +125,13 @@ def build_open_prompt(obj: BriefObject) -> str:
         if _has_tape_rows(obj)
         else ""
     )
+    news_block = ""
+    if headlines:
+        lines = [f"  {sym}: " + " · ".join(hs) for sym, hs in sorted(headlines.items())]
+        news_block = (
+            "News headlines for these names (attribute moves to causes where "
+            "they explain them; do not restate figures):\n" + "\n".join(lines) + "\n\n"
+        )
     return (
         "Write the prose for this morning's pre-open brief. Return ONLY a JSON "
         "object:\n"
@@ -133,6 +147,7 @@ def build_open_prompt(obj: BriefObject) -> str:
         "Rules: prose only. Never write a number, percentage, price, or basis "
         "point — describe direction and cause in words and let the tables carry "
         "the figures. Do not invent news or events you were not given.\n\n"
+        f"{news_block}"
         "The day's setup, for context only — do not restate its figures:\n"
         f"{context}"
     )
@@ -146,13 +161,17 @@ def _has_tape_rows(obj: BriefObject) -> bool:
     )
 
 
-def narrate_open_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObject:
+def narrate_open_and_apply(
+    obj: BriefObject,
+    narrator: Narrator | None,
+    headlines: dict[str, list[str]] | None = None,
+) -> BriefObject:
     """Stage ⑤ for the open brief. Non-fatal on every path (D19), which is what
     keeps the always-sending open brief always sending."""
     if narrator is None:
         return obj
     try:
-        narration = parse_narration(narrator(build_open_prompt(obj)), obj)
+        narration = parse_narration(narrator(build_open_prompt(obj, headlines)), obj)
     except Exception:
         return obj  # non-fatal (docs/02): tables-only, still valid and sendable
     return apply_narration(obj, narration)

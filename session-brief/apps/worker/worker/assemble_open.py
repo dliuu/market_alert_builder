@@ -122,6 +122,7 @@ def assemble_open(
     claims: list[Claim] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
+    news: dict[str, list[str]] | None = None,
 ) -> BriefObject:
     """Build a validated open ``BriefObject``.
 
@@ -134,8 +135,13 @@ def assemble_open(
     ``claims`` carries the horizon-0 ``premarket_gap`` claims emitted this
     session (M15); ``resolved_claims`` stays empty — resolution is the close
     brief's job.
+
+    ``news`` (M16) is symbol → headlines; only its keys matter here — they
+    widen §3's visibility gate (``clears_threshold(..., has_news=True)``), the
+    same claim-free role invariant 2 gives every narration input. It does not
+    reach ``emit_premarket_gap``: news presence is not a directional call.
     """
-    premarket_section, skipped = _premarket(premarket or [])
+    premarket_section, skipped = _premarket(premarket or [], frozenset(news or {}))
     tape_section = _overnight_tape(tape)
 
     # §2 carries invented levels while `config.premarket_feed_is_synthetic()` is
@@ -205,15 +211,21 @@ def _overnight_tape(tape: list[TapeQuote]) -> dict[str, object]:
     }
 
 
-def _premarket(quotes: list[PremarketQuote]) -> tuple[dict[str, object], list[str]]:
+def _premarket(
+    quotes: list[PremarketQuote], news_symbols: frozenset[str] = frozenset()
+) -> tuple[dict[str, object], list[str]]:
     """§3 Your names, pre-market. Returns the section and the names it skipped.
 
     Ordered by the size of the gap, largest first: §1 leads on the biggest
     pre-market move, and the ordering here is what makes that the row the
     narration prompt sees first (the M13 seam swaps this key for the largest
     overnight |resid_z| without touching anything else).
+
+    ``news_symbols`` (M16) widens the gate: a name carrying held-name news gets
+    a row even under threshold, via ``clears_threshold``'s ``has_news`` — the
+    clause that has existed since M15 with nothing ever passing it ``True``.
     """
-    shown = [q for q in quotes if clears_threshold(q)]
+    shown = [q for q in quotes if clears_threshold(q, has_news=q.symbol in news_symbols)]
     kept = {q.symbol for q in shown}
     skipped = sorted(q.symbol for q in quotes if q.symbol not in kept)
     shown.sort(key=lambda q: abs(pre_pct(q) or Decimal(0)), reverse=True)
@@ -454,6 +466,7 @@ def assemble_open_and_store(
     prior_session: date,
     generated_at: datetime,
     narrator: object | None = None,
+    news: dict[str, list[str]] | None = None,
 ) -> BriefObject:
     """Read the cached inputs, assemble, narrate, and upsert into ``briefs``.
 
@@ -483,9 +496,10 @@ def assemble_open_and_store(
         session_date=session_date,
         prior_session=prior_session,
         generated_at=generated_at,
+        news=news,
     )
     # Stage ⑤ — non-fatal by construction (D19): a failed call ships tables-only.
-    obj = narrate_open_and_apply(obj, narrator)  # type: ignore[arg-type]
+    obj = narrate_open_and_apply(obj, narrator, headlines=news)  # type: ignore[arg-type]
 
     _store(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)

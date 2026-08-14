@@ -349,3 +349,21 @@ def test_sector_setup_carries_the_premarket_column() -> None:
     )
     row = _section(_assemble(sectors=[sector]), "sector_setup").rows[0]
     assert row.premarket == 0.004
+
+
+# --- News: the §3 has_news gate (M16) ---------------------------------------
+
+
+def test_a_sub_threshold_name_with_news_still_gets_a_row_but_no_claim() -> None:
+    """News is a visibility gate and a narration input only — it must not
+    create a claim, because news presence is not a directional call."""
+    quote = _pm("ZNEWS", "100.50", "100.00")  # +0.5%, under PREMARKET_THRESHOLD
+    obj = _assemble(
+        premarket=[quote],
+        holdings={"ZNEWS": "owned"},
+        claims=emit_premarket_gap([quote]),
+        news={"ZNEWS": ["Zed lands a contract"]},
+    )
+    pre = _section(obj, "premarket")
+    assert [r.symbol for r in pre.rows] == ["ZNEWS"]  # 0.5% gap, shown via news
+    assert obj.claims == []                            # news is not a directional call
