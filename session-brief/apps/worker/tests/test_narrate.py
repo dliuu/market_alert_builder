@@ -334,3 +334,62 @@ def test_narration_stays_non_fatal_for_the_open_brief() -> None:
         raise RuntimeError("no key")
 
     assert narrate_open_and_apply(obj, boom) == obj
+
+
+# --- C1: an empty §2 must never be overwritten by a hallucinated read ------
+
+_OMITTED_TAPE_NOTE = "No overnight tape captured for this session."
+
+
+def _open_object_with_empty_tape() -> BriefObject:
+    """A minimal open brief with §2 suppressed — no rows, the sentinel note."""
+    return BriefObject.model_validate(
+        {
+            "schema_version": 3,
+            "brief_id": "u-2026-08-13-open",
+            "user_id": "u",
+            "session_date": "2026-08-13",
+            "kind": "open",
+            "generated_at": "2026-08-13T12:15:00Z",
+            "subject": "Open - Thu Aug 13 - the day ahead",
+            "one_thing": None,
+            "sections": [
+                {
+                    "id": "overnight_tape",
+                    "tier": "suppressed",
+                    "note": _OMITTED_TAPE_NOTE,
+                    "rows": [],
+                }
+            ],
+            "flags": [],
+            "claims": [],
+            "resolved_claims": [],
+            "suppressed": [],
+            "data_quality": {"missing": [], "stale": []},
+        }
+    )
+
+
+def test_tape_read_never_overwrites_the_omitted_note() -> None:
+    """A `tape_read` returned for an empty §2 (the model was asked anyway, or a
+    stale/adversarial narrator response) must leave the honest sentinel note
+    intact — the digit guard cannot catch this because the hallucination is
+    prose, not a figure."""
+    obj = _open_object_with_empty_tape()
+    narrated = narrate_open_and_apply(
+        obj, lambda _p: json.dumps({"tape_read": "Futures point broadly higher overnight."})
+    )
+    section = next(s for s in narrated.sections if s.id.value == "overnight_tape")
+    assert section.note == _OMITTED_TAPE_NOTE
+
+
+def test_open_prompt_does_not_ask_for_tape_read_when_section_is_empty() -> None:
+    """The model is never invited to narrate absent data (C1's other half)."""
+    prompt = build_open_prompt(_open_object_with_empty_tape())
+    assert '"tape_read"' not in prompt
+
+
+def test_open_prompt_asks_for_tape_read_when_section_has_rows() -> None:
+    """The normal case still works: a populated §2 gets the ask."""
+    prompt = build_open_prompt(_open_object_with_tape())
+    assert '"tape_read"' in prompt

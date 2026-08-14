@@ -88,9 +88,24 @@ def build_open_prompt(obj: BriefObject) -> str:
     brief explains a session that happened, the open brief reads the one about to
     start. It asks for ``one_thing``, §2's ``tape_read``, and §3's per-name
     ``why`` — docs/05 gives §4/§5/§6 no ``why`` line, so requesting prose for
-    those would invite text the object cannot carry."""
+    those would invite text the object cannot carry.
+
+    ``tape_read`` is only asked for when §2 actually has rows (C1, M15 review).
+    An empty §2 renders the sentinel "no tape captured" note; asking the model to
+    read a tape it wasn't given invites it to invent one, and the digit guard
+    can't catch prose. Not asking is the fix at the source — ``apply_narration``
+    also refuses to merge a stray ``tape_read`` onto an empty section as a
+    second, independent guard.
+    """
     symbols = sorted(_narratable_symbols(obj))
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
+    tape_ask = (
+        '  "tape_read": one short paragraph reading the overnight tape against '
+        "this book's sectors — what the macro backdrop implies for how these "
+        "names open. Direction and cause in words; no figures.\n"
+        if _has_tape_rows(obj)
+        else ""
+    )
     return (
         "Write the prose for this morning's pre-open brief. Return ONLY a JSON "
         "object:\n"
@@ -98,9 +113,7 @@ def build_open_prompt(obj: BriefObject) -> str:
         "most about the day ahead — what to be ready for, and why it matters for "
         "this book. Look forward, not back: this is written before the bell and "
         "there is no performance to report.\n"
-        '  "tape_read": one short paragraph reading the overnight tape against '
-        "this book's sectors — what the macro backdrop implies for how these "
-        "names open. Direction and cause in words; no figures.\n"
+        f"{tape_ask}"
         f'  "why": an object mapping each of these tickers exactly — {symbols} — '
         "to one causal sentence explaining its pre-market move.\n"
         "Lead `one_thing` with the first pre-market row: it is the largest gap "
@@ -110,6 +123,14 @@ def build_open_prompt(obj: BriefObject) -> str:
         "the figures. Do not invent news or events you were not given.\n\n"
         "The day's setup, for context only — do not restate its figures:\n"
         f"{context}"
+    )
+
+
+def _has_tape_rows(obj: BriefObject) -> bool:
+    """Whether §2 (overnight_tape) carries any rows this session."""
+    return any(
+        section.id == SectionId.overnight_tape and len(section.rows) > 0
+        for section in obj.sections
     )
 
 
@@ -160,7 +181,17 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
                 prose = narration.why.get(row["symbol"])
                 if prose is not None:
                     row["why"] = prose
-        if section["id"] == SectionId.overnight_tape.value and narration.tape_read:
+        # Gated on rows, not just a truthy tape_read (C1, M15 review): an empty
+        # §2 already carries the honest "no tape captured" note, and asking the
+        # model for a read of nothing invites hallucinated prose the digit guard
+        # can't catch — it's not a number, it's a fabricated paragraph. This is
+        # the second, independent half of the fix; build_open_prompt stops
+        # asking for tape_read at the source when there are no rows.
+        if (
+            section["id"] == SectionId.overnight_tape.value
+            and narration.tape_read
+            and section["rows"]
+        ):
             section["note"] = narration.tape_read
     return BriefObject.model_validate(payload)
 
