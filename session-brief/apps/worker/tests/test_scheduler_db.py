@@ -111,3 +111,61 @@ def test_the_capture_populates_both_the_tape_and_the_names(engine: Engine) -> No
                 {"d": _PRIOR, "syms": _HELD},
             )
             conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})
+
+
+def test_a_held_proxy_with_no_prior_close_is_omitted_not_invented(engine: Engine) -> None:
+    """Change 2 (M15 final-pass review): `TAPE_SEED_LEVELS` seeds the tape's
+    five foreign-proxy ETFs (EWT/EWJ/EWC/EUFN/EWG) so §2 always has a base.
+    Before the fix, that seed sat in one `closes` dict shared with the held-name
+    fetch, so a user who *holds* one of those ETFs directly — a brand-new
+    holding, or one whose EOD ingest failed — picked up the seed's invented
+    level as their §3 base and could emit a horizon-0 claim off a number nobody
+    captured. A held name with no real prior close must be omitted, never
+    invented (`worker/providers/synthetic.py`), even though the tape's own row
+    for the same symbol legitimately uses the seed."""
+    user_id = str(uuid4())
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:u, :e)"),
+                {"u": user_id, "e": f"{user_id}@example.invalid"},
+            )
+            # Benchmark SMH pulls EWT onto the tape as the Taiwan (semis) proxy.
+            sector_id = conn.execute(
+                text("INSERT INTO sectors (user_id, name, benchmark_symbol) "
+                     "VALUES (:u, 'Semis', 'SMH') RETURNING id"),
+                {"u": user_id},
+            ).scalar()
+            # EWT held directly too — deliberately *no* bars_daily row, unlike
+            # every other test in this module: this is the brand-new-holding /
+            # failed-EOD-ingest case the fix protects.
+            conn.execute(
+                text("INSERT INTO holdings (user_id, sector_id, symbol, status) "
+                     "VALUES (:u, :sec, 'EWT', 'owned')"),
+                {"u": user_id, "sec": sector_id},
+            )
+
+        ingest_premarket_for_session(
+            engine, session_date=_SESSION, prior_session=_PRIOR, user_id=user_id
+        )
+
+        with engine.connect() as conn:
+            _events, _sectors, _holdings, tape, premarket = read_open_inputs(
+                conn, user_id, _SESSION, _PRIOR
+            )
+
+        assert any(q.symbol == "EWT" for q in tape), (
+            "the tape's own EWT (Taiwan proxy) row disappeared — the seed must "
+            "still serve the tape"
+        )
+        assert not any(q.symbol == "EWT" for q in premarket), (
+            "a held name with no bars_daily row picked up the tape seed's "
+            "invented level — the seed leaked into the held-name base"
+        )
+    finally:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM quotes WHERE session_date = :d AND symbol = 'EWT'"),
+                {"d": _SESSION},
+            )
+            conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})

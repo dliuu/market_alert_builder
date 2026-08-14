@@ -322,15 +322,21 @@ def ingest_premarket_for_session(
 
     The provider defaults to the synthetic feed. That is not a test seam — it is
     the shipping configuration until the premium pre-market licence lands (D8),
-    and swapping it is a one-line change here.
+    and swapping it is a one-line change here (see
+    `constants.PREMARKET_FEED_IS_SYNTHETIC`, the one flag that flips alongside
+    it).
 
-    The tape's prior-level bases are seeded from `TAPE_SEED_LEVELS` (C2, M15
-    review) at lowest priority: nothing ingests bars for the futures/yield/forex
-    symbols the tape reads, so without a seed §2 has no base to gap from on any
-    run, ever. Once a real prior capture exists (`bars_daily` for the held
-    names, or the tape's own history for the rest), it always wins over the
-    seed. The seed goes away entirely the day a licensed feed lands and these
-    symbols get real bars.
+    Held names and the tape are ingested in two calls with two disjoint closes
+    dicts, never one (Change 2, M15 final-pass review): `TAPE_SEED_LEVELS`
+    (C2) is scoped to `tape_closes` only. A held name gets its base from
+    `bars_daily` alone — if that's empty (a brand-new holding, or a failed EOD
+    ingest), the name has no base and `SyntheticPremarketProvider` omits it,
+    per the standing rule that a symbol with no prior close is omitted, never
+    invented (`worker/providers/synthetic.py`). Before this split, a single
+    shared `closes` dict let a held name that happened to also be one of
+    `TAPE_SEED_LEVELS`' five foreign-proxy ETFs (holding EWT directly, say)
+    pick up the seed's invented level and emit a §3 gap — and a horizon-0
+    claim — off a number nobody captured.
     """
     from worker.constants import TAPE_SEED_LEVELS
     from worker.premarket import (
@@ -344,29 +350,42 @@ def ingest_premarket_for_session(
     with engine.connect() as conn:
         held = book_symbols(conn, user_id)
         tape = tape_universe(sector_benchmarks(conn, user_id))
+        tape_symbols = [symbol for symbol, _, _ in tape]
 
-        # Lowest priority first (C2, M15 review): the nominal seed, so the tape
-        # always has *some* base on a cold start — nothing ingests bars for
-        # futures/yield/forex series, so without this §2 can never bootstrap.
-        # Each higher-priority source below overwrites it where real data exists.
-        closes = dict(TAPE_SEED_LEVELS)
-        closes |= prior_closes(
-            conn, held + [symbol for symbol, _, _ in tape], prior_session
-        )
+        # Held names: real prior closes only. No seed, ever — see the
+        # docstring above.
+        held_closes = prior_closes(conn, held, prior_session)
+
+        # Tape: lowest priority first (C2, M15 review), the nominal seed, so
+        # the tape always has *some* base on a cold start — nothing ingests
+        # bars for futures/yield/forex series, so without this §2 can never
+        # bootstrap. Each higher-priority source below overwrites it where
+        # real data exists. Scoped to tape symbols only.
+        tape_closes = dict(TAPE_SEED_LEVELS)
+        tape_closes |= prior_closes(conn, tape_symbols, prior_session)
 
         # The tape's own prior capture, where one exists, wins over both the
         # seed and `bars_daily` (which never carries these symbols) — it's the
         # freshest real base once the tape has run at least once before.
-        closes |= _prior_tape_levels(conn, [s for s, _, _ in tape], prior_session)
+        tape_closes |= _prior_tape_levels(conn, tape_symbols, prior_session)
 
-    prov = provider or SyntheticPremarketProvider(closes, session_date)
+    held_provider = provider or SyntheticPremarketProvider(held_closes, session_date)
+    tape_provider = provider or SyntheticPremarketProvider(tape_closes, session_date)
     with engine.begin() as conn:
-        return ingest_premarket(
-            conn, prov,
-            held=held, tape=tape,
+        stamp = capture_stamp(session_date)
+        written = ingest_premarket(
+            conn, held_provider,
+            held=held, tape=[],
             session_date=session_date,
-            captured_at=capture_stamp(session_date),
+            captured_at=stamp,
         )
+        written += ingest_premarket(
+            conn, tape_provider,
+            held=[], tape=tape,
+            session_date=session_date,
+            captured_at=stamp,
+        )
+        return written
 
 
 def run_open_session_job(
