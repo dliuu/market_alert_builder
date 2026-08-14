@@ -73,3 +73,9 @@ PREMARKET_CAPTURE_ET_MINUTE: int = int(os.environ.get("PREMARKET_CAPTURE_ET_MINU
 # regime-shifts with the news cycle, so a 30-day base would smear it.
 PREMARKET_VOL_WINDOW: int = int(os.environ.get("PREMARKET_VOL_WINDOW", "10"))
 PREMARKET_VOL_MIN_OBS: int = int(os.environ.get("PREMARKET_VOL_MIN_OBS", "5"))
+
+# SEC EDGAR fundamentals (M18). No API key exists and none is needed — but the
+# SEC requires every request to carry a User-Agent naming a real contact, and
+# returns 403 without one. Format: "Company or project (you@example.com)".
+# Empty ⇒ EdgarClient refuses at construction rather than 403-ing mid-run.
+EDGAR_USER_AGENT: str = os.environ.get("EDGAR_USER_AGENT", "")

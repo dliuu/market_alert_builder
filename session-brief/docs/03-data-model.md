@@ -25,12 +25,21 @@ bars_daily   (symbol, session_date, o, h, l, c, v, adj_c)   -- PK (symbol, sessi
 quotes       (symbol, session_date, captured_at, last, prev_close, extended_last, extended_v)
              -- PK (symbol, session_date); one pre-open capture per symbol per session (M15)
 fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date,
-              period_end, fiscal_period, net_income_cents, domicile, cik, source)
-             -- PK (symbol, as_of). `as_of` is the SEC *filing* date, never the
-             -- period end (M18/D31): a Q2 fact isn't knowable until the 10-Q is
-             -- filed, and keying on period end would inject look-ahead into
-             -- every consumer. `period_end` is kept so a trailing-4Q sum groups
-             -- by period; a restatement lands as a new row, same period_end.
+              period_end, fiscal_period, net_income_cents, public_float_cents,
+              domicile, cik, source)
+             -- PK (symbol, as_of, period_end). `as_of` is the SEC *filing* date,
+             -- never the period end (M18/D31): a Q2 fact isn't knowable until
+             -- the 10-Q is filed, and keying on period end would inject
+             -- look-ahead into every consumer. `period_end` is in the key
+             -- because one filing date can carry restated facts for two
+             -- periods (live: AAPL 2010-01-25). A restatement lands as a new
+             -- row; readers wanting the current view of a period take the
+             -- latest as_of for it.
+             -- `quarterly_burn_cents` is *negated* operating cash flow: the
+             -- column is a burn, and runway_quarters divides by it.
+             -- `shares_out` is NULL for multi-class registrants — companyfacts
+             -- drops dimensional facts, and a weighted-average count is a
+             -- different measure, not substituted.
 events       (id, symbol, event_type, occurs_at, payload jsonb)  -- earnings | lockup | macro
 news_items   (id, symbol, headline, url, published_at, source)
 ```

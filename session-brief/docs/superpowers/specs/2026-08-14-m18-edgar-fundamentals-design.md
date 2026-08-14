@@ -71,14 +71,42 @@ period observations. The concepts that matter:
 
 | Field | Concept | Taxonomy | Note |
 |---|---|---|---|
-| `shares_out` | `EntityCommonStockSharesOutstanding` | `dei` | Cover-page count; falls back to `us-gaap:CommonStockSharesOutstanding` |
+| `shares_out` | `EntityCommonStockSharesOutstanding` | `dei` | Cover-page count; falls back to `us-gaap:CommonStockSharesOutstanding`. See the coverage gap below |
+| `public_float_cents` | `EntityPublicFloat` | `dei` | **A real public float, in USD.** Annual, from the 10-K cover page |
 | `cash_cents` | `CashAndCashEquivalentsAtCarryingValue` | `us-gaap` | Instantaneous, not a duration |
-| `quarterly_burn_cents` | `NetCashProvidedByUsedInOperatingActivities` | `us-gaap` | Negative operating cash flow *is* the burn; sign is preserved and the flag interprets it |
-| `net_income_cents` | `NetIncomeLoss` | `us-gaap` | **New column.** M19's `gaap_profitability` needs trailing-4Q *and* most-recent-quarter |
-| `domicile` | `EntityIncorporationStateCountryCode` | `dei` | **New column.** M19's `domicile` criterion |
+| `quarterly_burn_cents` | `NetCashProvidedByUsedInOperatingActivities` | `us-gaap` | Stored **negated** — see "burn is not cash flow" below |
+| `net_income_cents` | `NetIncomeLoss` | `us-gaap` | M19's `gaap_profitability` needs trailing-4Q *and* most-recent-quarter |
+| `domicile` | `stateOfIncorporation` | *(submissions)* | **Not in companyfacts at all** — that endpoint carries numeric facts only, so a string fact needs `submissions` |
 
 Each observation carries `val`, `form` (10-K / 10-Q), `fy`, `fp`, `end`,
 `filed`, and `accn`. Duration concepts also carry `start`.
+
+### Burn is not cash flow
+
+`quarterly_burn_cents` stores **negated** operating cash flow. The column is a
+burn and `flags.runway_quarters` divides by it, bailing out when the mean is
+`<= 0`. Storing raw OCF inverts the flag exactly: a genuine cash-burner
+(negative OCF) reports *no* runway, while a cash generator gets a meaningless
+one. Confirmed against the live book before the fix — ASTS returned `None` and
+SNDK returned 13 quarters, precisely backwards. After negation ASTS reports 33.4
+quarters and SNDK correctly reports none.
+
+### Coverage gap: multi-class registrants have no share count
+
+`companyfacts` returns only facts **without dimensional qualifiers**. A company
+reporting shares outstanding per share class tags them dimensionally, so no
+total appears — verified live: ASTS exposes no `EntityCommonStockSharesOutstanding`
+and no `us-gaap:CommonStockSharesOutstanding`, only per-class facts that the API
+drops.
+
+`shares_out` is therefore NULL for such registrants, and `dilution_yoy` stays
+dormant for them. `WeightedAverageNumberOfSharesOutstandingBasic` *is* present
+and non-dimensional, but it is a period average rather than a point-in-time
+count — a different measure, deliberately **not** substituted. Silently swapping
+one for the other is the class of quiet wrongness this repo's invariants exist
+to prevent. The remedy, if it matters later, is the `companyconcept` endpoint or
+the XBRL frames API, both of which expose dimensions; that is a separate piece
+of work, not a footnote to this one.
 
 ## The load-bearing decision: `as_of` is the **filed** date
 
@@ -112,21 +140,37 @@ adding a new one — four consumers already read `fundamentals` by name.
 
 ```sql
 ALTER TABLE fundamentals
-    ADD COLUMN period_end       date,      -- the period the facts describe
-    ADD COLUMN fiscal_period    text,      -- Q1..Q4 | FY
-    ADD COLUMN net_income_cents bigint,    -- M19 gaap_profitability
-    ADD COLUMN domicile         text,      -- M19 domicile (ISO country / US state code)
-    ADD COLUMN cik              text,
-    ADD COLUMN source           text NOT NULL DEFAULT 'edgar';
+    ADD COLUMN period_end         date NOT NULL DEFAULT '1900-01-01',
+    ADD COLUMN fiscal_period      text,      -- Q1..Q4 | FY
+    ADD COLUMN net_income_cents   bigint,    -- M19 gaap_profitability
+    ADD COLUMN public_float_cents bigint,    -- M19 float; open question 4
+    ADD COLUMN domicile           text,      -- M19 domicile, from submissions
+    ADD COLUMN cik                text,
+    ADD COLUMN source             text NOT NULL DEFAULT 'edgar';
+
+ALTER TABLE fundamentals DROP CONSTRAINT fundamentals_pkey;
+ALTER TABLE fundamentals ADD PRIMARY KEY (symbol, as_of, period_end);
 
 CREATE INDEX fundamentals_period_idx ON fundamentals (symbol, period_end DESC);
 ```
 
-`(symbol, as_of)` stays the primary key: one row per symbol per filing date. An
-amendment filed later lands as a new row with the same `period_end`, and the
-trailing-4Q reader takes the latest `as_of` per `period_end` — restatements
-correct history going forward without rewriting it, the same discipline
-`attribution.model_version` applies (D21).
+**The primary key gains `period_end`, because `(symbol, as_of)` is not unique in
+live data.** Apple's 2010-01-25 filing carries restated facts for two different
+periods under two accession numbers, both with that filing date — found by
+running the normalizer over a real 3.8MB response, not by reasoning about the
+schema. The honest grain for a point-in-time store is "what we learned on this
+date about this period."
+
+One row per filing, still: facts from one accession are gathered together, since
+two rows sharing a filing date would collide. That grouping has a wrinkle worth
+knowing — a 10-Q's cover-page share count is dated *after* the quarter end its
+financial statements cover, so `period_end` prefers the us-gaap facts, which
+define the reporting period, and the cover count rides along.
+
+An amendment filed later lands as a new row with the same `period_end`, and a
+reader wanting the current view of a period takes the latest `as_of` for it —
+restatements correct history going forward without rewriting it, the same
+discipline `attribution.model_version` applies (D21).
 
 `source` defaults to `'edgar'` so the synthetic rows `dry_run_flags.py` writes
 stay distinguishable from ingested ones.
@@ -203,7 +247,23 @@ moving to EDGAR · full-text filing retrieval · anything requiring a paid vendo
 - **M17 `large_144`** — `pct_of_float` stops being universally null. Note
   `shares_out` is shares *outstanding*, an upper bound on float, so the rule
   stays conservative; open question 4 (a true float figure) is unchanged.
-- **M19 eligibility** — `float`, `market_cap` (`shares_out` × close from
-  `bars_daily`), and `gaap_profitability` all gain inputs. With `liquidity`
-  already computable from `bars_daily`, that is **4 of 5 criteria on real data**;
-  only `domicile` depends on the `dei` concept landing reliably.
+- **M19 eligibility** — `gaap_profitability` (net income), `float`
+  (`public_float_cents`), `market_cap` (`shares_out` × close from `bars_daily`)
+  and `domicile` (from `submissions`) all gain inputs. With `liquidity` already
+  computable from `bars_daily`, that is **5 of 5 criteria on real data** — with
+  the caveat that `market_cap` inherits the multi-class `shares_out` gap above.
+
+## As built: what the live API changed
+
+Three things in this spec were corrected by running against the real endpoint
+rather than reasoning from documentation, and they are recorded here because
+each was wrong in a way that would have shipped:
+
+1. **`domicile` is not in `companyfacts`.** That endpoint carries numeric facts
+   only; the state of incorporation is a string and lives in `submissions`. The
+   original draft named a `dei` concept that does not exist there.
+2. **`EntityPublicFloat` does exist** — a real public float in USD, which the
+   draft did not know about and which materially downgrades open question 4.
+3. **The burn sign was backwards**, and the milestone's own DoD item asserted
+   the wrong behaviour ("sign is preserved"). The live book exposed it: the
+   cash-burner reported no runway and the cash generator reported one.

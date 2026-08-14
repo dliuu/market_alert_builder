@@ -504,6 +504,33 @@ place the money invariant can be lost. EDGAR gets its own
 `FundamentalsProvider` protocol rather than widening any existing one (D28: one
 protocol per capability).
 
+**As built, three corrections the live API forced.** (1) `domicile` is not in
+`companyfacts` at all — that endpoint returns numeric facts only, so the state
+of incorporation comes from `submissions`. (2) `dei:EntityPublicFloat` exists
+and gives a **real public float in USD**, which downgrades open question 4 from
+a blocker to a refinement. (3) The primary key had to become
+`(symbol, as_of, period_end)`: `(symbol, as_of)` is not unique in live data —
+Apple's 2010-01-25 filing carries restated facts for two periods under two
+accession numbers on one filing date, found by running the normalizer over a
+real 3.8MB response.
+
+**`quarterly_burn_cents` stores negated operating cash flow.** The column is a
+burn, and `flags.runway_quarters` divides by it and bails when the mean is
+`<= 0`; storing raw OCF inverts the flag exactly, so a genuine cash-burner
+reports no runway while a cash generator reports a meaningless one. This was
+live-verified in both directions on the real book (ASTS `None` → 33.4 quarters;
+SNDK 13 quarters → correctly `None`). The milestone's own DoD had asserted the
+opposite — "sign is preserved" — so the spec was wrong before the code was.
+
+**Multi-class registrants have no `shares_out`, and nothing is substituted for
+it.** `companyfacts` drops dimensionally-qualified facts, so a company tagging
+shares per share class exposes no total (live: ASTS).
+`WeightedAverageNumberOfSharesOutstandingBasic` is present and non-dimensional
+but is a period average rather than a point-in-time count — a different measure,
+left unused rather than silently swapped in. `dilution_yoy` stays dormant for
+such names; the remedy is the `companyconcept`/frames endpoints, which expose
+dimensions, and is separate work.
+
 *Rules out:* keying fundamentals on the period the facts describe; mutating a
 stored period on restatement; a general XBRL/financials store (revenue, margins,
 segments are out of scope); putting EDGAR behind `MarketDataProvider`,
