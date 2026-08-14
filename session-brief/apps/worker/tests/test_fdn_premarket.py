@@ -63,6 +63,20 @@ def test_latest_prices_survives_a_malformed_minute_by_omitting() -> None:
     assert p.get_latest_prices(["ASTS"]) == []
 
 
+def test_latest_prices_survives_a_non_numeric_close_by_omitting() -> None:
+    """A halted or illiquid name can report "N/A" for close — `Decimal(str(...))`
+    raises `decimal.InvalidOperation`, an `ArithmeticError`, not the `ValueError`
+    finding 1's `FEED_ERRORS` originally covered. The exact failure class
+    finding 1 named, at a site the round-1 fix already wraps (M16 review,
+    round 2)."""
+    body = (
+        '[{"trading_symbol": "ASTS", "time": "2026-08-14 12:10:00", "open": "N/A", '
+        '"high": "N/A", "low": "N/A", "close": "N/A", "volume": 800}]'
+    )
+    p = _provider(lambda _r: httpx.Response(200, text=body), {"ASTS": Decimal("74.31")})
+    assert p.get_latest_prices(["ASTS"]) == []
+
+
 def test_index_quotes_derive_prev_close_from_price_minus_change() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/index-quotes"
@@ -77,6 +91,18 @@ def test_index_quotes_derive_prev_close_from_price_minus_change() -> None:
         {"symbol": "^TNX", "last": Decimal("4.25"), "prev_close": Decimal("4.22")},
         {"symbol": "^VIX", "last": Decimal("15.50"), "prev_close": Decimal("16.25")},
     ]
+
+
+def test_index_quotes_survive_a_non_numeric_price_by_omitting() -> None:
+    """Same failure class on the tape side: a non-numeric `price` raises
+    `decimal.InvalidOperation` out of `_quote_rows`'s `Decimal(str(...))`, and
+    must degrade the feed like any other bad response (M16 review, round 2)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text='[{"trading_symbol": "^TNX", "price": "N/A", "change": 0.03}]'
+        )
+
+    assert _provider(handler, {}).get_index_quotes(["^TNX"]) == []
 
 
 def test_forex_route_maps_dxy_to_the_index_endpoint_and_back() -> None:
@@ -110,6 +136,18 @@ def test_futures_use_the_session_dated_bar_over_the_prior_settle() -> None:
 
 def test_futures_with_no_session_dated_bar_are_omitted() -> None:
     body = '[{"trading_symbol": "ES", "date": "2026-08-13", "close": 5600.00}]'
+    got = _provider(lambda _r: httpx.Response(200, text=body), {}).get_futures_prices(["ES=F"])
+    assert got == []
+
+
+def test_futures_survive_a_non_numeric_close_by_omitting() -> None:
+    """Same failure class as the two tests above, at the third price-parsing
+    site: `_futures_rows`'s `Decimal(str(bars[0]["close"]))` (M16 review,
+    round 2)."""
+    body = (
+        '[{"trading_symbol": "ES", "date": "2026-08-13", "close": 5600.00},'
+        ' {"trading_symbol": "ES", "date": "2026-08-14", "close": "N/A"}]'
+    )
     got = _provider(lambda _r: httpx.Response(200, text=body), {}).get_futures_prices(["ES=F"])
     assert got == []
 

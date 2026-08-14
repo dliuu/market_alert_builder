@@ -28,13 +28,23 @@ _FDN_BASE_URL = "https://financialdata.net/api/v1"
 
 # Everything a bad vendor response can raise. HTTP failures, a body that isn't
 # the list we expect (`FdnClient.fetch`'s own `ValueError`), malformed JSON
-# (`json.JSONDecodeError` subclasses `ValueError`), or an element that isn't a
-# dict (`AttributeError`/`TypeError`/`KeyError` from treating it like one) —
-# all of them degrade the section, never kill the job (the 08:15 run must
-# survive a vendor having a bad morning). Every live-fetch catch site in the
-# fdn feeds (`news_fdn`, `events_fdn`, `FdnPremarketProvider`) catches this
-# tuple, not a narrower one.
-FEED_ERRORS = (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError)
+# (`json.JSONDecodeError` subclasses `ValueError`), an element that isn't a
+# dict (`AttributeError`/`TypeError`/`KeyError` from treating it like one), or
+# a non-numeric price/volume field such as a halted symbol's "N/A"
+# (`decimal.InvalidOperation` subclasses `ArithmeticError`) — all of them
+# degrade the section, never kill the job (the 08:15 run must survive a
+# vendor having a bad morning). Every live-fetch catch site in the fdn feeds
+# (`news_fdn`, `events_fdn`, `FdnPremarketProvider`) catches this tuple, not a
+# narrower one.
+#
+# The cost: this is deliberately wider than "vendor shape errors" alone — a
+# genuine bug in our own mapping code (a typo'd key, a `None` that slips into
+# arithmetic) raises one of these same types and now degrades silently to
+# "empty section" instead of failing loudly. We accept that trade because a
+# quiet section beats a missing brief; the section-level non-degradation
+# tests (e.g. `test_a_row_carries_dollars_and_a_volume_multiple`) are what
+# would catch such a bug instead of a stack trace.
+FEED_ERRORS = (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError, ArithmeticError)
 
 _PREMARKET_OPEN_ET = clock_time(4, 0)  # extended-hours open; window end is capture_stamp
 
