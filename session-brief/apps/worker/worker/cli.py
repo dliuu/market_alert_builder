@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from contracts.brief import BriefObject
+from worker import calendar
 from worker.assemble import assemble_and_store
+from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
 from worker.constants import DEV_USER_ID
 from worker.db import get_engine
@@ -32,6 +35,14 @@ def main() -> None:
     compute = sub.add_parser("compute", help="compute returns/P&L/contribution for a session")
     compute.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
     compute.add_argument("--user", default=DEV_USER_ID, help="user id (defaults to the dev user)")
+
+    events_seed = sub.add_parser(
+        "events-seed", help="seed the synthetic §4 calendar (earnings/ex-div/lockup/macro)"
+    )
+    events_seed.add_argument("--date", help="session date YYYY-MM-DD; defaults to today")
+    events_seed.add_argument(
+        "--symbols", help="comma-separated tickers; defaults to the symbols in your book"
+    )
 
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
@@ -57,7 +68,13 @@ def main() -> None:
     schedule.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the next few fire times and exit; nothing runs or sends",
+        help="print the next few fire times (both kinds) and exit; nothing runs or sends",
+    )
+    schedule.add_argument(
+        "--kind",
+        default="close",
+        choices=("open", "close"),
+        help="which job --once runs (default close); ignored by the blocking loop",
     )
 
     send = sub.add_parser("send", help="render a stored brief and email it via Resend")
@@ -109,6 +126,10 @@ def main() -> None:
         _compute(date_arg=args.date, user_id=args.user)
         return
 
+    if args.command == "events-seed":
+        _events_seed(date_arg=args.date, symbols_arg=args.symbols)
+        return
+
     if args.command == "brief":
         _brief(
             kind=args.kind,
@@ -120,7 +141,7 @@ def main() -> None:
         return
 
     if args.command == "schedule":
-        _schedule(once=args.once, dry_run=args.dry_run)
+        _schedule(once=args.once, dry_run=args.dry_run, kind=args.kind)
         return
 
     if args.command == "send":
@@ -258,11 +279,39 @@ def _backfill(symbols_arg: str | None, days: int) -> None:
     )
 
 
+def _events_seed(date_arg: str | None, symbols_arg: str | None) -> None:
+    from worker.events_seed import seed_events
+
+    engine = get_engine()
+    session_date = date.fromisoformat(date_arg) if date_arg else date.today()
+    symbols = _resolve_symbols(symbols_arg, engine)
+    if not symbols:
+        raise SystemExit(
+            "No symbols to seed. Pass --symbols AAPL,MSFT or add holdings to your book."
+        )
+
+    with engine.begin() as conn:
+        written = seed_events(conn, session_date=session_date, symbols=symbols)
+
+    print(f"events-seed: {written} event(s) around {session_date} for {len(symbols)} symbol(s)")
+
+
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
+    """Held names *plus every sector benchmark*. The benchmarks are settable in
+    the book UI but were never ingested, so §5's trailing-5d line had no bars to
+    read (M14)."""
     if symbols_arg:
         return [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT DISTINCT symbol FROM holdings ORDER BY symbol")).all()
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT symbol FROM holdings "
+                "UNION "
+                "SELECT DISTINCT benchmark_symbol FROM sectors "
+                "WHERE benchmark_symbol IS NOT NULL "
+                "ORDER BY symbol"
+            )
+        ).all()
     return [str(row[0]) for row in rows]
 
 
@@ -318,10 +367,25 @@ def _brief(
     # run degrades to tables-only rather than failing (M8).
     narrator = default_narrator() if narrate else None
 
+    # Only the close path can return None (its quiet-session skip gate); the
+    # open brief always sends, so the union comes from `assemble_and_store`.
+    obj: BriefObject | None
     conn = engine.connect()
     trans = conn.begin()
     try:
-        obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
+        if kind == "open":
+            # The open brief is *for* session_date but reads the prior close; it
+            # has no skip gate and never returns None (docs/05).
+            obj = assemble_open_and_store(
+                conn,
+                user_id,
+                session_date,
+                prior_session=calendar.previous_session(session_date),
+                generated_at=datetime.now(UTC),
+                narrator=narrator,
+            )
+        else:
+            obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
         if dry_run:
             trans.rollback()  # --dry-run assembles but writes nothing
         else:
@@ -398,30 +462,44 @@ def _send(kind: str, date_arg: str | None, user_id: str, to: str | None, dry_run
         print(f"send: {kind} {session_date} → {recipient} sent (msg {result.provider_msg_id})")
 
 
-def _schedule(once: bool, dry_run: bool) -> None:
+def _schedule(once: bool, dry_run: bool, kind: str) -> None:
     from datetime import timedelta
 
     from worker import config
-    from worker.scheduler import next_fire, run_scheduler, run_session_job
+    from worker.scheduler import (
+        next_kind_fire,
+        run_open_session_job,
+        run_scheduler,
+        run_session_job,
+    )
 
     if dry_run:
-        from datetime import UTC, datetime
-
         delay = timedelta(minutes=config.SEND_DELAY_MINUTES)
         now = datetime.now(UTC)
-        print(f"schedule: now {now.isoformat()}, send delay {config.SEND_DELAY_MINUTES}min")
-        for _ in range(5):
-            now = next_fire(now, delay)
-            print(f"  next fire: {now.isoformat()}")
-            now = now + timedelta(seconds=1)
+        print(
+            f"schedule: now {now.isoformat()}  "
+            f"(close = session close +{config.SEND_DELAY_MINUTES}min, "
+            f"open = {config.OPEN_SEND_ET_HOUR:02d}:{config.OPEN_SEND_ET_MINUTE:02d} ET fixed)"
+        )
+        for _ in range(8):
+            when, kind = next_kind_fire(now, delay)
+            et = when.astimezone(calendar.ET)
+            session = "session" if calendar.is_session(et.date()) else "non-session"
+            print(
+                f"  {kind:5}  {when.isoformat()}   "
+                f"{et:%a %Y-%m-%d %H:%M} ET   ({session})"
+            )
+            now = when + timedelta(seconds=1)
         return
 
     engine = get_engine()
     if once:
-        from datetime import UTC, datetime
-
-        outcome = run_session_job(engine, now_utc=datetime.now(UTC))
-        print(f"schedule --once: {outcome}")
+        now = datetime.now(UTC)
+        if kind == "open":
+            outcome = run_open_session_job(engine, now_utc=now)
+        else:
+            outcome = run_session_job(engine, now_utc=now)
+        print(f"schedule --once ({kind}): {outcome}")
         return
 
     run_scheduler(engine)

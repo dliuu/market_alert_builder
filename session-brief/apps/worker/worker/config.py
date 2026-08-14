@@ -52,3 +52,13 @@ BAR_POLL_INTERVAL_S: int = int(os.environ.get("BAR_POLL_INTERVAL_S", "90"))
 # synthetic PM day-return and the official day-return differ by more than this
 # (fraction; 0.001 = 10 bps). Silent drift would slowly corrupt every fitted β.
 RECONCILE_TOL: float = float(os.environ.get("RECONCILE_TOL", "0.001"))
+
+# Open brief (M14). A fixed **wall-clock** ET send, unlike the close brief's
+# close-plus-delay: 08:15 is 08:15 whether or not it's a half-day (docs/02
+# stages the morning as ingest 08:00 → assemble 08:10 → send 08:15).
+OPEN_SEND_ET_HOUR: int = int(os.environ.get("OPEN_SEND_ET_HOUR", "8"))
+OPEN_SEND_ET_MINUTE: int = int(os.environ.get("OPEN_SEND_ET_MINUTE", "15"))
+# The open fire pings its own Healthchecks check — one dead-man's switch per
+# scheduled run (docs/02), so a silent morning is distinguishable from a silent
+# evening. Empty ⇒ no ping.
+HEALTHCHECKS_OPEN_URL: str = os.environ.get("HEALTHCHECKS_OPEN_URL", "")

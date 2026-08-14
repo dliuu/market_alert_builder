@@ -41,6 +41,12 @@ class _FakeProvider:
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError
 
+    def dividends_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
 
 def _record(session: str, close: str) -> dict[str, Any]:
     return {

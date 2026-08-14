@@ -13,6 +13,12 @@ Like ``claims.py``/``tape.py``, the thresholds are a **pure core** (trivially
 unit-testable — the DoD's "thresholds fire on a synthetic fixture") and the
 reads/rate-limit live in a **DB layer**, kept out of the M3-certified compute.
 
+Since M14 this module imports nothing from ``compute``: ``surface_flags`` takes
+the held symbols and their weights directly. §6 is the **open** brief's section
+(docs/05), and the open brief carries no P&L — it must not run the compute path
+just to obtain weights, because that path raises on any missing bar and the open
+brief always sends.
+
 M7 seeds ``fundamentals``/``events`` synthetically; real earnings/fundamentals
 ingest is deferred (docs/02 TBD source gaps). ``short_interest`` has no live
 source in v1 (docs/02 skips it) — its threshold exists and fires on synthetic
@@ -27,8 +33,6 @@ from fractions import Fraction
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-
-from worker.compute import ComputeResult
 
 # Thresholds (docs/05).
 _RUNWAY_MIN_Q = Fraction(6)
@@ -247,13 +251,26 @@ _UPSERT_FLAG = text("""
 
 
 def surface_flags(
-    conn: Connection, user_id: str, session_date: date, result: ComputeResult
+    conn: Connection,
+    user_id: str,
+    session_date: date,
+    *,
+    symbols: list[str],
+    name_weights: dict[str, Fraction],
 ) -> list[FlagCandidate]:
     """Build every fired flag candidate, then drop the weekly-capped ones that
     were already mentioned inside the last ``_RATE_LIMIT_DAYS`` days. Read-only —
     ``record_flags`` writes ``last_seen`` after the brief is confirmed to send, so
-    a skipped quiet session spends no rate-limit budget."""
-    candidates = _build_candidates(conn, user_id, session_date, result)
+    a skipped quiet session spends no rate-limit budget.
+
+    Takes the held ``symbols`` and their ``name_weights`` rather than a
+    ``ComputeResult``: §6 is the open brief's section (docs/05), and the open
+    brief carries no P&L and must not go through the compute path to invent one
+    (M14). The two arguments stay separate because a position can be held with
+    no weight — an empty book has no denominator — and must still be screened
+    for position risk.
+    """
+    candidates = _build_candidates(conn, user_id, session_date, symbols, name_weights)
     last_seen = _read_flag_state(conn, user_id)
 
     surfaced: list[FlagCandidate] = []
@@ -287,14 +304,16 @@ def record_flags(
 
 
 def _build_candidates(
-    conn: Connection, user_id: str, session_date: date, result: ComputeResult
+    conn: Connection,
+    user_id: str,
+    session_date: date,
+    symbols: list[str],
+    name_weights: dict[str, Fraction],
 ) -> list[FlagCandidate]:
-    symbols = [p.symbol for p in result.positions]
     out: list[FlagCandidate] = []
 
-    # Concentration (name + sector) from the weights compute already produced.
+    # Concentration (name + sector) from the caller's weights.
     sector_by_symbol = _read_sectors(conn, user_id)
-    name_weights = {p.symbol: p.weight for p in result.positions if p.weight is not None}
     sector_weights: dict[str, Fraction] = {}
     for symbol, weight in name_weights.items():
         sector = sector_by_symbol.get(symbol)

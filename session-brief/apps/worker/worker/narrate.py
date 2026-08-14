@@ -63,7 +63,7 @@ def build_prompt(obj: BriefObject) -> str:
     """The user turn: the computed object as context plus an explicit request for
     prose-only JSON. The model reads the figures but must not restate them."""
     rows = _attribution_rows(obj)
-    symbols = sorted(row.symbol for row in rows)
+    symbols = sorted(row.symbol for row in rows if row.symbol is not None)
     lead = _lead_symbol(rows)
     lead_clause = (
         f" It must be about {lead}, today's single largest idiosyncratic mover."
@@ -85,6 +85,40 @@ def build_prompt(obj: BriefObject) -> str:
         "Session data, for context only — do not restate its figures:\n"
         f"{context}"
     )
+
+
+def build_open_prompt(obj: BriefObject) -> str:
+    """The open brief's user turn (M14). Same contract, opposite tense: the close
+    brief explains a session that happened, the open brief reads the one about to
+    start. It asks only for ``one_thing`` — docs/05 gives §4/§5/§6 no ``why``
+    line, so requesting per-name prose would invite text the object cannot
+    carry."""
+    context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
+    return (
+        "Write the prose for this morning's pre-open brief. Return ONLY a JSON "
+        'object with one key:\n'
+        '  "one_thing": one short paragraph (2-3 sentences) naming what matters '
+        "most about the day ahead — what to be ready for, and why it matters for "
+        "this book. Look forward, not back: this is written before the bell and "
+        "there is no performance to report.\n\n"
+        "Rules: prose only. Never write a number, percentage, price, or basis "
+        "point — describe direction and cause in words and let the tables carry "
+        "the figures. Do not invent news or events you were not given.\n\n"
+        "The day's setup, for context only — do not restate its figures:\n"
+        f"{context}"
+    )
+
+
+def narrate_open_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObject:
+    """Stage ⑤ for the open brief. Non-fatal on every path (D19), which is what
+    keeps the always-sending open brief always sending."""
+    if narrator is None:
+        return obj
+    try:
+        narration = parse_narration(narrator(build_open_prompt(obj)), obj)
+    except Exception:
+        return obj  # non-fatal (docs/02): tables-only, still valid and sendable
+    return apply_narration(obj, narration)
 
 
 def parse_narration(raw: str, obj: BriefObject) -> _Narration:
@@ -138,7 +172,11 @@ def narrate_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObjec
 def _attribution_symbols(obj: BriefObject) -> set[str]:
     for section in obj.sections:
         if section.id is SectionId.attribution:
-            return {row.symbol for row in section.rows}
+            # `symbol` is optional since v3 (a macro calendar row names no
+            # security). Attribution rows always have one; skipping the None
+            # case keeps the set typed and can only ever drop a row that has
+            # no ticker for narration to key on.
+            return {row.symbol for row in section.rows if row.symbol is not None}
     return set()
 
 
@@ -168,7 +206,7 @@ def _theme_framing(rows: list[Row]) -> str:
     """A compact, number-free line per name: did it move with its theme, or on
     its own? Rows without both bps figures are skipped rather than guessed."""
     parts = []
-    for row in sorted(rows, key=lambda r: r.symbol):
+    for row in sorted(rows, key=lambda r: r.symbol or ""):
         if row.theme_bps is None or row.resid_bps is None:
             continue
         moved = (

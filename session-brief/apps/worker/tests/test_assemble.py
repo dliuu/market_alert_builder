@@ -57,6 +57,9 @@ def _two() -> BriefObject:
 
 def test_book_totals() -> None:
     book = _two().book
+    # `book` is nullable since v3 (the open brief omits it) — a close brief
+    # always has one, and asserting that is part of what this test checks.
+    assert book is not None
     assert book.value_cents == 206_000
     assert book.day_pnl_cents == 6_000
     assert book.day_bps == 300
@@ -157,8 +160,9 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_three() -> None:
-    assert _mixed().schema_version == SCHEMA_VERSION == 3
+def test_schema_version_is_four() -> None:
+    # v4 = M13 attribution decomp on top of M14's v3 open-brief shape (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 4
 
 
 def test_material_residual_predicate() -> None:
@@ -191,7 +195,7 @@ def _ranked() -> BriefObject:
         "D": Price(c=Decimal("120"), prev_c=Decimal("100")),  # +20% → full
     }
     closes = {"A": Decimal("110"), "B": Decimal("60"), "D": Decimal("120")}
-    decomp = {
+    decomp: dict[str, dict[str, object]] = {
         "A": {
             "market_bps": 50, "theme_bps": 10, "resid_bps": 40,
             "resid_z": 1.0, "provisional": False,
@@ -209,7 +213,7 @@ def _ranked() -> BriefObject:
 
 def test_attribution_rows_ranked_by_abs_resid_z_desc_none_last() -> None:
     obj = _ranked()
-    assert obj.schema_version == 3
+    assert obj.schema_version == 4
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     assert [r.symbol for r in attribution.rows] == ["B", "A", "D"]
     b_row = attribution.rows[0]

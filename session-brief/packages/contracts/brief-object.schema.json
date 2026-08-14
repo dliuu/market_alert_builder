@@ -5,7 +5,7 @@
   "description": "The versioned document a brief is assembled into. Web and email are renderers over this.",
   "type": "object",
   "required": ["schema_version", "brief_id", "user_id", "session_date", "kind",
-               "generated_at", "subject", "book", "sections", "flags", "claims",
+               "generated_at", "subject", "sections", "flags", "claims",
                "resolved_claims", "suppressed", "data_quality"],
   "additionalProperties": false,
   "properties": {
@@ -17,7 +17,10 @@
     "generated_at": { "type": "string", "format": "date-time" },
     "subject": { "type": "string", "maxLength": 160 },
     "one_thing": { "type": ["string", "null"] },
-    "book": { "$ref": "#/$defs/book" },
+    "book": {
+      "description": "Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.",
+      "anyOf": [{ "$ref": "#/$defs/book" }, { "type": "null" }]
+    },
     "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
     "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
@@ -65,12 +68,15 @@
     },
     "row": {
       "type": "object",
-      "required": ["symbol"],
+      "additionalProperties": false,
       "properties": {
-        "symbol": { "type": "string" },
+        "symbol": {
+          "type": ["string", "null"],
+          "description": "Absent on rows that name no security — a macro release in the open brief's calendar section has no ticker (M14)."
+        },
         "tier": {
-          "enum": ["full", "brief"],
-          "description": "Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality)."
+          "description": "Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup). Nullable via anyOf, not as an enum member — the absence of a tier is not itself a tier, and folding null into the enum makes the generated `.value` no longer a string.",
+          "anyOf": [{ "enum": ["full", "brief"] }, { "type": "null" }]
         },
         "close": { "type": ["number", "null"] },
         "day_return": { "type": ["number", "null"] },
@@ -94,7 +100,50 @@
         "resid_z": { "type": ["number", "null"],
           "description": "Attribution: MAD-scaled residual z-score; salience (M13)." },
         "provisional": { "type": ["boolean", "null"],
-          "description": "Attribution row is a provisional PM score, not yet reconciled (M13)." }
+          "description": "Attribution row is a provisional PM score, not yet reconciled (M13)." },
+
+        "label": {
+          "type": ["string", "null"],
+          "description": "Human-readable name for a row that isn't identified by its ticker (open brief §4 calendar, e.g. \"CPI (Jul)\")."
+        },
+        "event_type": {
+          "description": "Open brief §4 (calendar). Mirrors events.event_type.",
+          "anyOf": [{ "enum": ["earnings", "lockup", "ex_div", "macro"] }, { "type": "null" }]
+        },
+        "occurs_at": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Open brief §4 (calendar): the session date the event lands on."
+        },
+        "tag": {
+          "description": "Open brief §4 (calendar): whose calendar this is (docs/05).",
+          "anyOf": [{ "enum": ["macro", "holding", "watchlist"] }, { "type": "null" }]
+        },
+
+        "sector_id": {
+          "type": ["string", "null"],
+          "description": "Open brief §5 (sector setup): the sectors row this line summarizes."
+        },
+        "name": {
+          "type": ["string", "null"],
+          "description": "Open brief §5 (sector setup): the sector's display name."
+        },
+        "benchmark_symbol": {
+          "type": ["string", "null"],
+          "description": "Open brief §5 (sector setup): the sector's benchmark, or null when unset in the book."
+        },
+        "ret_5d": {
+          "type": ["number", "null"],
+          "description": "Open brief §5: the benchmark's trailing 5-session return."
+        },
+        "vs_spy_5d": {
+          "type": ["number", "null"],
+          "description": "Open brief §5: trailing 5-session return less SPY's over the same window."
+        },
+        "premarket": {
+          "type": ["number", "null"],
+          "description": "Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15."
+        }
       }
     },
     "flag": {

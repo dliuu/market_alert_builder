@@ -66,3 +66,23 @@ def test_close_or_standard_uses_real_close_on_session() -> None:
 def test_close_or_standard_uses_nominal_bell_off_session() -> None:
     # Labor Day (weekday holiday): nominal 16:00 ET bell so the heartbeat still lands.
     assert calendar.close_or_standard(date(2026, 9, 7)) == datetime(2026, 9, 7, 20, 0, tzinfo=UTC)
+
+
+# --- previous_session: the open brief reads the prior close (M14) ---------
+
+
+def test_previous_session_is_the_prior_trading_day() -> None:
+    # Tue 2026-09-08 back to Fri 2026-09-04 — Labor Day Monday is skipped.
+    assert calendar.previous_session(date(2026, 9, 8)) == date(2026, 9, 4)
+
+
+def test_previous_session_from_a_monday_skips_the_weekend() -> None:
+    assert calendar.previous_session(date(2026, 9, 14)) == date(2026, 9, 11)
+
+
+def test_previous_session_is_strictly_before_a_session_date() -> None:
+    """Called on a session, it must not return that same session — the open
+    brief would otherwise read a close that hasn't happened yet."""
+    d = date(2026, 9, 9)
+    assert calendar.is_session(d) is True
+    assert calendar.previous_session(d) < d

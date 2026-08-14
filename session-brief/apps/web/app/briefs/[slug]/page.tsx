@@ -32,6 +32,13 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const brief = row.body as unknown as BriefObject;
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
+  const calendar = brief.sections.find((s) => s.id === "calendar");
+  const sectors = brief.sections.find((s) => s.id === "sector_setup");
+  // §2/§3 are suppressed-with-a-note until their feeds land (M15). Showing the
+  // note is the point — the brief is short by design, not broken.
+  const omitted = brief.sections
+    .filter((s) => (s.id === "overnight_tape" || s.id === "premarket") && s.note)
+    .map((s) => s.note);
 
   return (
     <main style={S.main}>
@@ -45,32 +52,35 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
 
       {brief.one_thing && <p style={S.oneThing}>{brief.one_thing}</p>}
 
-      {/* Scorecard — from book totals */}
-      <section style={S.card}>
-        <h2 style={S.h2}>Session scorecard</h2>
-        <div style={S.grid}>
-          <Stat label="Book value" value={dollars(brief.book.value_cents)} />
-          <Stat
-            label="Day P&L"
-            value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
-            positive={brief.book.day_pnl_cents >= 0}
-          />
-          <Stat
-            label="Total P&L"
-            value={`${signedDollars(brief.book.total_pnl_cents)}${
-              brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
-            }`}
-            positive={brief.book.total_pnl_cents >= 0}
-          />
-          {brief.book.vs_spy_bps != null && (
+      {/* Scorecard — from book totals. `book` is nullable since v3: the open
+          brief carries no performance or P&L at all (M14). */}
+      {brief.book && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Session scorecard</h2>
+          <div style={S.grid}>
+            <Stat label="Book value" value={dollars(brief.book.value_cents)} />
             <Stat
-              label="vs SPY"
-              value={bps(brief.book.vs_spy_bps)}
-              positive={brief.book.vs_spy_bps >= 0}
+              label="Day P&L"
+              value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
+              positive={brief.book.day_pnl_cents >= 0}
             />
-          )}
-        </div>
-      </section>
+            <Stat
+              label="Total P&L"
+              value={`${signedDollars(brief.book.total_pnl_cents)}${
+                brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
+              }`}
+              positive={brief.book.total_pnl_cents >= 0}
+            />
+            {brief.book.vs_spy_bps != null && (
+              <Stat
+                label="vs SPY"
+                value={bps(brief.book.vs_spy_bps)}
+                positive={brief.book.vs_spy_bps >= 0}
+              />
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Attribution */}
       {attribution && (
@@ -119,30 +129,118 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   <td style={S.tdR}>{pctOrDash(r.total_pct)}</td>
                 </tr>
               ))}
-              {/* Book totals row */}
-              <tr>
-                <td style={S.tdTotal}>Book</td>
-                <td style={S.tdR} />
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
-                  {pct(brief.book.day_bps / 10000)}
-                </td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
-                  {signedDollars(brief.book.day_pnl_cents)}
-                </td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
-                  {bps(brief.book.day_bps)}
-                </td>
-                <td style={S.tdRTotal}>—</td>
-                <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
-                  {signedDollars(brief.book.total_pnl_cents)}
-                </td>
-                <td style={S.tdRTotal}>
-                  {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
-                </td>
-              </tr>
+              {/* Book totals row — only when there is a book to total */}
+              {brief.book && (
+                <tr>
+                  <td style={S.tdTotal}>Book</td>
+                  <td style={S.tdR} />
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                    {pct(brief.book.day_bps / 10000)}
+                  </td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
+                    {signedDollars(brief.book.day_pnl_cents)}
+                  </td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
+                    {bps(brief.book.day_bps)}
+                  </td>
+                  <td style={S.tdRTotal}>—</td>
+                  <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
+                    {signedDollars(brief.book.total_pnl_cents)}
+                  </td>
+                  <td style={S.tdRTotal}>
+                    {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </section>
+      )}
+
+      {/* On the clock today — the open brief's §4 */}
+      {calendar && calendar.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>On the clock today</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>When</th>
+                <th style={S.th}>What</th>
+                <th style={S.th}>Whose</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calendar.rows.map((r: Row) => (
+                <tr key={`${r.occurs_at}-${r.label}`}>
+                  <td style={S.td}>{r.occurs_at ?? "—"}</td>
+                  <td style={{ ...S.td, fontWeight: 400 }}>{r.label}</td>
+                  <td style={S.td}>
+                    <span style={r.tag === "holding" ? S.tagStrong : S.tag}>{r.tag}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {/* Sector setup — the open brief's §5 */}
+      {sectors && sectors.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Sector setup</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Sector</th>
+                <th style={S.th}>Benchmark</th>
+                <th style={S.thR}>5d</th>
+                <th style={S.thR}>vs SPY</th>
+                <th style={S.thR}>Pre-market</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectors.rows.map((r: Row) => (
+                <tr key={r.sector_id ?? r.name}>
+                  <td style={S.td}>{r.name}</td>
+                  <td style={{ ...S.td, fontWeight: 400 }}>{r.benchmark_symbol ?? "—"}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.ret_5d) }}>{pctOrDash(r.ret_5d)}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.vs_spy_5d) }}>{pctOrDash(r.vs_spy_5d)}</td>
+                  <td style={S.tdR}>{pctOrDash(r.premarket)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {/* Exposure check — the flags' documented home (docs/05 §6) */}
+      {brief.flags.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Exposure check</h2>
+          <ul style={S.claimList}>
+            {brief.flags.map((f, i) => (
+              <li key={`${f.type}-${f.symbol ?? f.sector_id ?? i}`} style={S.claimItem}>
+                <span>
+                  <strong>{f.type.replace(/_/g, " ")}</strong>
+                  {f.symbol ? ` (${f.symbol})` : ""}
+                </span>
+                <span style={{ color: f.severity === "warn" ? "#8b2d2d" : "#666" }}>
+                  {f.value != null ? f.value.toFixed(2) : f.severity}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {omitted.length > 0 && (
+        <p style={S.muted}>
+          {omitted.map((n) => (
+            <span key={n} style={{ display: "block" }}>
+              {n}
+            </span>
+          ))}
+        </p>
       )}
 
       {/* Roll-up line — the suppressed names, folded into one line */}
@@ -288,6 +386,24 @@ const S: Record<string, React.CSSProperties> = {
     width: 10,
     height: 10,
     borderRadius: "50%",
+  },
+  tag: {
+    fontSize: "0.72rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    color: "#666",
+    background: "#eee",
+    padding: "2px 6px",
+    borderRadius: 3,
+  },
+  tagStrong: {
+    fontSize: "0.72rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    color: "#fff",
+    background: "#1B2A4A",
+    padding: "2px 6px",
+    borderRadius: 3,
   },
   claimList: { listStyle: "none", padding: 0, margin: 0, fontSize: "0.9rem" },
   claimItem: {

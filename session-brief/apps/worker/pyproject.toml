@@ -22,6 +22,10 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "datamodel-code-generator>=0.26",
+    # Validates stored bodies against the canonical JSON Schema directly, rather
+    # than only through the generated Pydantic models (see test_contract_schema).
+    "jsonschema>=4.23",
+    "types-jsonschema>=4.23",
 ]
 
 [tool.uv]

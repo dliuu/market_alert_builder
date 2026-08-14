@@ -32,5 +32,21 @@ class MarketDataProvider(Protocol):
         (PM synthesis, M11). Returns ``{"symbol", "ts", "price": Decimal}``."""
         ...
 
+    # --- Event calendars (open brief §4, M14) ------------------------------
+    #
+    # Declared, not implemented. The open brief seeds these synthetically (see
+    # worker/events_seed.py) because the live source is Premium-tier and
+    # redistribution needs a commercial plan (docs/02, D8) — the same licensing
+    # gate M15 defers. The seam exists now so the swap is a provider call rather
+    # than a reshape of §4 (D12: "you will switch, probably twice").
+
+    def dividends_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        """Upcoming ex-dividend dates across the symbol universe."""
+        ...
+
+    def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
+        """Macro releases (CPI, FOMC, claims). These carry no symbol."""
+        ...
+
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         ...

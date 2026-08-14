@@ -68,11 +68,30 @@ class Tier1(Enum):
     brief = 'brief'
 
 
+class EventType(Enum):
+    earnings = 'earnings'
+    lockup = 'lockup'
+    ex_div = 'ex_div'
+    macro = 'macro'
+
+
+class Tag(Enum):
+    macro = 'macro'
+    holding = 'holding'
+    watchlist = 'watchlist'
+
+
 class Row(BaseModel):
-    symbol: str
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    symbol: str | None = Field(
+        None,
+        description="Absent on rows that name no security — a macro release in the open brief's calendar section has no ticker (M14).",
+    )
     tier: Tier1 | None = Field(
         None,
-        description='Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Absent on non-tiered rows (e.g. tape_quality).',
+        description="Per-name suppression tier assigned by assembly (M5). Suppressed names are omitted from rows and listed in the top-level suppressed[] instead. Null on non-tiered rows (e.g. tape_quality, and the open brief's calendar / sector_setup). Nullable via anyOf, not as an enum member — the absence of a tier is not itself a tier, and folding null into the enum makes the generated `.value` no longer a string.",
     )
     close: float | None = None
     day_return: float | None = None
@@ -103,6 +122,42 @@ class Row(BaseModel):
     provisional: bool | None = Field(
         None,
         description='Attribution row is a provisional PM score, not yet reconciled (M13).',
+    )
+    label: str | None = Field(
+        None,
+        description='Human-readable name for a row that isn\'t identified by its ticker (open brief §4 calendar, e.g. "CPI (Jul)").',
+    )
+    event_type: EventType | None = Field(
+        None, description='Open brief §4 (calendar). Mirrors events.event_type.'
+    )
+    occurs_at: date | None = Field(
+        None,
+        description='Open brief §4 (calendar): the session date the event lands on.',
+    )
+    tag: Tag | None = Field(
+        None, description='Open brief §4 (calendar): whose calendar this is (docs/05).'
+    )
+    sector_id: str | None = Field(
+        None,
+        description='Open brief §5 (sector setup): the sectors row this line summarizes.',
+    )
+    name: str | None = Field(
+        None, description="Open brief §5 (sector setup): the sector's display name."
+    )
+    benchmark_symbol: str | None = Field(
+        None,
+        description="Open brief §5 (sector setup): the sector's benchmark, or null when unset in the book.",
+    )
+    ret_5d: float | None = Field(
+        None, description="Open brief §5: the benchmark's trailing 5-session return."
+    )
+    vs_spy_5d: float | None = Field(
+        None,
+        description="Open brief §5: trailing 5-session return less SPY's over the same window.",
+    )
+    premarket: float | None = Field(
+        None,
+        description='Open brief §5: the pre-market column. Always null in M14 — the feed lands in M15.',
     )
 
 
@@ -187,7 +242,10 @@ class BriefObject(BaseModel):
     generated_at: AwareDatetime
     subject: constr(max_length=160)
     one_thing: str | None = None
-    book: Book
+    book: Book | None = Field(
+        None,
+        description='Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.',
+    )
     sections: list[Section]
     flags: list[Flag]
     claims: list[Claim]
