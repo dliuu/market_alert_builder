@@ -234,38 +234,79 @@ def _resolve_session(
 def _grade(
     conn: Connection, symbol: str, direction: str, resolve_on: date, horizon: int
 ) -> str | None:
-    """Did relative strength persist? correct/wrong for the claimed direction,
-    or None when the data to judge isn't there.
+    """Dispatch to the grader the claim's own shape calls for.
 
-    Horizon 0 grades open→close on ``resolve_on`` — the emit session itself —
-    not close-to-close (I1, M15 review). ``emit_premarket_gap`` takes its
-    direction from ``extended_last / prev_close - 1``, session D-1's close as
-    the base, and the close-to-close base (D-1's close vs. D's close) contains
-    that same gap as a sub-interval: a name that gaps up pre-market and then
-    fully fades intraday would still grade "correct", because the overnight gap
-    alone would carry the close-to-close return past the benchmark's. The gap is
-    what the claim is *about*, so it cannot also be what grades it — open→close
-    excludes the gap and grades only what happened during the session the claim
-    was about. Horizon >= 1 is untouched: it keeps grading close-to-close,
-    exactly as before this change (test_claims.py, test_claims_db.py unmodified).
+    The two arms answer different questions, and keeping them as separate
+    functions rather than branches inside one body is deliberate:
+    ``_grade_relative`` is the seam M13's residual grading replaces whole, and
+    its docstring says why horizon 0 does not follow it there.
     """
     if horizon == 0:
-        returns = {
-            row["symbol"]: _day_return(row["c"], row["o"])
-            for row in conn.execute(
-                _RETURNS_OPEN_CLOSE,
-                {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]},
-            ).mappings()
-        }
-    else:
-        returns = {
-            row["symbol"]: _day_return(row["c"], row["prev_c"])
-            for row in conn.execute(
-                _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
-            ).mappings()
-        }
-    sym = returns.get(symbol)
-    bench = returns.get(BENCHMARK_SYMBOL)
+        return _grade_open_close(conn, symbol, direction, resolve_on)
+    return _grade_relative(conn, symbol, direction, resolve_on)
+
+
+def _grade_open_close(
+    conn: Connection, symbol: str, direction: str, resolve_on: date
+) -> str | None:
+    """Horizon 0 (the morning ``premarket_gap`` claim): open→close on the emit
+    session itself, against the benchmark.
+
+    ``emit_premarket_gap`` takes its direction from
+    ``extended_last / prev_close - 1`` — session D-1's close as the base — and a
+    close-to-close base (D-1's close vs. D's close) *contains that same gap as a
+    sub-interval*. A name that gaps up pre-market and then fully fades intraday
+    would still grade "correct", because the overnight gap alone would carry the
+    close-to-close return past the benchmark's. The gap is what the claim is
+    *about*, so it cannot also be what grades it. Open→close excludes the gap and
+    grades only what happened during the session the claim was made about.
+    """
+    returns = {
+        row["symbol"]: _day_return(row["c"], row["o"])
+        for row in conn.execute(
+            _RETURNS_OPEN_CLOSE,
+            {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]},
+        ).mappings()
+    }
+    return _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+
+
+def _grade_relative(
+    conn: Connection, symbol: str, direction: str, resolve_on: date
+) -> str | None:
+    """Horizon >= 1: close-to-close relative strength, exactly as M6/D17 built it.
+
+    **This function is the M13 seam.** M13 (upstream) re-points horizon >= 1
+    grading at the *sign of the realized residual* (`attribution.resid_bps`), so
+    that beta earns no credit — a name that rose only because the market rose has
+    not vindicated a call about that name — and stamps
+    ``claims.graded_model_version``. That change replaces this function's body
+    and nothing else: the dispatch above, the horizon-0 grader, and
+    ``emit_premarket_gap`` are all unaffected by it.
+
+    Horizon 0 deliberately does **not** follow it there. The morning claim is
+    emitted at 08:15, and that session's attribution row does not exist until the
+    PM score runs after the close — there is nothing to residualize against at
+    emission time, and the grade has to land in that same evening's close brief.
+    It is also explicitly a price call ("this gap holds into the close"), not a
+    factor-adjusted one, so residualizing it would grade a different claim than
+    the one the brief made to the reader.
+    """
+    returns = {
+        row["symbol"]: _day_return(row["c"], row["prev_c"])
+        for row in conn.execute(
+            _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
+        ).mappings()
+    }
+    return _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+
+
+def _verdict(
+    sym: Fraction | None, bench: Fraction | None, direction: str
+) -> str | None:
+    """correct/wrong for the claimed direction, or None when the data to judge
+    isn't there. Shared by both graders so a change to what counts as vindicated
+    can't drift between them."""
     if sym is None or bench is None:
         return None
     rel = sym - bench

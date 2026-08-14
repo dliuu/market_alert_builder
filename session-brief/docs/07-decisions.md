@@ -184,7 +184,9 @@ D22 set the shape; implementation surfaced five decisions it doesn't cover.
 
 ---
 
-**D24 — M15 pre-market: a real `quotes` table, a deterministic synthetic feed, and horizon-0 as an engine change**
+**D28 — M15 pre-market: a real `quotes` table, a deterministic synthetic feed, and horizon-0 as an engine change**
+*(Numbered D28, not D24: M13 landed upstream while M15 was in flight and took
+D24–D27. This entry was written as D24 and renumbered at integration time.)*
 §2 (overnight tape) and §3 (pre-market names) run on a **new `quotes` table** —
 migration `0011_quotes`. The design spec said the feeds needed no migration
 because `quotes` already existed; it never did (`docs/03` sketched it, `0003`
@@ -273,16 +275,33 @@ lesson: a contract enum and a database CHECK are two separate sources of truth,
 and changing one does not change the other — the same shape of gap D23(1) found
 between the generated Pydantic and the canonical schema, one level down the
 stack.
+**Claim grading splits by claim shape, because the two claim types are about
+different things.** M13 landed upstream mid-milestone and re-pointed horizon-≥1
+grading at the *sign of the realized residual* (D24) so beta earns no credit.
+The horizon-0 morning claim deliberately does **not** follow it there, for two
+reasons that are properties of the claim rather than conveniences: it is emitted
+at **08:15**, when that session's attribution row does not exist — it isn't
+produced until the PM score runs after the close, and the grade has to land in
+that same evening's close brief; and it is explicitly a **price** call ("this
+gap holds into the close"), not a factor-adjusted one, so residualizing it would
+grade a different claim than the one the brief made to the reader. `_grade` is
+therefore a two-line dispatch over `_grade_open_close` (horizon 0) and
+`_grade_relative` (horizon ≥ 1), with `_verdict` shared so what counts as
+vindicated cannot drift between them. M13's residual grading replaces
+`_grade_relative`'s body and touches nothing else.
 *Rules out:* a `quotes` table keyed by capture timestamp; RVOL over pre-market
 volume; the open brief resolving claims; a section that knows which provider
 filled `quotes`; blocking §2/§3 on the data licence; one `MarketDataProvider`
 protocol widened to cover pre-market data; assuming a contract enum bump reaches
 a table's CHECK constraints without its own migration; grading a horizon-0 claim
-on anything but the open→close interval it claimed; a shared closes dict that
-lets the tape's bootstrap seed answer for a held name.
+on anything but the open→close interval it claimed; residualizing a claim made
+before any attribution exists for the session; a shared closes dict that lets
+the tape's bootstrap seed answer for a held name.
 *Reverses if:* the premium pre-market licence lands (swap the provider and flip
 `constants.PREMARKET_FEED_IS_SYNTHETIC` — `TAPE_SEED_LEVELS` and the
 `data_quality.stale` marker both retire with no renderer change); a news feed
-lands (`has_news` starts firing with no other change); or M13's attribution
-lands and §1's salience upgrades from the largest gap to the
-largest overnight `|resid_z|` — a change to one sort key in `_premarket`.
+lands (`has_news` starts firing with no other change); §1's salience upgrades
+from the largest gap to the largest overnight `|resid_z|` now that M13's
+attribution has landed — a change to one sort key in `_premarket`; or a
+same-morning attribution row ever exists, which would let the horizon-0 claim
+be residualized like every other type.

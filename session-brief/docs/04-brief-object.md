@@ -92,7 +92,8 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 1 | M4 | `book` + `attribution` |
 | 2 | M5 | per-row `tier`, `tape_quality` section, populated `suppressed[]` |
 | 3 | M14 | `book` nullable (the open brief omits P&L); §4 calendar and §5 sector-setup row fields; `row.symbol` optional for macro releases |
-| 4 | M15 | §2 `overnight_tape` row fields (`level`, `overnight_pct`, `overnight_abs`); §3 `premarket` row fields (`pre_pct`, `gap_cents`, `premarket_vol_mult`); `claim.horizon_sessions` allows `0`; `claim.type` gains `premarket_gap` |
+| 4 | M13 | attribution decomposition on the close brief's rows (`market_bps`/`theme_bps`/`resid_bps`/`resid_z`/`provisional`) + `\|resid_z\|` salience ordering |
+| 5 | M15 | §2 `overnight_tape` row fields (`level`, `overnight_pct`, `overnight_abs`); §3 `premarket` row fields (`pre_pct`, `gap_cents`, `premarket_vol_mult`); `claim.horizon_sessions` allows `0`; `claim.type` gains `premarket_gap` |
 
 ## Narration contract
 
