@@ -82,3 +82,17 @@ EDGAR_USER_AGENT: str = os.environ.get("EDGAR_USER_AGENT", "")
 # The weekly fundamentals fire pings its own check, like every other scheduled
 # run (docs/02). Empty ⇒ no ping.
 HEALTHCHECKS_FUNDAMENTALS_URL: str = os.environ.get("HEALTHCHECKS_FUNDAMENTALS_URL", "")
+# FinancialData.net (M16). One key is also the live/synthetic switch: empty ⇒
+# the open brief's §2/§3/§4 run on the deterministic synthetic feed exactly as
+# M14/M15 shipped them; set ⇒ FdnClient serves live pre-market, calendar, and
+# news data. Premium tier ($69/mo, personal use) covers every endpoint we call.
+FDN_API_KEY: str = os.environ.get("FDN_API_KEY", "")
+
+
+def premarket_feed_is_synthetic() -> bool:
+    """Whether §2/§3 are running on invented levels. Derived from the key, never
+    hand-flipped — the constants.py flag this replaces (M15) rotted the moment
+    it and the provider construction could disagree. `assemble_open` reads this
+    to stamp `overnight_tape.synthetic` into `data_quality.stale`, which is the
+    single source both renderers key their banner off."""
+    return not FDN_API_KEY

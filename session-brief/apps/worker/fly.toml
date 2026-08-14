@@ -6,6 +6,7 @@
 #       RESEND_API_KEY=... RENDER_SHARED_SECRET=... WEB_RENDER_URL=... \
 #       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=... \
 #       EDGAR_USER_AGENT="Session Brief you@example.com"
+#       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=... FDN_API_KEY=...
 #   fly deploy
 #
 # EDGAR_USER_AGENT is not a credential — SEC EDGAR has no API key and no

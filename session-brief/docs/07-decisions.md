@@ -335,6 +335,28 @@ be residualized like every other type.
 ---
 
 **D30 — M17/M19 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
+**D29 — fdn is spoken directly over httpx, not through fdnpy (M16)**
+*(Numbered D29, not D25: D25–D28 landed from M13/M15 work while this milestone
+was being planned. The plan document that specced this entry still calls it
+D25 — see D28's identical note for the same drift.)*
+The fdnpy SDK parses prices as float and adds a requests dependency; the money
+invariant wants `parse_float=Decimal` on every byte, and the repo already
+speaks httpx to Tiingo. `FdnClient` replicates the four-line transport with
+Decimal parsing and verbatim response capture (invariant 5). The vendor's
+`key` query parameter is an accepted exception to the header-auth rule — fdn
+has no header auth — mitigated by never logging request URLs. The live/
+synthetic switch is the presence of `FDN_API_KEY`, never a hand-flipped flag:
+a flag and a construction site can disagree; a derivation cannot.
+*Rules out:* the `fdnpy` SDK as a dependency; float prices anywhere on the fdn
+path; a hand-flipped `constants.PREMARKET_FEED_IS_SYNTHETIC`-style switch for
+the live/synthetic mode.
+*Reverses if:* fdnpy ships a `parse_float` hook or a Decimal mode, making the
+hand-rolled transport redundant; or fdn adds header auth, removing the query-
+parameter exception.
+
+---
+
+**D30 — M17/M18 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
 The catalysts module (insider flow, Form 144, index and ETF membership, lockups,
 index eligibility) arrives as an external spec written against a generic repo.
 Seven of its structural choices are reconciled here; the detector rules,
