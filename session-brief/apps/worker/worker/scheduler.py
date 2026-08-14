@@ -134,6 +134,19 @@ def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
 # --- The daily job ----------------------------------------------------------
 
 
+def sector_benchmarks(conn: Connection, user_id: str) -> list[str]:
+    """Every benchmark set in the book. Settable in the UI since M1, and read by
+    two callers: the ingest universe and §2's foreign proxies."""
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT benchmark_symbol FROM sectors "
+            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
+        ),
+        {"u": user_id},
+    ).all()
+    return sorted(str(r[0]) for r in rows)
+
+
 def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
     """The symbols to refresh: every held name, every sector benchmark, plus the
     market benchmark. SPY is *always* needed for the vs-SPY line even when it
@@ -142,15 +155,11 @@ def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
     level down: settable in the book UI since M1, never ingested, so the open
     brief's §5 trailing-5d line had nothing to read (M14)."""
     rows = conn.execute(
-        text(
-            "SELECT DISTINCT symbol FROM holdings WHERE user_id = :u "
-            "UNION "
-            "SELECT DISTINCT benchmark_symbol FROM sectors "
-            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
-        ),
+        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u"),
         {"u": user_id},
     ).all()
-    return sorted({str(r[0]) for r in rows} | {BENCHMARK_SYMBOL})
+    held = {str(r[0]) for r in rows}
+    return sorted(held | set(sector_benchmarks(conn, user_id)) | {BENCHMARK_SYMBOL})
 
 
 def _bars_present(engine: Engine, symbols: list[str], session_date: date) -> set[str]:
@@ -324,23 +333,14 @@ def ingest_premarket_for_session(
 
     with engine.connect() as conn:
         held = book_symbols(conn, user_id)
-        benchmarks = [
-            str(r[0])
-            for r in conn.execute(
-                text("SELECT DISTINCT benchmark_symbol FROM sectors "
-                     "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"),
-                {"u": user_id},
-            ).all()
-        ]
-        tape = tape_universe(benchmarks)
+        tape = tape_universe(sector_benchmarks(conn, user_id))
         closes = prior_closes(
             conn, held + [symbol for symbol, _, _ in tape], prior_session
         )
 
-    # The tape symbols have no bars (nothing ingests futures), so seed their
-    # bases from the tape's own prior capture where one exists, and skip the
-    # rest — a symbol with no base is omitted rather than invented.
-    with engine.connect() as conn:
+        # The tape symbols have no bars (nothing ingests futures), so seed their
+        # bases from the tape's own prior capture where one exists, and skip the
+        # rest — a symbol with no base is omitted rather than invented.
         closes |= _prior_tape_levels(conn, [s for s, _, _ in tape], prior_session)
 
     prov = provider or SyntheticPremarketProvider(closes, session_date)
@@ -364,7 +364,7 @@ def run_open_session_job(
 ) -> str:
     """The 08:15 ET run. Returns ``skipped-holiday`` or ``sent``.
 
-    Two respects it stays simpler than the close job: **no EOD bar poll**, because
+    In two respects it stays simpler than the close job: **no EOD bar poll**, because
     the open brief reads the *prior* close, which was already cached last night,
     and **no skip gate**, because the open brief always sends (docs/05). It does
     have ingest work of its own, though: the 08:00 stage (docs/02) —
