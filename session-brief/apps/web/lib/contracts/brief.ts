@@ -83,6 +83,26 @@ export interface Row {
    */
   why?: string | null;
   /**
+   * Attribution: market factor contribution to the day move, bps (M13).
+   */
+  market_bps?: number | null;
+  /**
+   * Attribution: theme factor contribution, bps (M13).
+   */
+  theme_bps?: number | null;
+  /**
+   * Attribution: idiosyncratic residual = total - market - theme, bps (M13).
+   */
+  resid_bps?: number | null;
+  /**
+   * Attribution: MAD-scaled residual z-score; salience (M13).
+   */
+  resid_z?: number | null;
+  /**
+   * Attribution row is a provisional PM score, not yet reconciled (M13).
+   */
+  provisional?: boolean | null;
+  /**
    * Human-readable name for a row that isn't identified by its ticker (open brief §4 calendar, e.g. "CPI (Jul)").
    */
   label?: string | null;

@@ -6,8 +6,8 @@ claim type and a `horizon_sessions` minimum of 0, but the DB owns the schema
 with it: `claim_type` didn't admit `premarket_gap` and `horizon_sessions`
 required `>= 1`. Task 8 needs both to store the open brief's same-day claim.
 
-Revision ID: 0012_claims_premarket_gap
-Revises: 0011_quotes
+Revision ID: 0013_claims_premarket_gap
+Revises: 0012_quotes
 Create Date: 2026-08-13
 
 """
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0012_claims_premarket_gap"
-down_revision: str | None = "0011_quotes"
+revision: str = "0013_claims_premarket_gap"
+down_revision: str | None = "0012_quotes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

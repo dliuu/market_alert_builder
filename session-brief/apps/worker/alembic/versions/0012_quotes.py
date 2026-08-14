@@ -18,8 +18,8 @@ Held names land in `extended_last`/`extended_v` (the pre-market print and the
 summed pre-market volume); the macro tape symbols land in `last`/`prev_close`.
 One table, because both are "a quote for a symbol, captured before the open".
 
-Revision ID: 0011_quotes
-Revises: 0010_open_events
+Revision ID: 0012_quotes
+Revises: 0011_attribution_consumers
 Create Date: 2026-08-13
 
 """
@@ -29,8 +29,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0011_quotes"
-down_revision: str | None = "0010_open_events"
+revision: str = "0012_quotes"
+down_revision: str | None = "0011_attribution_consumers"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

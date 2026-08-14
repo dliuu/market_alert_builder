@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.compute import PositionMetrics
-from worker.constants import BENCHMARK_SYMBOL
+from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL
 from worker.premarket import PremarketQuote
 
 # A full-tier name must beat/lag the benchmark by more than this (1d relative)
@@ -130,16 +130,12 @@ _RESOLVE_SESSION = text("""
     LIMIT 1 OFFSET :offset
 """)
 
-# Same-session day returns for the name and the benchmark (LAG for prev close).
-# Horizon >= 1 only — see `_grade`'s horizon-0 branch for why horizon 0 cannot
-# reuse this close-to-close base.
-_RETURNS = text("""
-    SELECT symbol, c, prev_c FROM (
-        SELECT symbol, session_date, c,
-               LAG(c) OVER (PARTITION BY symbol ORDER BY session_date) AS prev_c
-        FROM bars_daily
-    ) ranked
-    WHERE session_date = :session_date AND symbol = ANY(:symbols)
+# Realized residual for the graded session (M13 §3: grade against the SIGN of
+# resid_bps, not the raw sym-vs-benchmark return — beta shouldn't earn credit).
+# Horizon >= 1 only.
+_RESID_ON = text("""
+    SELECT resid_bps FROM attribution
+    WHERE symbol = :symbol AND trade_date = :d AND model_version = :mv
 """)
 
 # Horizon 0's base: the *same* session's own open and close (I1, M15 review).
@@ -150,7 +146,8 @@ _RETURNS_OPEN_CLOSE = text("""
 
 _UPDATE_RESOLVED = text("""
     UPDATE claims
-    SET outcome = :outcome, resolved_at = now(), resolved_session = :resolved_session
+    SET outcome = :outcome, resolved_at = now(), resolved_session = :resolved_session,
+        graded_model_version = :graded_mv
     WHERE id = :id
 """)
 
@@ -190,13 +187,20 @@ def resolve_due_claims(
         )
         if resolve_on is None or resolve_on > session_date:
             continue  # the horizon hasn't elapsed yet
-        outcome = _grade(
+        graded = _grade(
             conn, row["symbol"], row["direction"], resolve_on, row["horizon_sessions"]
         )
-        if outcome is None:
-            continue  # can't grade (missing benchmark bar) — leave for next run
+        if graded is None:
+            continue  # no residual yet, or no bar to grade from — leave for next run
+        outcome, graded_mv = graded
         conn.execute(
-            _UPDATE_RESOLVED, {"id": row["id"], "outcome": outcome, "resolved_session": resolve_on}
+            _UPDATE_RESOLVED,
+            {
+                "id": row["id"],
+                "outcome": outcome,
+                "resolved_session": resolve_on,
+                "graded_mv": graded_mv,
+            },
         )
         resolved.append(
             ResolvedClaim(
@@ -233,13 +237,14 @@ def _resolve_session(
 
 def _grade(
     conn: Connection, symbol: str, direction: str, resolve_on: date, horizon: int
-) -> str | None:
+) -> tuple[str, int | None] | None:
     """Dispatch to the grader the claim's own shape calls for.
 
-    The two arms answer different questions, and keeping them as separate
-    functions rather than branches inside one body is deliberate:
-    ``_grade_relative`` is the seam M13's residual grading replaces whole, and
-    its docstring says why horizon 0 does not follow it there.
+    The two arms answer different questions, so they are separate functions
+    rather than branches inside one body. Both return
+    ``(outcome, model_version)``; the model version is ``None`` for horizon 0,
+    because no attribution model produced that grade and the
+    ``claims.graded_model_version`` column is nullable so that stays honest.
     """
     if horizon == 0:
         return _grade_open_close(conn, symbol, direction, resolve_on)
@@ -248,7 +253,7 @@ def _grade(
 
 def _grade_open_close(
     conn: Connection, symbol: str, direction: str, resolve_on: date
-) -> str | None:
+) -> tuple[str, None] | None:
     """Horizon 0 (the morning ``premarket_gap`` claim): open→close on the emit
     session itself, against the benchmark.
 
@@ -268,45 +273,44 @@ def _grade_open_close(
             {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]},
         ).mappings()
     }
-    return _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+    verdict = _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+    return None if verdict is None else (verdict, None)
 
 
 def _grade_relative(
     conn: Connection, symbol: str, direction: str, resolve_on: date
-) -> str | None:
-    """Horizon >= 1: close-to-close relative strength, exactly as M6/D17 built it.
+) -> tuple[str, int] | None:
+    """Horizon >= 1: grade against the SIGN of the realized residual (M13 §3,
+    D24) — an overnight/relative call shouldn't get credit for market beta.
+    Returns (outcome, model_version), or None when no residual is stored yet.
 
-    **This function is the M13 seam.** M13 (upstream) re-points horizon >= 1
-    grading at the *sign of the realized residual* (`attribution.resid_bps`), so
-    that beta earns no credit — a name that rose only because the market rose has
-    not vindicated a call about that name — and stamps
-    ``claims.graded_model_version``. That change replaces this function's body
-    and nothing else: the dispatch above, the horizon-0 grader, and
-    ``emit_premarket_gap`` are all unaffected by it.
-
-    Horizon 0 deliberately does **not** follow it there. The morning claim is
-    emitted at 08:15, and that session's attribution row does not exist until the
-    PM score runs after the close — there is nothing to residualize against at
+    Horizon 0 deliberately does **not** come here. The morning claim is emitted
+    at 08:15, and that session's attribution row does not exist until the PM
+    score runs after the close — there is nothing to residualize against at
     emission time, and the grade has to land in that same evening's close brief.
     It is also explicitly a price call ("this gap holds into the close"), not a
     factor-adjusted one, so residualizing it would grade a different claim than
     the one the brief made to the reader.
     """
-    returns = {
-        row["symbol"]: _day_return(row["c"], row["prev_c"])
-        for row in conn.execute(
-            _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
-        ).mappings()
-    }
-    return _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+    row = conn.execute(
+        _RESID_ON,
+        {"symbol": symbol, "d": resolve_on, "mv": ATTRIBUTION_MODEL_VERSION},
+    ).mappings().first()
+    if row is None or row["resid_bps"] is None:
+        return None
+    resid = float(row["resid_bps"])
+    if direction == "up":
+        return ("correct" if resid > 0 else "wrong", ATTRIBUTION_MODEL_VERSION)
+    if direction == "down":
+        return ("correct" if resid < 0 else "wrong", ATTRIBUTION_MODEL_VERSION)
+    return None
 
 
 def _verdict(
     sym: Fraction | None, bench: Fraction | None, direction: str
 ) -> str | None:
     """correct/wrong for the claimed direction, or None when the data to judge
-    isn't there. Shared by both graders so a change to what counts as vindicated
-    can't drift between them."""
+    isn't there."""
     if sym is None or bench is None:
         return None
     rel = sym - bench
@@ -317,10 +321,14 @@ def _verdict(
     return None
 
 
-def _day_return(c: object, prev_c: object) -> Fraction | None:
-    if prev_c is None:
+def _day_return(c: object, base: object) -> Fraction | None:
+    """A return over whatever base the caller passes — the prior close for a
+    close-to-close window, the session's own open for horizon 0. M13 dropped
+    this helper when residual grading replaced close-to-close; horizon 0 still
+    needs it."""
+    if base is None:
         return None
-    prev = Fraction(str(prev_c))
+    prev = Fraction(str(base))
     if prev == 0:
         return None
     return (Fraction(str(c)) - prev) / prev

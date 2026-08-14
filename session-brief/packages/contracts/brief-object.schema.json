@@ -91,6 +91,16 @@
           "type": ["string", "null"],
           "description": "LLM-written. Prose only — must contain no figures."
         },
+        "market_bps": { "type": ["integer", "null"],
+          "description": "Attribution: market factor contribution to the day move, bps (M13)." },
+        "theme_bps": { "type": ["integer", "null"],
+          "description": "Attribution: theme factor contribution, bps (M13)." },
+        "resid_bps": { "type": ["integer", "null"],
+          "description": "Attribution: idiosyncratic residual = total - market - theme, bps (M13)." },
+        "resid_z": { "type": ["number", "null"],
+          "description": "Attribution: MAD-scaled residual z-score; salience (M13)." },
+        "provisional": { "type": ["boolean", "null"],
+          "description": "Attribution row is a provisional PM score, not yet reconciled (M13)." },
 
         "label": {
           "type": ["string", "null"],

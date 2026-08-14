@@ -1,18 +1,25 @@
 """Scheduler + dead-man's switch (M10). Pure fire-time math, the poll loop, and
-the go/no-go job's holiday-skip and failure-ping paths — all without a clock,
-a network, or a database."""
+the go/no-go job's holiday-skip and failure-ping paths — mostly without a clock,
+a network, or a database; one DB test at the bottom drives run_reconcile_job's
+real body end to end (skipped without DATABASE_URL)."""
 
 from __future__ import annotations
 
 import contextlib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
+from tests.helpers_attribution import seed_bars_for
 from worker import calendar, scheduler
+from worker.attribution import refit, score
+from worker.constants import ATTRIBUTION_MODEL_VERSION as MV
+from worker.themes_seed import seed_themes
 
 UTC = ZoneInfo("UTC")
 _DELAY = timedelta(minutes=45)
@@ -50,6 +57,31 @@ def test_next_fire_lands_on_holiday_as_heartbeat() -> None:
     # skip the send, but the dead-man's switch must still check in).
     now = datetime(2026, 9, 6, 21, 0, tzinfo=UTC)
     assert scheduler.next_fire(now, _DELAY) == datetime(2026, 9, 7, 20, 45, tzinfo=UTC)
+
+
+# --- next_session_fire / next_weekly_fire (pure) ----------------------------
+
+
+def test_next_weekly_fire_hits_next_saturday_0800_et() -> None:
+    # Fri 2026-09-04 12:00 UTC → Sat 2026-09-05 08:00 ET == 12:00 UTC.
+    now = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    ft = scheduler.next_weekly_fire(now, weekday=5, at_et=time(8, 0))
+    assert ft == datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+
+
+def test_next_session_fire_pm_1830_et_skips_holiday() -> None:
+    # Sat 2026-09-05 → next session is Tue 2026-09-08 (Mon is Labor Day);
+    # 18:30 ET == 22:30 UTC.
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+    ft = scheduler.next_session_fire(now, at_et=time(18, 30))
+    assert ft == datetime(2026, 9, 8, 22, 30, tzinfo=UTC)
+
+
+def test_next_session_fire_rolls_when_time_passed() -> None:
+    # Fri 2026-09-04 23:00 UTC is past 18:30 ET (22:30 UTC) → next session Tue.
+    now = datetime(2026, 9, 4, 23, 0, tzinfo=UTC)
+    ft = scheduler.next_session_fire(now, at_et=time(18, 30))
+    assert ft == datetime(2026, 9, 8, 22, 30, tzinfo=UTC)
 
 
 # --- dead-man's switch pings ------------------------------------------------
@@ -203,3 +235,229 @@ def test_run_session_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch
             healthcheck_url="https://hc.example/abc",
         )
     assert pings == [("fail", "https://hc.example/abc")]  # /fail pinged, then raised
+
+
+# --- run_refit_job / run_pm_score_job / run_reconcile_job -------------------
+
+
+def test_run_refit_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution, maintenance
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        attribution, "refit", lambda conn, fit_date, **k: seen.update(fit_date=fit_date)
+    )
+    monkeypatch.setattr(
+        maintenance, "surface_maintenance_flags", lambda conn, user_id, session_date, mv: []
+    )
+    out = scheduler.run_refit_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),  # Saturday
+        healthcheck_url="https://hc.example/refit",
+    )
+    assert out == "refit"
+    assert seen["fit_date"] == date(2026, 9, 4)  # last session before Saturday
+    assert pings == [("ok", "https://hc.example/refit")]
+
+
+def test_run_refit_job_surfaces_maintenance_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution, maintenance
+    from worker.constants import DEV_USER_ID
+
+    monkeypatch.setattr(attribution, "refit", lambda conn, fit_date, **k: None)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        maintenance,
+        "surface_maintenance_flags",
+        lambda conn, user_id, session_date, model_version: seen.update(
+            user_id=user_id, session_date=session_date, model_version=model_version
+        )
+        or [],
+    )
+    out = scheduler.run_refit_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),  # Saturday
+        healthcheck_url="https://hc.example/refit",
+    )
+    assert out == "refit"
+    assert seen["user_id"] == DEV_USER_ID
+    assert seen["session_date"] == date(2026, 9, 4)  # last session before Saturday
+    assert pings == [("ok", "https://hc.example/refit")]
+
+
+def test_run_pm_score_job_scores_today_synthetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        attribution,
+        "score",
+        lambda conn, trade_date, **k: seen.update(trade_date=trade_date, **k),
+    )
+    out = scheduler.run_pm_score_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 22, 30, tzinfo=UTC),  # Friday, a session day
+        healthcheck_url="https://hc.example/pm",
+    )
+    assert out == "pm-scored"
+    assert seen["trade_date"] == date(2026, 9, 4)
+    assert seen["synthetic"] is True
+    assert pings == [("ok", "https://hc.example/pm")]
+
+
+def test_run_pm_score_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+
+    # Labor Day — no session; scoring must not run at all.
+    out = scheduler.run_pm_score_job(
+        object(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 7, 22, 30, tzinfo=UTC),
+        healthcheck_url="https://hc.example/pm",
+    )
+    assert out == "skipped-holiday"
+    assert pings == [("ok", "https://hc.example/pm")]
+
+
+def test_run_reconcile_job_reconciles_prev_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import reconcile as recon_mod
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        recon_mod,
+        "reconcile",
+        lambda conn, trade_date, **k: seen.update(trade_date=trade_date),
+    )
+    # Tue 2026-09-08 07:00 ET; prior session is Fri 2026-09-04 (Mon holiday).
+    out = scheduler.run_reconcile_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 8, 11, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/am",
+    )
+    assert out == "reconciled"
+    assert seen["trade_date"] == date(2026, 9, 4)
+    assert pings == [("ok", "https://hc.example/am")]
+
+
+def test_run_reconcile_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+
+    # Labor Day — no session; reconcile must not run at all.
+    out = scheduler.run_reconcile_job(
+        object(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 7, 11, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/am",
+    )
+    assert out == "skipped-holiday"
+    assert pings == [("ok", "https://hc.example/am")]
+
+
+def test_run_refit_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    from worker import attribution
+
+    def _boom(conn: Any, fit_date: date, **k: Any) -> None:
+        raise RuntimeError("refit exploded")
+
+    monkeypatch.setattr(attribution, "refit", _boom)
+
+    with pytest.raises(RuntimeError, match="refit exploded"):
+        scheduler.run_refit_job(
+            _FakeEngine(),  # type: ignore[arg-type]
+            now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+            healthcheck_url="https://hc.example/refit",
+        )
+    assert pings == [("fail", "https://hc.example/refit")]
+
+
+# --- run_reconcile_job through the real scheduled path (DB, DoD #4) ---------
+#
+# The tests above monkeypatch worker.reconcile.reconcile, so the join between
+# the scheduler's calendar math (today_et -> previous_session) and the real
+# reconcile() body is untested. That path needs a genuine DB.
+#
+# run_reconcile_job takes an Engine and opens its own `engine.begin()`. The
+# project's only DB fixture (`db_conn`) is a single connection whose
+# transaction is rolled back at teardown — the safe pattern every other DB
+# test in this repo relies on, including the reconcile seeding this test
+# mirrors (tests/test_reconcile.py), which seeds real symbols (SPY, NVDA, ...)
+# into shared, unscoped tables (bars_daily, attribution_fits, basket_returns).
+# Handing run_reconcile_job a *real* Engine would make it open a second, truly
+# committed transaction — risking a permanent overwrite of real historical
+# bars for those symbols if this dev DB already has them backfilled, with no
+# way to undo it afterwards. `_ConnEngine` avoids that: it satisfies the same
+# `.begin()` duck type run_reconcile_job expects (the pattern `_FakeEngine`
+# above already uses for the connectionless tests) but hands back the
+# fixture's own open connection instead of a second real transaction, so every
+# write here still rolls back at fixture teardown like any other DB test.
+
+
+class _ConnEngine:
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+
+    def begin(self) -> Any:
+        return contextlib.nullcontext(self._conn)
+
+
+def test_run_reconcile_job_flips_revised_through_scheduled_path(db_conn: Connection) -> None:
+    # Mirrors tests/test_reconcile.py's seeding: fit + PM-synthesize a session,
+    # then corrupt one symbol's synthetic total_bps so it diverges from the
+    # real official bar beyond RECONCILE_TOL.
+    symbols = ["NVDA", "AMD", "MU", "SNDK", "AVGO", "SPY"]
+    trade_date = date(2020, 6, 30)
+    fit_now = datetime(2020, 6, 30, 22, 0, tzinfo=UTC)
+
+    seed_themes(db_conn)
+    seed_bars_for(db_conn, symbols, sessions=121, end=trade_date)
+    refit(db_conn, trade_date, now_utc=fit_now, model_version=MV)
+    score(db_conn, trade_date, now_utc=fit_now, model_version=MV, synthetic=True)
+    db_conn.execute(
+        text(
+            "UPDATE attribution SET total_bps = 99999 "
+            "WHERE trade_date = :d AND symbol = 'NVDA' AND model_version = :mv"
+        ),
+        {"d": trade_date, "mv": MV},
+    )
+
+    # Wed 2020-07-01, 07:00 ET (a real session) -> previous_session == trade_date.
+    reconcile_now = datetime(2020, 7, 1, 11, 0, tzinfo=UTC)
+    assert calendar.today_et(reconcile_now) == date(2020, 7, 1)
+    assert calendar.previous_session(date(2020, 7, 1)) == trade_date
+
+    outcome = scheduler.run_reconcile_job(
+        _ConnEngine(db_conn),  # type: ignore[arg-type]
+        now_utc=reconcile_now,
+        healthcheck_url="",
+    )
+    assert outcome == "reconciled"
+
+    row = db_conn.execute(
+        text(
+            "SELECT revised, provisional, synthetic FROM attribution "
+            "WHERE trade_date = :d AND symbol = 'NVDA' AND model_version = :mv"
+        ),
+        {"d": trade_date, "mv": MV},
+    ).mappings().one()
+    # The divergent bar flips revised end to end, through run_reconcile_job's
+    # own calendar math and engine.begin() — not just reconcile() in isolation.
+    assert row["revised"] is True
+    assert row["provisional"] is False
+    assert row["synthetic"] is False

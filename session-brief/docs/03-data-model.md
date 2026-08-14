@@ -31,6 +31,8 @@ news_items   (id, symbol, headline, url, published_at, source)
 
 Market data tables have **no `user_id`** — they're shared across the tenant base and keyed by symbol. This is what makes ingest cost scale with the symbol universe rather than the user count.
 
+`attribution (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, resid_z, provisional, …)` (M11/M12) is the same shape: shared, no `user_id`, keyed by `(symbol, trade_date, model_version)`. Assembly (M13) reads it filtered to held names for the session — one query, no per-user compute.
+
 **Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
 
 `quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
@@ -41,8 +43,13 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 metrics  (user_id, symbol, session_date, metric, value)   -- PK (user_id, symbol, session_date, metric)
 flags    (id, user_id, flag_type, symbol, sector_id, first_seen, last_seen,
           severity, payload jsonb)
+         -- flag_type CHECK: concentration | correlation | runway | dilution |
+         --   earnings_soon | supply_event | short_interest | theme_misfit |
+         --   beta_instability. The last two (M13 Task 7, docs/07 D24) are
+         --   dashboard-only: written straight to this table from
+         --   attribution_fits/attribution_signals, never into a BriefObject.
 claims   (id, user_id, brief_id, symbol, claim_type, direction, horizon_sessions,
-          resolved_at, outcome)                  -- outcome: correct | wrong | unresolved
+          resolved_at, outcome, graded_model_version)  -- outcome: correct | wrong | unresolved
 briefs   (id, user_id, session_date, kind, schema_version, body jsonb, created_at)
 jobs     (id, user_id, job_type, payload jsonb, status, locked_at, attempts, created_at)
 deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
@@ -55,6 +62,8 @@ deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
 `flags.last_seen` is what enforces the once-a-week rate limit on the correlation flag. Rate limiting belongs in the data, not the renderer — otherwise you can't answer "when did I last warn myself about this?"
 
 `UNIQUE (brief_id, recipient)` is what stops a crashed worker's retry from mailing the same brief four times.
+
+`claims.graded_model_version` (M13, nullable) stamps the `attribution.model_version` a claim was graded against — mirrors the attribution table's own versioning (D21) so a future model re-spec never silently rewrites past grades.
 
 ## Metric definitions
 

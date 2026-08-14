@@ -10,8 +10,9 @@ DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
 BENCHMARK_SYMBOL = "SPY"
 
 # Attribution model version, stamped on every attribution row so a spec change
-# never rewrites history (M11/D21).
-ATTRIBUTION_MODEL_VERSION = 1
+# never rewrites history (M11/D21). v1 (M11) rows stay readable and untouched
+# under model_version=1; v2 (M12) is the two-stage orthogonalized estimator.
+ATTRIBUTION_MODEL_VERSION = 2
 
 # --- Open brief §2/§3 (M15) -------------------------------------------------
 

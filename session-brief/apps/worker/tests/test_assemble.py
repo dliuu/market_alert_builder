@@ -161,5 +161,80 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
 
 
 def test_schema_version_is_five() -> None:
-    # v4 = M15: §2/§3 row fields + the horizon-0 morning claim (docs/04).
+    # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
+    # horizon-0 morning claim, on top of it (docs/04).
     assert _mixed().schema_version == SCHEMA_VERSION == 5
+
+
+def test_material_residual_predicate() -> None:
+    from worker.attribution import material_residual
+
+    assert material_residual(2.5) is True
+    assert material_residual(-2.0) is True
+    assert material_residual(1.9) is False
+    assert material_residual(None) is False
+
+
+def test_tier_full_on_material_residual_despite_flat_move() -> None:
+    from worker.assemble import _tier
+
+    # Tiny raw move, no RVOL spike, but a large residual → full tier.
+    assert _tier(Fraction(1, 1000), None, resid_z=3.2) == "full"
+
+
+def test_tier_unchanged_when_residual_immaterial() -> None:
+    from worker.assemble import _tier
+
+    assert _tier(Fraction(1, 1000), None, resid_z=0.5) == "suppressed"
+
+
+def _ranked() -> BriefObject:
+    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("D", "5", "100")]
+    prices = {
+        "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10% → full
+        "B": Price(c=Decimal("60"), prev_c=Decimal("50")),  # +20% → full
+        "D": Price(c=Decimal("120"), prev_c=Decimal("100")),  # +20% → full
+    }
+    closes = {"A": Decimal("110"), "B": Decimal("60"), "D": Decimal("120")}
+    decomp: dict[str, dict[str, object]] = {
+        "A": {
+            "market_bps": 50, "theme_bps": 10, "resid_bps": 40,
+            "resid_z": 1.0, "provisional": False,
+        },
+        "B": {
+            "market_bps": 100, "theme_bps": 50, "resid_bps": 850,
+            "resid_z": -3.5, "provisional": True,
+        },
+        # D has no decomposition row yet → resid_z is None and sorts last.
+    }
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT, decomp=decomp)
+
+
+def test_attribution_rows_ranked_by_abs_resid_z_desc_none_last() -> None:
+    obj = _ranked()
+    assert obj.schema_version == 4
+    attribution = next(s for s in obj.sections if s.id.value == "attribution")
+    assert [r.symbol for r in attribution.rows] == ["B", "A", "D"]
+    b_row = attribution.rows[0]
+    assert b_row.resid_bps == 850
+    assert b_row.resid_z == -3.5
+    assert b_row.provisional is True
+    d_row = attribution.rows[-1]
+    assert d_row.resid_z is None
+
+
+def test_row_accepts_decomposition_fields() -> None:
+    from contracts.brief import Row
+    r = Row.model_validate({
+        "symbol": "SNDK", "tier": "full", "market_bps": 12, "theme_bps": -4,
+        "resid_bps": 88, "resid_z": 3.1, "provisional": True,
+    })
+    assert r.resid_bps == 88 and r.resid_z == 3.1 and r.provisional is True
+
+
+def test_row_without_decomposition_still_valid() -> None:
+    from contracts.brief import Row
+    r = Row.model_validate({"symbol": "MU", "tier": "brief"})  # v2-era row
+    assert r.symbol == "MU"
