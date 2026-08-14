@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
+from datetime import time as clock_time
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +22,15 @@ import httpx
 from worker import config
 
 _FDN_BASE_URL = "https://financialdata.net/api/v1"
+
+_PREMARKET_OPEN_ET = clock_time(4, 0)  # extended-hours open; window end is capture_stamp
+
+
+def _parse_fdn_time(value: str) -> datetime:
+    """fdn minute timestamps ("YYYY-MM-DD HH:MM:SS") carry no zone; observed
+    values are UTC (spec: verified against the documented MSFT example; the
+    fdn-probe CLI re-verifies live the day the key lands)."""
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
 
 
 class FdnClient:
@@ -59,6 +69,64 @@ class FdnClient:
         symbol = params.get("identifier") or params.get("identifiers") or "*"
         self.captured.append((endpoint, symbol, response.text))
         return data
+
+
+class FdnPremarketProvider:
+    """Live PremarketProvider over FdnClient (M16). Constructor mirrors
+    SyntheticPremarketProvider — prior closes come from the caller, a provider
+    does not touch the database. A symbol with no prior close, no vendor
+    identifier, no window prints, or a failed feed is omitted, never invented.
+    Feed failures are per-symbol/per-endpoint and non-fatal: an empty feed
+    renders the section's omitted-note (M14), it never kills the 08:15 job.
+    """
+
+    def __init__(
+        self, client: FdnClient, prior_closes: dict[str, Decimal], session_date: date
+    ) -> None:
+        from worker import calendar
+        from worker.premarket import capture_stamp
+
+        self._client = client
+        self._closes = prior_closes
+        self._session = session_date
+        self._window_start = datetime.combine(
+            session_date, _PREMARKET_OPEN_ET, tzinfo=calendar.ET
+        ).astimezone(UTC)
+        self._window_end = capture_stamp(session_date)
+
+    def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for symbol in symbols:
+            prev = self._closes.get(symbol)
+            if prev is None:
+                continue
+            try:
+                records = self._client.fetch("latest-prices", identifier=symbol)
+            except httpx.HTTPError:
+                continue
+            window = [
+                r for r in records
+                if self._window_start <= _parse_fdn_time(str(r["time"])) <= self._window_end
+            ]
+            if not window:
+                continue
+            window.sort(key=lambda r: str(r["time"]))
+            out.append({
+                "symbol": symbol,
+                "extended_last": Decimal(str(window[-1]["close"])),
+                "extended_v": int(sum(Decimal(str(r.get("volume") or 0)) for r in window)),
+                "prev_close": prev,
+            })
+        return out
+
+    def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        return []  # Task 4
+
+    def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        return []  # Task 4
+
+    def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        return []  # Task 4
 
 
 class FdnProvider:
