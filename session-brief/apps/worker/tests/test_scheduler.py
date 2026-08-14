@@ -17,6 +17,7 @@ from sqlalchemy.engine import Connection
 
 from tests.helpers_attribution import seed_bars_for
 from worker import calendar, scheduler
+from worker import config as worker_config
 from worker.attribution import refit, score
 from worker.constants import ATTRIBUTION_MODEL_VERSION as MV
 from worker.themes_seed import seed_themes
@@ -461,3 +462,55 @@ def test_run_reconcile_job_flips_revised_through_scheduled_path(db_conn: Connect
     assert row["revised"] is True
     assert row["provisional"] is False
     assert row["synthetic"] is False
+
+
+# --- run_fundamentals_job (M18) --------------------------------------------
+
+
+def test_run_fundamentals_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(worker_config, "EDGAR_USER_AGENT", "Test (t@example.invalid)")
+    from worker import fundamentals
+
+    seen: dict[str, Any] = {}
+
+    def fake_ingest(conn: Any, client: Any, symbols: list[str], **k: Any) -> dict[str, Any]:
+        seen["symbols"] = symbols
+        return {"stored": 3, "skipped": []}
+
+    monkeypatch.setattr(fundamentals, "ingest_fundamentals", fake_ingest)
+    monkeypatch.setattr(scheduler, "_edgar_client", lambda: object())
+    monkeypatch.setattr(scheduler, "_fundamentals_symbols", lambda conn: ["AAA", "BBB"])
+
+    out = scheduler.run_fundamentals_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/fundamentals",
+    )
+
+    assert out == "ingested-3"
+    assert seen["symbols"] == ["AAA", "BBB"]
+    assert pings == [("ok", "https://hc.example/fundamentals")]
+
+
+def test_run_fundamentals_job_without_a_user_agent_skips_rather_than_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EDGAR needs no key, but it does need a contact User-Agent. Unset, the
+    weekly fire must degrade to a no-op the dead-man's switch still sees — a
+    crash-looping fire would be indistinguishable from a dead worker."""
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(worker_config, "EDGAR_USER_AGENT", "")
+
+    out = scheduler.run_fundamentals_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/fundamentals",
+    )
+
+    assert out == "skipped-no-user-agent"
+    assert pings == [("ok", "https://hc.example/fundamentals")]

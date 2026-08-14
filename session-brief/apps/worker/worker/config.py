@@ -79,3 +79,6 @@ PREMARKET_VOL_MIN_OBS: int = int(os.environ.get("PREMARKET_VOL_MIN_OBS", "5"))
 # returns 403 without one. Format: "Company or project (you@example.com)".
 # Empty ⇒ EdgarClient refuses at construction rather than 403-ing mid-run.
 EDGAR_USER_AGENT: str = os.environ.get("EDGAR_USER_AGENT", "")
+# The weekly fundamentals fire pings its own check, like every other scheduled
+# run (docs/02). Empty ⇒ no ping.
+HEALTHCHECKS_FUNDAMENTALS_URL: str = os.environ.get("HEALTHCHECKS_FUNDAMENTALS_URL", "")
