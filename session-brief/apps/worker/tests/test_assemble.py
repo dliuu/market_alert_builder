@@ -160,9 +160,10 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_four() -> None:
-    # v4 = M13 attribution decomp on top of M14's v3 open-brief shape (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 4
+def test_schema_version_is_five() -> None:
+    # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
+    # horizon-0 morning claim, on top of it (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 5
 
 
 def test_material_residual_predicate() -> None:
@@ -213,7 +214,7 @@ def _ranked() -> BriefObject:
 
 def test_attribution_rows_ranked_by_abs_resid_z_desc_none_last() -> None:
     obj = _ranked()
-    assert obj.schema_version == 4
+    assert obj.schema_version == SCHEMA_VERSION
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     assert [r.symbol for r in attribution.rows] == ["B", "A", "D"]
     b_row = attribution.rows[0]

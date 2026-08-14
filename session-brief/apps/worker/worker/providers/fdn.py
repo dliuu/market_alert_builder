@@ -57,3 +57,21 @@ class FdnProvider:
 
     def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError("fdnpy economic calendar is Premium; M14 §4 seeds")
+
+    # The M15 pre-market seam. fdnpy exposes all four (get_latest_prices,
+    # get_futures_prices, get_index_quotes, get_forex_quotes) at Premium tier,
+    # personal-use-only, with redistribution behind Enterprise (docs/02, D8).
+    # Until that is licensed the open brief runs on SyntheticPremarketProvider —
+    # a business decision, not a code blocker.
+
+    def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy latest prices are Premium; M15 seeds synthetically")
+
+    def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy futures are Premium; M15 seeds synthetically")
+
+    def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy index quotes are Premium; M15 seeds synthetically")
+
+    def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        raise NotImplementedError("fdnpy forex is Premium; M15 seeds synthetically")

@@ -34,7 +34,7 @@ def validator() -> Draft202012Validator:
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["close_brief.json", "close_brief_v2.json", "open_brief.json"],
+    ["close_brief.json", "close_brief_v2.json", "open_brief.json", "open_brief_v3.json"],
 )
 def test_fixture_validates_against_the_canonical_schema(
     validator: Draft202012Validator, fixture_name: str

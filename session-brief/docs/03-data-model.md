@@ -22,7 +22,8 @@ Use `lots`, not an average cost on `holdings`. Positions get added to, and migra
 raw_payloads (id, source, endpoint, symbol, as_of, body jsonb, fetched_at)
              -- UNIQUE (source, endpoint, symbol, as_of)
 bars_daily   (symbol, session_date, o, h, l, c, v, adj_c)   -- PK (symbol, session_date)
-quotes       (symbol, captured_at, last, prev_close, extended_last, extended_v)
+quotes       (symbol, session_date, captured_at, last, prev_close, extended_last, extended_v)
+             -- PK (symbol, session_date); one pre-open capture per symbol per session (M15)
 fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date)
 events       (id, symbol, event_type, occurs_at, payload jsonb)  -- earnings | lockup | macro
 news_items   (id, symbol, headline, url, published_at, source)
@@ -33,6 +34,8 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 `attribution (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, resid_z, provisional, …)` (M11/M12) is the same shape: shared, no `user_id`, keyed by `(symbol, trade_date, model_version)`. Assembly (M13) reads it filtered to held names for the session — one query, no per-user compute.
 
 **Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
+
+`quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
 
 ## Derived
 

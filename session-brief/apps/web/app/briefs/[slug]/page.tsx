@@ -32,12 +32,22 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const brief = row.body as unknown as BriefObject;
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
+  const overnightTape = brief.sections.find((s) => s.id === "overnight_tape");
+  // Same key as the email template: `assemble_open` appends this exact string
+  // to `data_quality.stale` while `constants.PREMARKET_FEED_IS_SYNTHETIC` is
+  // True. One flag, one place to flip it — nothing here changes the day a
+  // licensed feed lands.
+  const tapeIsSynthetic = brief.data_quality.stale.includes("overnight_tape.synthetic");
+  const premarket = brief.sections.find((s) => s.id === "premarket");
   const calendar = brief.sections.find((s) => s.id === "calendar");
   const sectors = brief.sections.find((s) => s.id === "sector_setup");
-  // §2/§3 are suppressed-with-a-note until their feeds land (M15). Showing the
-  // note is the point — the brief is short by design, not broken.
+  // §2/§3 render their own card (table + note) once they carry rows; a
+  // suppressed section with no rows falls through to this generic note list
+  // instead, so a quiet section's note prints exactly once either way.
   const omitted = brief.sections
-    .filter((s) => (s.id === "overnight_tape" || s.id === "premarket") && s.note)
+    .filter(
+      (s) => (s.id === "overnight_tape" || s.id === "premarket") && s.note && s.rows.length === 0,
+    )
     .map((s) => s.note);
 
   return (
@@ -154,6 +164,74 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
               )}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {/* Overnight tape — the open brief's §2 */}
+      {overnightTape && overnightTape.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>
+            Overnight tape
+            {tapeIsSynthetic && (
+              <span style={S.sectionNote}> · synthetic feed · not live prices</span>
+            )}
+          </h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Name</th>
+                <th style={S.thR}>vs prior close</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overnightTape.rows.map((r: Row) => (
+                <tr key={r.symbol ?? r.label}>
+                  <td style={S.td}>{r.label}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.overnight_pct ?? r.overnight_abs) }}>
+                    {r.overnight_pct != null
+                      ? pctOrDash(r.overnight_pct)
+                      : `${fmtLevel(r.level)} ${signedAbs(r.overnight_abs)}`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {overnightTape.note && <p style={S.muted}>{overnightTape.note}</p>}
+        </section>
+      )}
+
+      {/* Your names, pre-market — the open brief's §3 */}
+      {premarket && premarket.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Your names, pre-market</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Name</th>
+                <th style={S.thR}>Pre</th>
+                <th style={S.thR}>Gap/sh</th>
+                <th style={S.thR}>Pre vol</th>
+              </tr>
+            </thead>
+            <tbody>
+              {premarket.rows.map((r: Row) => (
+                <tr key={r.symbol}>
+                  <td style={S.td}>
+                    {r.symbol}
+                    {r.why && (
+                      <div style={{ ...S.muted, fontWeight: 400, margin: "2px 0 0" }}>{r.why}</div>
+                    )}
+                  </td>
+                  <td style={{ ...S.tdR, ...signColor(r.pre_pct) }}>{pctOrDash(r.pre_pct)}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.gap_cents) }}>
+                    {dollarsOrDash(r.gap_cents)}
+                  </td>
+                  <td style={S.tdR}>{multOrDash(r.premarket_vol_mult)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {premarket.note && <p style={S.muted}>{premarket.note}</p>}
         </section>
       )}
 
@@ -339,11 +417,36 @@ function signedDollars(cents: number): string {
 function bps(value: number): string {
   return `${value >= 0 ? "+" : ""}${value}bps`;
 }
+// U+2212 (minus sign), not ASCII "-" — see `signedAbs` below; `toFixed` would
+// otherwise emit the ASCII glyph here while §2's level-quoted rows and §3's
+// gap column use U+2212, splitting the sign glyph within the same row.
 function pct(fraction: number): string {
-  return `${fraction >= 0 ? "+" : ""}${(fraction * 100).toFixed(2)}%`;
+  const sign = fraction >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(fraction * 100).toFixed(2)}%`;
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : pct(fraction);
+}
+function fmtLevel(level: number | null | undefined): string {
+  return level == null ? "—" : level.toFixed(2);
+}
+// U+2212 (minus sign), not ASCII "-" — same convention as `dollarsOrDash`
+// below, so the sign reads consistently within one row (docs/06).
+function signedAbs(v: number | null | undefined): string {
+  if (v == null) return "";
+  const sign = v >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(v).toFixed(2)}`;
+}
+// The gap is dollars per share, not percent — that's the figure you act on
+// (docs/01). Per-share, not per-position: the open brief carries no position
+// data by design.
+function dollarsOrDash(cents: number | null | undefined): string {
+  if (cents == null) return "—";
+  const sign = cents >= 0 ? "+" : "−";
+  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+}
+function multOrDash(m: number | null | undefined): string {
+  return m == null ? "—" : `${m.toFixed(1)}×`;
 }
 function signColor(v: number | null | undefined): React.CSSProperties {
   if (v == null || v === 0) return {};
@@ -365,6 +468,7 @@ const S: Record<string, React.CSSProperties> = {
   },
   card: { border: "1px solid #e2e2e2", borderRadius: 10, padding: "14px 16px", margin: "16px 0" },
   h2: { margin: "0 0 12px", fontSize: "1rem", color: "#333" },
+  sectionNote: { fontWeight: 400, fontSize: "0.78rem", color: "#888" },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 },
   statLabel: {
     fontSize: "0.72rem",

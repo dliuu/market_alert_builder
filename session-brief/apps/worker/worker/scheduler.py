@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time  # `time` is already the stdlib module here
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -34,7 +35,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from worker import calendar, config
 from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, DEV_USER_ID
-from worker.providers.base import MarketDataProvider
+from worker.providers.base import MarketDataProvider, PremarketProvider
 
 UTC = ZoneInfo("UTC")
 ET = calendar.ET  # America/New_York — the tz all wall-clock scheduling uses
@@ -161,6 +162,19 @@ def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
 # --- The daily job ----------------------------------------------------------
 
 
+def sector_benchmarks(conn: Connection, user_id: str) -> list[str]:
+    """Every benchmark set in the book. Settable in the UI since M1, and read by
+    two callers: the ingest universe and §2's foreign proxies."""
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT benchmark_symbol FROM sectors "
+            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
+        ),
+        {"u": user_id},
+    ).all()
+    return sorted(str(r[0]) for r in rows)
+
+
 def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
     """The symbols to refresh: every held name, every sector benchmark, plus the
     market benchmark. SPY is *always* needed for the vs-SPY line even when it
@@ -169,15 +183,11 @@ def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
     level down: settable in the book UI since M1, never ingested, so the open
     brief's §5 trailing-5d line had nothing to read (M14)."""
     rows = conn.execute(
-        text(
-            "SELECT DISTINCT symbol FROM holdings WHERE user_id = :u "
-            "UNION "
-            "SELECT DISTINCT benchmark_symbol FROM sectors "
-            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
-        ),
+        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u"),
         {"u": user_id},
     ).all()
-    return sorted({str(r[0]) for r in rows} | {BENCHMARK_SYMBOL})
+    held = {str(r[0]) for r in rows}
+    return sorted(held | set(sector_benchmarks(conn, user_id)) | {BENCHMARK_SYMBOL})
 
 
 def _bars_present(engine: Engine, symbols: list[str], session_date: date) -> set[str]:
@@ -305,6 +315,107 @@ def run_session_job(
         raise
 
 
+_PRIOR_TAPE = text("""
+    SELECT symbol, last FROM quotes
+    WHERE session_date = :prior_session AND symbol = ANY(:symbols)
+      AND last IS NOT NULL
+""")
+
+
+def _prior_tape_levels(
+    conn: Connection, symbols: list[str], prior_session: date
+) -> dict[str, Decimal]:
+    """Yesterday's capture is today's base for the macro tape — nothing ingests
+    futures or yield bars, so the tape bootstraps off its own history. Empty on
+    the very first capture (there is no "yesterday" yet), which is exactly when
+    `TAPE_SEED_LEVELS` (C2) supplies the base instead."""
+    return {
+        str(row["symbol"]): Decimal(str(row["last"]))
+        for row in conn.execute(
+            _PRIOR_TAPE, {"prior_session": prior_session, "symbols": symbols}
+        ).mappings()
+    }
+
+
+def ingest_premarket_for_session(
+    engine: Engine,
+    *,
+    session_date: date,
+    prior_session: date,
+    user_id: str = DEV_USER_ID,
+    provider: PremarketProvider | None = None,
+) -> int:
+    """The 08:00 stage (docs/02): capture the morning's pre-market prints and the
+    overnight macro tape into `quotes`.
+
+    The provider defaults to the synthetic feed. That is not a test seam — it is
+    the shipping configuration until the premium pre-market licence lands (D8),
+    and swapping it is a one-line change here (see
+    `constants.PREMARKET_FEED_IS_SYNTHETIC`, the one flag that flips alongside
+    it).
+
+    Held names and the tape are ingested in two calls with two disjoint closes
+    dicts, never one (Change 2, M15 final-pass review): `TAPE_SEED_LEVELS`
+    (C2) is scoped to `tape_closes` only. A held name gets its base from
+    `bars_daily` alone — if that's empty (a brand-new holding, or a failed EOD
+    ingest), the name has no base and `SyntheticPremarketProvider` omits it,
+    per the standing rule that a symbol with no prior close is omitted, never
+    invented (`worker/providers/synthetic.py`). Before this split, a single
+    shared `closes` dict let a held name that happened to also be one of
+    `TAPE_SEED_LEVELS`' five foreign-proxy ETFs (holding EWT directly, say)
+    pick up the seed's invented level and emit a §3 gap — and a horizon-0
+    claim — off a number nobody captured.
+    """
+    from worker.constants import TAPE_SEED_LEVELS
+    from worker.premarket import (
+        capture_stamp,
+        ingest_premarket,
+        prior_closes,
+        tape_universe,
+    )
+    from worker.providers.synthetic import SyntheticPremarketProvider
+
+    with engine.connect() as conn:
+        held = book_symbols(conn, user_id)
+        tape = tape_universe(sector_benchmarks(conn, user_id))
+        tape_symbols = [symbol for symbol, _, _ in tape]
+
+        # Held names: real prior closes only. No seed, ever — see the
+        # docstring above.
+        held_closes = prior_closes(conn, held, prior_session)
+
+        # Tape: lowest priority first (C2, M15 review), the nominal seed, so
+        # the tape always has *some* base on a cold start — nothing ingests
+        # bars for futures/yield/forex series, so without this §2 can never
+        # bootstrap. Each higher-priority source below overwrites it where
+        # real data exists. Scoped to tape symbols only.
+        tape_closes = dict(TAPE_SEED_LEVELS)
+        tape_closes |= prior_closes(conn, tape_symbols, prior_session)
+
+        # The tape's own prior capture, where one exists, wins over both the
+        # seed and `bars_daily` (which never carries these symbols) — it's the
+        # freshest real base once the tape has run at least once before.
+        tape_closes |= _prior_tape_levels(conn, tape_symbols, prior_session)
+
+    held_provider = provider or SyntheticPremarketProvider(held_closes, session_date)
+    tape_provider = provider or SyntheticPremarketProvider(tape_closes, session_date)
+    with engine.begin() as conn:
+        stamp = capture_stamp(session_date)
+        written = ingest_premarket(
+            conn, held_provider,
+            held=held, tape=[],
+            session_date=session_date,
+            captured_at=stamp,
+        )
+        written += ingest_premarket(
+            conn, tape_provider,
+            held=[], tape=tape,
+            session_date=session_date,
+            captured_at=stamp,
+        )
+        return written
+
+
 def run_open_session_job(
     engine: Engine,
     *,
@@ -316,10 +427,13 @@ def run_open_session_job(
 ) -> str:
     """The 08:15 ET run. Returns ``skipped-holiday`` or ``sent``.
 
-    Deliberately simpler than the close job: there is **no bar poll**, because
+    In two respects it stays simpler than the close job: **no EOD bar poll**, because
     the open brief reads the *prior* close, which was already cached last night,
-    and **no skip gate**, because the open brief always sends (docs/05). M15
-    gives the pre-open stage real ingest work; in M14 it has none.
+    and **no skip gate**, because the open brief always sends (docs/05). It does
+    have ingest work of its own, though: the 08:00 stage (docs/02) —
+    `ingest_premarket_for_session` captures the morning's pre-market prints and
+    the overnight macro tape into `quotes` — before assembly reads them. M14
+    shipped this job with no ingest work at all; M15 is that stage.
     """
     from worker.assemble_open import assemble_open_and_store
     from worker.deliver import deliver_brief
@@ -334,6 +448,11 @@ def run_open_session_job(
             return "skipped-holiday"
 
         prior = calendar.previous_session(session_date)
+
+        written = ingest_premarket_for_session(
+            engine, session_date=session_date, prior_session=prior, user_id=user_id
+        )
+        print(f"open {session_date}: captured {written} pre-market quotes.")
 
         with engine.connect() as conn:
             trans = conn.begin()

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-13-open",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-13",
@@ -11,15 +11,122 @@
   "sections": [
     {
       "id": "overnight_tape",
-      "tier": "suppressed",
-      "note": "Overnight tape lands with the futures and macro feed.",
-      "rows": []
+      "tier": "full",
+      "note": null,
+      "rows": [
+        {
+          "symbol": "ES=F",
+          "tier": null,
+          "close": null,
+          "day_return": null,
+          "day_pnl_cents": null,
+          "contribution_bps": null,
+          "total_pnl_cents": null,
+          "total_pct": null,
+          "rvol": null,
+          "range_position": null,
+          "rel_strength": null,
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
+          "label": "ES futures",
+          "event_type": null,
+          "occurs_at": null,
+          "tag": null,
+          "sector_id": null,
+          "name": null,
+          "benchmark_symbol": null,
+          "ret_5d": null,
+          "vs_spy_5d": null,
+          "premarket": null,
+          "level": 5612.25,
+          "overnight_pct": -0.004081451577126125,
+          "overnight_abs": -23.0,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
+        },
+        {
+          "symbol": "^TNX",
+          "tier": null,
+          "close": null,
+          "day_return": null,
+          "day_pnl_cents": null,
+          "contribution_bps": null,
+          "total_pnl_cents": null,
+          "total_pct": null,
+          "rvol": null,
+          "range_position": null,
+          "rel_strength": null,
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
+          "label": "10Y",
+          "event_type": null,
+          "occurs_at": null,
+          "tag": null,
+          "sector_id": null,
+          "name": null,
+          "benchmark_symbol": null,
+          "ret_5d": null,
+          "vs_spy_5d": null,
+          "premarket": null,
+          "level": 4.28,
+          "overnight_pct": null,
+          "overnight_abs": 0.03,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
+        }
+      ]
     },
     {
       "id": "premarket",
-      "tier": "suppressed",
-      "note": "Pre-market moves land with the delayed-quote feed.",
-      "rows": []
+      "tier": "full",
+      "note": "RKLB unchanged.",
+      "rows": [
+        {
+          "symbol": "SNDK",
+          "tier": null,
+          "close": null,
+          "day_return": null,
+          "day_pnl_cents": null,
+          "contribution_bps": null,
+          "total_pnl_cents": null,
+          "total_pct": null,
+          "rvol": null,
+          "range_position": null,
+          "rel_strength": null,
+          "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
+          "label": null,
+          "event_type": null,
+          "occurs_at": null,
+          "tag": null,
+          "sector_id": null,
+          "name": null,
+          "benchmark_symbol": null,
+          "ret_5d": null,
+          "vs_spy_5d": null,
+          "premarket": null,
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": 0.040997464074387154,
+          "gap_cents": 194,
+          "premarket_vol_mult": 2.0
+        }
+      ]
     },
     {
       "id": "calendar",
@@ -39,6 +146,11 @@
           "range_position": null,
           "rel_strength": null,
           "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
           "label": "SNDK Q2 earnings",
           "event_type": "earnings",
           "occurs_at": "2026-08-13",
@@ -49,11 +161,12 @@
           "ret_5d": null,
           "vs_spy_5d": null,
           "premarket": null,
-          "market_bps": null,
-          "theme_bps": null,
-          "resid_bps": null,
-          "resid_z": null,
-          "provisional": null
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         },
         {
           "symbol": null,
@@ -68,6 +181,11 @@
           "range_position": null,
           "rel_strength": null,
           "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
           "label": "CPI (m/m)",
           "event_type": "macro",
           "occurs_at": "2026-08-13",
@@ -78,11 +196,12 @@
           "ret_5d": null,
           "vs_spy_5d": null,
           "premarket": null,
-          "market_bps": null,
-          "theme_bps": null,
-          "resid_bps": null,
-          "resid_z": null,
-          "provisional": null
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         },
         {
           "symbol": "ASTS",
@@ -97,6 +216,11 @@
           "range_position": null,
           "rel_strength": null,
           "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
           "label": "ASTS ex-dividend",
           "event_type": "ex_div",
           "occurs_at": "2026-08-17",
@@ -107,11 +231,12 @@
           "ret_5d": null,
           "vs_spy_5d": null,
           "premarket": null,
-          "market_bps": null,
-          "theme_bps": null,
-          "resid_bps": null,
-          "resid_z": null,
-          "provisional": null
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         }
       ]
     },
@@ -133,6 +258,11 @@
           "range_position": null,
           "rel_strength": null,
           "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
           "label": null,
           "event_type": null,
           "occurs_at": null,
@@ -143,11 +273,12 @@
           "ret_5d": 0.031,
           "vs_spy_5d": 0.012,
           "premarket": null,
-          "market_bps": null,
-          "theme_bps": null,
-          "resid_bps": null,
-          "resid_z": null,
-          "provisional": null
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         },
         {
           "symbol": null,
@@ -162,6 +293,11 @@
           "range_position": null,
           "rel_strength": null,
           "why": null,
+          "market_bps": null,
+          "theme_bps": null,
+          "resid_bps": null,
+          "resid_z": null,
+          "provisional": null,
           "label": null,
           "event_type": null,
           "occurs_at": null,
@@ -172,11 +308,12 @@
           "ret_5d": null,
           "vs_spy_5d": null,
           "premarket": null,
-          "market_bps": null,
-          "theme_bps": null,
-          "resid_bps": null,
-          "resid_z": null,
-          "provisional": null
+          "level": null,
+          "overnight_pct": null,
+          "overnight_abs": null,
+          "pre_pct": null,
+          "gap_cents": null,
+          "premarket_vol_mult": null
         }
       ]
     },
@@ -188,11 +325,24 @@
     }
   ],
   "flags": [],
-  "claims": [],
+  "claims": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001-2026-08-13-open-SNDK-premarket_gap",
+      "symbol": "SNDK",
+      "type": "premarket_gap",
+      "direction": "up",
+      "horizon_sessions": 0,
+      "outcome": null
+    }
+  ],
   "resolved_claims": [],
-  "suppressed": [],
+  "suppressed": [
+    "RKLB"
+  ],
   "data_quality": {
     "missing": [],
-    "stale": []
+    "stale": [
+      "overnight_tape.synthetic"
+    ]
   }
 }

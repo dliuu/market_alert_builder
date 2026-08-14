@@ -9,6 +9,7 @@ import {
   Preview,
   Section as Sec,
 } from "@react-email/components";
+import React from "react";
 import { font, palette, signColor } from "./theme";
 
 // The open email (M14) — the forward-looking one: what's on the clock, how the
@@ -17,22 +18,30 @@ import { font, palette, signColor } from "./theme";
 // (docs/01). There is no P&L here and no scorecard, because the open brief
 // carries no `book` at all.
 //
-// §2 overnight tape and §3 pre-market names need feeds that don't exist yet
-// (M15). They arrive as suppressed sections carrying a note, and the template
-// renders that note rather than dropping them silently — the reader should know
-// the brief is short by design.
+// §2 overnight tape and §3 pre-market names (M15) render their rows when the
+// feed populated them; when assembly suppressed a section instead, the
+// template renders its note rather than dropping it silently — the reader
+// should know the brief is short by design.
 
 const WIDTH = 600;
 
 export function OpenBrief({ brief }: { brief: BriefObject }) {
   const section = (id: string) => brief.sections.find((s) => s.id === id);
+  const tape = section("overnight_tape");
+  const pre = section("premarket");
+  // The one place this marker is keyed: `data_quality.stale` carrying this
+  // exact string, appended by `assemble_open` while
+  // `constants.PREMARKET_FEED_IS_SYNTHETIC` is True. Nothing here needs to
+  // change the day a licensed feed lands — the entry just stops appearing.
+  const tapeIsSynthetic = brief.data_quality.stale.includes("overnight_tape.synthetic");
   const calendar = section("calendar");
   const sectors = section("sector_setup");
   const dateLong = formatDate(brief.session_date);
   const preheader = brief.one_thing ?? brief.subject;
 
-  const omitted = [section("overnight_tape"), section("premarket")]
-    .filter((s): s is Section => s?.tier === "suppressed" && !!s.note)
+  const omitted = [tape, pre]
+    .filter((s): s is Section => s?.tier === "suppressed" && !!s.note && s.rows.length === 0)
+    .filter((s) => s.id !== "premarket") // §3 renders its own roll-up above
     .map((s) => s.note);
 
   return (
@@ -68,6 +77,37 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
               <p style={oneThing}>
                 <span style={highlight}>{brief.one_thing}</span>
               </p>
+            </Sec>
+          )}
+
+          {/* overnight tape */}
+          {tape && tape.rows.length > 0 && (
+            <Sec style={sec}>
+              <SectionHead
+                title="Overnight tape"
+                note={
+                  tapeIsSynthetic
+                    ? "vs prior close · synthetic feed · not live prices"
+                    : "vs prior close"
+                }
+              />
+              <Tape rows={tape.rows} />
+              {tape.note && <p style={note}>{tape.note}</p>}
+            </Sec>
+          )}
+
+          {/* your names, pre-market */}
+          {pre && pre.rows.length > 0 && (
+            <Sec style={sec}>
+              <SectionHead title="Your names, pre-market" note="vs prior close" />
+              <Premarket rows={pre.rows} />
+              {pre.note && <p style={note}>{pre.note}</p>}
+            </Sec>
+          )}
+          {pre && pre.rows.length === 0 && pre.note && (
+            <Sec style={sec}>
+              <SectionHead title="Your names, pre-market" />
+              <p style={note}>{pre.note}</p>
             </Sec>
           )}
 
@@ -156,6 +196,69 @@ function SectionHead({ title, note: hint }: { title: string; note?: string }) {
           <td style={secHeadTitle}>{title}</td>
           {hint && <td style={secHeadNote}>{hint}</td>}
         </tr>
+      </tbody>
+    </table>
+  );
+}
+
+// Two columns of pairs, as in the design reference: six macro lines read faster
+// side by side than as a six-row list.
+function Tape({ rows }: { rows: Row[] }) {
+  const pairs: Row[][] = [];
+  for (let i = 0; i < rows.length; i += 2) pairs.push(rows.slice(i, i + 2));
+  return (
+    <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
+      <tbody>
+        {pairs.map((pair) => (
+          <tr key={pair.map((r) => r.symbol).join("-")}>
+            {pair.map((r) => (
+              <React.Fragment key={r.symbol}>
+                <td style={{ ...tdL, width: "28%" }}>
+                  <span style={sym}>{r.label}</span>
+                </td>
+                <td
+                  style={{
+                    ...tdR,
+                    width: "22%",
+                    color: signColor(r.overnight_pct ?? r.overnight_abs),
+                  }}
+                >
+                  {r.overnight_pct != null
+                    ? pctOrDash(r.overnight_pct)
+                    : `${fmtLevel(r.level)} ${signedAbs(r.overnight_abs)}`}
+                </td>
+              </React.Fragment>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function Premarket({ rows }: { rows: Row[] }) {
+  return (
+    <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
+      <thead>
+        <tr>
+          <th style={thL}>Name</th>
+          <th style={{ ...thR, width: 62 }}>Pre</th>
+          <th style={{ ...thR, width: 70 }}>Gap/sh</th>
+          <th style={{ ...thR, width: 66 }}>Pre vol</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.symbol}>
+            <td style={tdL}>
+              <span style={sym}>{r.symbol}</span>
+              {r.why && <span style={why}>{r.why}</span>}
+            </td>
+            <td style={{ ...tdR, color: signColor(r.pre_pct) }}>{pctOrDash(r.pre_pct)}</td>
+            <td style={{ ...tdR, color: signColor(r.gap_cents) }}>{dollarsOrDash(r.gap_cents)}</td>
+            <td style={tdR}>{multOrDash(r.premarket_vol_mult)}</td>
+          </tr>
+        ))}
       </tbody>
     </table>
   );
@@ -276,8 +379,12 @@ function shortDate(iso: string | null | undefined): string {
     timeZone: "UTC",
   });
 }
+// U+2212 (minus sign), not ASCII "-" — see `signedAbs` below; `toFixed` would
+// otherwise emit the ASCII glyph here while the level-quoted branch of `Tape`
+// uses U+2212, splitting the sign glyph across §2's own change column.
 function signedPct(pct: number): string {
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  const sign = pct >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(pct).toFixed(2)}%`;
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
@@ -287,6 +394,27 @@ function round2(v: number): string {
 }
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function fmtLevel(level: number | null | undefined): string {
+  return level == null ? "—" : level.toFixed(2);
+}
+// U+2212 (minus sign), not ASCII "-" — same convention as `dollarsOrDash`
+// below, so the sign reads consistently within one row (docs/06).
+function signedAbs(v: number | null | undefined): string {
+  if (v == null) return "";
+  const sign = v >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(v).toFixed(2)}`;
+}
+// The gap is dollars per share, not percent — that's the figure you act on
+// (docs/01). Per-share, not per-position: the open brief carries no position
+// data by design.
+function dollarsOrDash(cents: number | null | undefined): string {
+  if (cents == null) return "—";
+  const sign = cents >= 0 ? "+" : "−";
+  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+}
+function multOrDash(m: number | null | undefined): string {
+  return m == null ? "—" : `${m.toFixed(1)}×`;
 }
 
 // ─── styles ───

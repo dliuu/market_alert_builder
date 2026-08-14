@@ -62,3 +62,14 @@ OPEN_SEND_ET_MINUTE: int = int(os.environ.get("OPEN_SEND_ET_MINUTE", "15"))
 # scheduled run (docs/02), so a silent morning is distinguishable from a silent
 # evening. Empty ⇒ no ping.
 HEALTHCHECKS_OPEN_URL: str = os.environ.get("HEALTHCHECKS_OPEN_URL", "")
+
+# The pre-market capture (M15). docs/02 stages the morning ingest at 08:00 ET;
+# the capture stamp is what §3's header renders ("pre-market · 08:12 ET"), so it
+# is configurable rather than derived from whenever the job happened to run.
+PREMARKET_CAPTURE_ET_HOUR: int = int(os.environ.get("PREMARKET_CAPTURE_ET_HOUR", "8"))
+PREMARKET_CAPTURE_ET_MINUTE: int = int(os.environ.get("PREMARKET_CAPTURE_ET_MINUTE", "12"))
+# How many prior sessions of pre-market volume the §3 multiple averages, and the
+# minimum it needs before it will report one. Short by design: pre-market volume
+# regime-shifts with the news cycle, so a 30-day base would smear it.
+PREMARKET_VOL_WINDOW: int = int(os.environ.get("PREMARKET_VOL_WINDOW", "10"))
+PREMARKET_VOL_MIN_OBS: int = int(os.environ.get("PREMARKET_VOL_MIN_OBS", "5"))

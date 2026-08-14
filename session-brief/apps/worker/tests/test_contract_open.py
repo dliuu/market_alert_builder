@@ -185,3 +185,67 @@ def test_row_rejects_an_unknown_field() -> None:
         BriefObject.model_validate(payload)
 
     assert "occurs_att" in str(excinfo.value)
+
+
+# --- v4 (M15): §2/§3 row fields and the horizon-0 morning claim -----------
+
+_V3_OPEN_FIXTURE = Path(__file__).parent / "fixtures" / "open_brief_v3.json"
+
+
+def test_v3_open_body_still_validates() -> None:
+    """A stored M14-era open brief must keep loading after the v4 bump
+    (docs/04: keep old renderers, never break stored bodies)."""
+    body = json.loads(_V3_OPEN_FIXTURE.read_text())
+    assert body["schema_version"] == 3
+    assert BriefObject.model_validate(body).kind.value == "open"
+
+
+def test_overnight_tape_row_fields() -> None:
+    """§2 carries a level and an overnight change; the change is a percent for
+    price-quoted symbols and an absolute for level-quoted ones (10Y, VIX)."""
+    payload = _minimal(
+        sections=[{
+            "id": "overnight_tape",
+            "tier": "full",
+            "rows": [
+                {"symbol": "ES=F", "label": "ES futures", "level": 5612.25,
+                 "overnight_pct": -0.0041, "overnight_abs": -23.0},
+                {"symbol": "^TNX", "label": "10Y", "level": 4.28,
+                 "overnight_pct": None, "overnight_abs": 0.03},
+            ],
+        }]
+    )
+    obj = BriefObject.model_validate(payload)
+    assert obj.sections[0].rows[1].overnight_pct is None
+
+
+def test_premarket_row_fields() -> None:
+    """§3 carries pre %, the gap in integer cents, and a pre-market-specific
+    volume multiple — never the 30-day RVOL."""
+    payload = _minimal(
+        sections=[{
+            "id": "premarket",
+            "tier": "full",
+            "rows": [{"symbol": "SNDK", "pre_pct": 0.041, "gap_cents": 194,
+                      "premarket_vol_mult": 3.1, "why": None}],
+        }]
+    )
+    row = BriefObject.model_validate(payload).sections[0].rows[0]
+    assert row.gap_cents == 194
+    assert row.rvol is None
+
+
+def test_horizon_zero_premarket_gap_claim() -> None:
+    """The morning claim: a new type, resolved the same session (horizon 0)."""
+    payload = _minimal(
+        claims=[{"id": "c1", "symbol": "SNDK", "type": "premarket_gap",
+                 "direction": "up", "horizon_sessions": 0, "outcome": None}]
+    )
+    claim = BriefObject.model_validate(payload).claims[0]
+    assert claim.horizon_sessions == 0
+
+
+def test_schema_version_is_five() -> None:
+    from worker.assemble import SCHEMA_VERSION
+
+    assert SCHEMA_VERSION == 5

@@ -13,17 +13,21 @@ Three consequences shape the module:
 - **No skip gate.** The close brief is skipped on a quiet session; the open brief
   always sends, because "nothing happened overnight" is information you need
   before the bell (docs/05).
-- **No claims.** M14 emits none (nothing directional is judgeable from cached
-  setup — the horizon-0 morning claim needs the pre-market signal, M15) and
-  *resolves* none. Resolving at 08:15 would work and that is precisely the trap:
-  it would consume the due claims before the close brief's §7 could report them.
+- **Emits, never resolves.** The horizon-0 morning claim (``premarket_gap``, M15)
+  is emitted here from the pre-market signal, but resolution stays out. Resolving
+  at 08:15 would work and that is precisely the trap: it would consume the due
+  claims before the close brief's §7 could report them.
 
 Everything here is pure over its inputs with ``generated_at`` injected, so a
 frozen fixture snapshots the whole object (the M4 discipline).
 
-§2 (overnight tape) and §3 (pre-market names) need feeds that don't exist yet and
-are emitted as suppressed sections carrying a note — the M5 precedent, where a
-shorter brief says what it left out rather than silently shrinking.
+§2 (overnight tape) is filled from the tape feed (M15). §3 (pre-market names)
+is filled from the pre-market feed: names clearing ``PREMARKET_THRESHOLD`` get a
+row with the gap in dollars and the pre-market-specific volume multiple; the
+rest roll up into the section's note and the top-level ``suppressed[]`` — the M5
+precedent, where a shorter brief says what it left out rather than silently
+shrinking. §3's rows are ordered by the size of the gap, largest first, which is
+what makes §1's ``one_thing`` lead on the biggest pre-market mover.
 """
 
 from __future__ import annotations
@@ -39,9 +43,20 @@ from sqlalchemy.engine import Connection
 
 from contracts.brief import BriefObject
 from worker.assemble import SCHEMA_VERSION
-from worker.assemble_shared import session_label
+from worker.assemble_shared import claim_dict, session_label
+from worker.claims import Claim, emit_premarket_gap, store_emitted_claims
+from worker.constants import PREMARKET_FEED_IS_SYNTHETIC
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
+from worker.premarket import (
+    PremarketQuote,
+    TapeQuote,
+    clears_threshold,
+    gap_cents,
+    pre_pct,
+    premarket_vol_mult,
+    tape_change,
+)
 
 # §5's trailing window (docs/05: "benchmark 5d, vs SPY 5d").
 _SECTOR_WINDOW = 5
@@ -50,8 +65,17 @@ _SECTOR_WINDOW = 5
 # that only ever showed today would bury a Monday lockup on Friday afternoon.
 _CALENDAR_WINDOW_DAYS = 7
 
-_OMITTED_TAPE = "Overnight tape lands with the futures and macro feed."
-_OMITTED_PREMARKET = "Pre-market moves land with the delayed-quote feed."
+# The `data_quality.stale` entry that marks §2 as running on invented levels
+# rather than a live print (final-pass review, M15). Both renderers key their
+# header marker off this exact string, so it is the one thing that has to stay
+# byte-identical between here and `open-brief.tsx` / `briefs/[slug]/page.tsx`.
+STALE_OVERNIGHT_TAPE_SYNTHETIC = "overnight_tape.synthetic"
+
+_OMITTED_TAPE = "No overnight tape captured for this session."
+_QUIET_PREMARKET = "Nothing moved pre-market:"
+# Replaces M14's "lands with the delayed-quote feed" — the feed exists now, so
+# an empty §3 means no capture landed for this session, not a missing milestone.
+_OMITTED_PREMARKET = "No pre-market quotes captured for this session."
 _CLEAR_CALENDAR = "Nothing on the calendar."
 _NO_FLAGS = "Nothing over threshold."
 
@@ -59,13 +83,16 @@ _NO_FLAGS = "Nothing over threshold."
 @dataclass(frozen=True)
 class SectorSetup:
     """One §5 row. ``ret_5d``/``vs_spy_5d`` are None when the sector has no
-    benchmark set in the book, or the benchmark has too little history."""
+    benchmark set in the book, or the benchmark has too little history.
+    ``premarket`` is the benchmark's own pre-market change (M15), None until its
+    quote is captured."""
 
     sector_id: str
     name: str
     benchmark_symbol: str | None
     ret_5d: Decimal | None
     vs_spy_5d: Decimal | None
+    premarket: Decimal | None = None
 
 
 def trailing_return(closes: list[Decimal], window: int) -> Decimal | None:
@@ -86,10 +113,13 @@ def assemble_open(
     sectors: list[SectorSetup],
     flags: list[FlagCandidate],
     holdings: dict[str, str],
+    tape: list[TapeQuote],
     user_id: str,
     session_date: date,
     prior_session: date,
     generated_at: datetime,
+    premarket: list[PremarketQuote] | None = None,
+    claims: list[Claim] | None = None,
     missing: list[str] | None = None,
     stale: list[str] | None = None,
 ) -> BriefObject:
@@ -100,7 +130,22 @@ def assemble_open(
     08:15 on ``session_date`` the last close is the previous trading day's, which
     is not always yesterday (a Tuesday after a Monday holiday looks back to
     Friday). ``generated_at`` is injected, never ``datetime.now()``.
+
+    ``claims`` carries the horizon-0 ``premarket_gap`` claims emitted this
+    session (M15); ``resolved_claims`` stays empty — resolution is the close
+    brief's job.
     """
+    premarket_section, skipped = _premarket(premarket or [])
+    tape_section = _overnight_tape(tape)
+
+    # §2 carries invented levels while `PREMARKET_FEED_IS_SYNTHETIC` is True
+    # (final-pass review, M15) — flag it in `data_quality.stale` rather than
+    # silently rendering a made-up ES print next to real ones. Only when §2
+    # actually has rows: an empty/suppressed section has nothing to mark stale.
+    stale_list = list(stale or [])
+    if tape_section["rows"] and PREMARKET_FEED_IS_SYNTHETIC:
+        stale_list.append(STALE_OVERNIGHT_TAPE_SYNTHETIC)
+
     payload = {
         "schema_version": SCHEMA_VERSION,
         "brief_id": f"{user_id}-{session_date.isoformat()}-open",
@@ -112,19 +157,19 @@ def assemble_open(
         "one_thing": None,  # narration, stage ⑤
         # `book` is deliberately absent, not null: no performance, no P&L.
         "sections": [
-            _omitted("overnight_tape", _OMITTED_TAPE),
-            _omitted("premarket", _OMITTED_PREMARKET),
+            tape_section,
+            premarket_section,
             _calendar(events, holdings, session_date),
             _sector_setup(sectors),
             _exposure_check(flags),
         ],
         "flags": [candidate_dict(f) for f in flags],
-        "claims": [],  # M15 lands the horizon-0 morning claim
+        "claims": [claim_dict(c, user_id, session_date, "open") for c in claims or []],
         "resolved_claims": [],  # resolution stays in the close brief (D16b)
-        "suppressed": [],  # per-name suppression is a close-brief mechanism
+        "suppressed": skipped,  # names that didn't clear §3's threshold
         "data_quality": {
             "missing": missing or [],
-            "stale": stale or [],
+            "stale": stale_list,
         },
     }
     # model_validate enforces the contract (extra='forbid', required keys, types).
@@ -137,10 +182,64 @@ def _subject(session_date: date) -> str:
     return f"Open · {session_label(session_date)} — the day ahead"
 
 
-def _omitted(section_id: str, note: str) -> dict[str, object]:
-    """A section M14 can't fill, saying so. Suppressed with a note beats absent:
-    the reader learns the brief is incomplete by design, not broken."""
-    return {"id": section_id, "tier": "suppressed", "note": note, "rows": []}
+def _overnight_tape(tape: list[TapeQuote]) -> dict[str, object]:
+    """§2 Overnight tape — the macro backdrop plus the foreign proxies this
+    book's sectors make relevant (docs/05). The narrated "read" paragraph lands
+    in ``note`` at stage ⑤; assembly leaves it None."""
+    rows = []
+    for quote in tape:
+        pct, absolute = tape_change(quote)
+        rows.append({
+            "symbol": quote.symbol,
+            "label": quote.label,
+            "level": _float(quote.last),
+            "overnight_pct": _float(pct),
+            "overnight_abs": _float(absolute),
+        })
+    return {
+        "id": "overnight_tape",
+        "tier": "full" if rows else "suppressed",
+        "note": None if rows else _OMITTED_TAPE,
+        "rows": rows,
+    }
+
+
+def _premarket(quotes: list[PremarketQuote]) -> tuple[dict[str, object], list[str]]:
+    """§3 Your names, pre-market. Returns the section and the names it skipped.
+
+    Ordered by the size of the gap, largest first: §1 leads on the biggest
+    pre-market move, and the ordering here is what makes that the row the
+    narration prompt sees first (the M13 seam swaps this key for the largest
+    overnight |resid_z| without touching anything else).
+    """
+    shown = [q for q in quotes if clears_threshold(q)]
+    kept = {q.symbol for q in shown}
+    skipped = sorted(q.symbol for q in quotes if q.symbol not in kept)
+    shown.sort(key=lambda q: abs(pre_pct(q) or Decimal(0)), reverse=True)
+
+    rows = [
+        {
+            "symbol": q.symbol,
+            "pre_pct": _float(pre_pct(q)),
+            "gap_cents": gap_cents(q),
+            "premarket_vol_mult": _float(premarket_vol_mult(q)),
+            "why": None,  # narration, stage ⑤
+        }
+        for q in shown
+    ]
+    note = None
+    if skipped:
+        note = f"{_QUIET_PREMARKET} " if not rows else ""
+        note += f"{', '.join(skipped)} unchanged."
+    return (
+        {
+            "id": "premarket",
+            "tier": "full" if rows else "suppressed",
+            "note": note or (None if rows else _OMITTED_PREMARKET),
+            "rows": rows,
+        },
+        skipped,
+    )
 
 
 def _calendar(
@@ -180,8 +279,8 @@ def _tag(event: CalendarEvent, holdings: dict[str, str]) -> str:
 
 
 def _sector_setup(sectors: list[SectorSetup]) -> dict[str, object]:
-    """§5 Sector setup — benchmark 5d and vs-SPY 5d per sector. The pre-market
-    column is null until M15."""
+    """§5 Sector setup — benchmark 5d, vs-SPY 5d, and the benchmark's own
+    pre-market change per sector (M15)."""
     rows = [
         {
             "sector_id": s.sector_id,
@@ -189,7 +288,7 @@ def _sector_setup(sectors: list[SectorSetup]) -> dict[str, object]:
             "benchmark_symbol": s.benchmark_symbol,
             "ret_5d": _float(s.ret_5d),
             "vs_spy_5d": _float(s.vs_spy_5d),
-            "premarket": None,
+            "premarket": _float(s.premarket),
         }
         for s in sectors
     ]
@@ -259,15 +358,25 @@ _UPSERT_BRIEF = text("""
 
 def read_open_inputs(
     conn: Connection, user_id: str, session_date: date, prior_session: date
-) -> tuple[list[CalendarEvent], list[SectorSetup], dict[str, str]]:
-    """Every cached read the open brief needs, in one place."""
+) -> tuple[list[CalendarEvent], list[SectorSetup], dict[str, str],
+           list[TapeQuote], list[PremarketQuote]]:
+    """Every read the open brief needs, in one place."""
+    from worker.premarket import read_premarket, read_tape
+
     holdings = {
         row["symbol"]: str(row["status"])
         for row in conn.execute(_READ_HOLDINGS, {"user_id": user_id}).mappings()
     }
     events = _read_events(conn, session_date)
-    sectors = _read_sectors(conn, user_id, prior_session)
-    return events, sectors, holdings
+    sectors = _read_sectors(conn, user_id, prior_session, session_date)
+    benchmarks = [s.benchmark_symbol for s in sectors if s.benchmark_symbol]
+    tape = read_tape(conn, session_date, benchmarks)
+    # §3 deliberately covers every name in `holdings` — owned *and* watchlist —
+    # not just owned positions (ruled: this is correct, not an incidental
+    # consequence of reusing the holdings dict). A watchlist name gapping 5%
+    # pre-market is exactly what the reader opened the brief to find.
+    premarket = read_premarket(conn, sorted(holdings), session_date)
+    return events, sectors, holdings, tape, premarket
 
 
 def _read_events(conn: Connection, session_date: date) -> list[CalendarEvent]:
@@ -293,16 +402,20 @@ def _fallback_label(symbol: str | None, event_type: str) -> str:
 
 
 def _read_sectors(
-    conn: Connection, user_id: str, prior_session: date
+    conn: Connection, user_id: str, prior_session: date, session_date: date
 ) -> list[SectorSetup]:
     from worker.constants import BENCHMARK_SYMBOL
+    from worker.premarket import pre_pct, read_premarket
 
     spy_5d = trailing_return(
         _read_closes(conn, BENCHMARK_SYMBOL, prior_session), _SECTOR_WINDOW
     )
+    rows = list(conn.execute(_READ_SECTORS, {"user_id": user_id}).mappings())
+    benchmarks = [r["benchmark_symbol"] for r in rows if r["benchmark_symbol"]]
+    pre = {q.symbol: pre_pct(q) for q in read_premarket(conn, benchmarks, session_date)}
 
     out: list[SectorSetup] = []
-    for row in conn.execute(_READ_SECTORS, {"user_id": user_id}).mappings():
+    for row in rows:
         benchmark = row["benchmark_symbol"]
         ret_5d = (
             trailing_return(_read_closes(conn, benchmark, prior_session), _SECTOR_WINDOW)
@@ -318,6 +431,7 @@ def _read_sectors(
                 vs_spy_5d=(
                     ret_5d - spy_5d if ret_5d is not None and spy_5d is not None else None
                 ),
+                premarket=pre.get(benchmark),
             )
         )
     return out
@@ -348,16 +462,22 @@ def assemble_open_and_store(
     """
     from worker.narrate import narrate_open_and_apply
 
-    events, sectors, holdings = read_open_inputs(conn, user_id, session_date, prior_session)
+    events, sectors, holdings, tape, premarket = read_open_inputs(
+        conn, user_id, session_date, prior_session
+    )
 
     symbols = sorted(holdings)
     surfaced = surface_open_flags(conn, user_id, session_date, symbols, prior_session)
+    emitted = emit_premarket_gap(premarket)
 
     obj = assemble_open(
         events=events,
         sectors=sectors,
         flags=surfaced,
         holdings=holdings,
+        tape=tape,
+        premarket=premarket,
+        claims=emitted,
         user_id=user_id,
         session_date=session_date,
         prior_session=prior_session,
@@ -367,6 +487,7 @@ def assemble_open_and_store(
     obj = narrate_open_and_apply(obj, narrator)  # type: ignore[arg-type]
 
     _store(conn, obj)
+    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
 
     from worker.flags import record_flags
 

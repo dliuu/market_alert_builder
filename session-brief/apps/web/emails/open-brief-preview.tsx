@@ -5,7 +5,7 @@ import { OpenBrief } from "./open-brief";
 // section — prose, a mixed calendar, sectors with and without a benchmark, and
 // a fired flag — without a database.
 const sample: BriefObject = {
-  schema_version: 3,
+  schema_version: 4,
   brief_id: "preview-2026-08-13-open",
   user_id: "00000000-0000-0000-0000-000000000001",
   session_date: "2026-08-13",
@@ -18,15 +18,56 @@ const sample: BriefObject = {
   sections: [
     {
       id: "overnight_tape",
-      tier: "suppressed",
-      note: "Overnight tape lands with the futures and macro feed.",
-      rows: [],
+      tier: "full",
+      note: "Risk-off in US index futures, but Asian memory names ripped overnight on a Hynix pricing comment. Your semis sleeve is likely to open green against a red tape.",
+      rows: [
+        {
+          symbol: "ES",
+          label: "ES futures",
+          overnight_pct: -0.0041,
+          overnight_abs: null,
+          level: null,
+        },
+        { symbol: "TNX", label: "10Y", overnight_pct: null, overnight_abs: 0.03, level: 4.28 },
+        {
+          symbol: "NQ",
+          label: "NQ futures",
+          overnight_pct: -0.0063,
+          overnight_abs: null,
+          level: null,
+        },
+        { symbol: "DXY", label: "DXY", overnight_pct: 0.0022, overnight_abs: null, level: null },
+        { symbol: "VIX", label: "VIX", overnight_pct: null, overnight_abs: 1.1, level: 16.4 },
+        { symbol: "WTI", label: "WTI", overnight_pct: -0.009, overnight_abs: null, level: null },
+      ],
     },
     {
       id: "premarket",
-      tier: "suppressed",
-      note: "Pre-market moves land with the delayed-quote feed.",
-      rows: [],
+      tier: "full",
+      note: "Only names moving more than 1% pre-market, or carrying news, get a line. Everything else is unchanged and skipped.",
+      rows: [
+        {
+          symbol: "SNDK",
+          why: "Hynix said NAND contract pricing settles up mid-single-digits in Q4. Read-through is direct.",
+          pre_pct: 0.041,
+          gap_cents: 194,
+          premarket_vol_mult: 3.1,
+        },
+        {
+          symbol: "SYM",
+          why: "Drifting on no news. Earnings tonight; implied move ±14%.",
+          pre_pct: -0.008,
+          gap_cents: -29,
+          premarket_vol_mult: 0.6,
+        },
+        {
+          symbol: "ASTS",
+          why: "Downgraded to Hold at Deutsche Bank, PT cut 42 → 34. Valuation call, not a thesis break.",
+          pre_pct: -0.052,
+          gap_cents: -188,
+          premarket_vol_mult: 4.7,
+        },
+      ],
     },
     {
       id: "calendar",

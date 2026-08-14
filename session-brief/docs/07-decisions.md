@@ -209,3 +209,125 @@ M13 grades `relative_strength` against realized residual sign; `graded_model_ver
 Two future cross-module alerts hang off attribution's outputs; both are seams, not modules. **(1) Anatomy/filings gate:** `worker.attribution.material_residual(resid_z)` (Task 3, `RESID_MATERIAL_Z = 2.0`) is the predicate a downstream module gates on — only names clearing it warrant expensive intraday anatomy or filing pulls. M13 exposes the predicate and stops there; the anatomy and filings modules themselves are M14+. **(2) Options-divergence join:** the highest-value future cross-module alert is a flat residual with a steepening skew — `|resid_z|` low **and** options-skew slope rising — flagging names where the options market is quietly repricing tail risk while the realized move stays unremarkable. This needs an options-ingest path (fdnpy `get_option_chain`/`get_option_greeks`) that does not exist in this repo; no options data is ingested, stored, or joined in M13.
 *Rules out:* building the anatomy, filings, or options-ingest modules in M13; an options table or a `flags`/BriefObject surface for skew in this milestone.
 *Reverses if:* an options-ingest path lands (M14+) — the skew-slope join becomes buildable against `material_residual` without changing the predicate; or the anatomy/filings modules land and consume `material_residual` directly.
+
+**D28 — M15 pre-market: a real `quotes` table, a deterministic synthetic feed, and horizon-0 as an engine change**
+*(Numbered D28, not D24: M13 landed upstream while M15 was in flight and took
+D24–D27. This entry was written as D24 and renumbered at integration time.)*
+§2 (overnight tape) and §3 (pre-market names) run on a **new `quotes` table** —
+migration `0011_quotes`. The design spec said the feeds needed no migration
+because `quotes` already existed; it never did (`docs/03` sketched it, `0003`
+created only `raw_payloads`/`bars_daily`), the same shape of error M14 found with
+`events`. It is keyed **`(symbol, session_date)`** rather than the sketch's
+`(symbol, captured_at)`: every read is "the capture for session D", and the
+session key makes re-seeding idempotent. Shared, no `user_id` (D18/D21).
+Data comes from `SyntheticPremarketProvider` — deterministic by hash over
+`(symbol, session_date)`, never `random`, so a seeded morning is
+snapshot-testable — behind four premium pre-market methods a licensed
+fdnpy feed will implement (`get_latest_prices` / `get_futures_prices` /
+`get_index_quotes` / `get_forex_quotes`). One ingest function serves both, which
+is what makes the swap a constructor change (D8 stays a business call).
+§3's volume multiple is **pre-market-specific** — this morning's `extended_v`
+against the mean of the prior sessions' captures — never the 30-day RVOL, which
+over a pre-market tape is a number that looks meaningful and isn't (D3).
+The `>1% **or carrying news**` threshold ships half-wired: `clears_threshold`
+takes `has_news` and nothing sets it, because there is no news feed (docs/02:
+Premium, unwired) — the D18 `short_interest` precedent.
+The **horizon-0 morning claim** is a genuine change to the D17 engine, not a
+`claim_type` seam ride: the contract pinned `horizon_sessions` to `minimum: 1`,
+`resolve_due_claims` read only `session_date < :session_date`, and
+`_resolve_session` offset by `horizon - 1`. Resolution now admits same-session
+claims and, once that session has a bar, grades horizon 0 **open→close on the
+emit session itself** — `(c − o) / o` for both the name and the benchmark — not
+close-to-close and not the emit session's own bar as first shipped. Close-to-close
+(D-1's close vs. D's close) contains the pre-market gap `emit_premarket_gap`
+claimed as a sub-interval, so a name that gapped up pre-market and fully faded
+intraday still graded "correct" — the gap is what the claim is *about*, so it
+cannot also be what grades it. Horizon-1+ claims are untouched, still graded
+close-to-close, and still excluded from their own session by `_resolve_session`,
+which is asserted by a regression test (`test_claims.py`/`test_claims_db.py`
+unmodified). The open brief emits and **never resolves** — resolving at 08:15
+would consume the due claims before the close brief's §7 could report them.
+`schema_version` bumps to **4** (§2 `level`/`overnight_pct`/`overnight_abs`, §3
+`pre_pct`/`gap_cents`/`premarket_vol_mult`, the claim changes); narration gains a
+`tape_read` key that lands in §2's existing `note`, so the read paragraph costs
+no schema surface and inherits the digit guard.
+
+**§2 is marked synthetic, and the tape's bootstrap seed is scoped to the tape.**
+Final-pass review (post-ship) found two gaps this entry hadn't recorded.
+First, `constants.TAPE_SEED_LEVELS` — plausible nominal levels for the six macro
+symbols plus the five foreign proxies — ships invented market levels to a
+reader with nothing telling them so. Nothing ingests bars for futures, yield, or
+forex series, and the tape's own history is itself seeded from this same
+recursion, so without a seed §2 has no base to gap from on any run, ever
+(confirmed empirically: 0 of the tape symbols ever carry a `bars_daily` row).
+It is deliberately the **lowest-priority** source in `ingest_premarket_for_session`
+— a real prior capture, once one exists, always overwrites it — and it is
+reflected in the object: while `constants.PREMARKET_FEED_IS_SYNTHETIC` is True,
+`assemble_open` adds `"overnight_tape.synthetic"` to `data_quality.stale`
+whenever §2 has rows, and both renderers key a header marker off that one entry.
+Second, that seed lived in one `closes` dict shared between the held-name fetch
+and the tape fetch, so a user holding one of the five foreign-proxy ETFs
+directly (EWT, say) with no `bars_daily` row yet — a brand-new holding, or a
+failed EOD ingest — picked up the seed's invented level as their §3 base and
+could emit a horizon-0 claim off it. `ingest_premarket_for_session` now builds
+two disjoint closes dicts and ingests held names and the tape in two separate
+calls; a held name's base comes from `bars_daily` alone, so a symbol with no
+real prior close is omitted, never invented, exactly as
+`worker/providers/synthetic.py` already promised for every other symbol.
+
+**The pre-market seam turned out to need its own protocol.** The plan (like the
+design spec) had the four premium methods widening `MarketDataProvider` itself.
+That broke `mypy --strict` — clean at the milestone's base, 6 errors after —
+because protocols are structural: `TiingoProvider`, the EOD provider, satisfied
+the narrower `MarketDataProvider` fine, but widening that one protocol to also
+demand `get_latest_prices`/`get_futures_prices`/`get_index_quotes`/`get_forex_quotes`
+made `TiingoProvider` stop conforming, and it structurally cannot serve pre-market
+prints — there's no vendor call to add. The four methods live instead on a
+separate `PremarketProvider` protocol (`worker/providers/base.py`): `FdnProvider`
+is intended to satisfy both once licensed, `SyntheticPremarketProvider` only the
+pre-market one, and `ingest_premarket` takes a `PremarketProvider`. One protocol
+per capability was the fix; one protocol for "every provider" was the wrong shape
+the moment two providers only partially overlap.
+
+**The `claims` table needed its own migration, separate from the contract bump.**
+Contract v4 widened `brief-object.schema.json`'s claim-type enum to admit
+`premarket_gap` and dropped `horizon_sessions`' `minimum` to 0, but the `claims`
+table carries its own CHECK constraints from migration `0006` —
+`claim_type IN ('catalyst_pending', 'relative_strength', 'supply_overhang',
+'breadth')` and `horizon_sessions >= 1` — which the contract bump never touched;
+Python owns the schema (invariant 1), and a JSON Schema edit is not a migration.
+Migration `0012_claims_premarket_gap` widens both CHECKs to match. The general
+lesson: a contract enum and a database CHECK are two separate sources of truth,
+and changing one does not change the other — the same shape of gap D23(1) found
+between the generated Pydantic and the canonical schema, one level down the
+stack.
+**Claim grading splits by claim shape, because the two claim types are about
+different things.** M13 landed upstream mid-milestone and re-pointed horizon-≥1
+grading at the *sign of the realized residual* (D24) so beta earns no credit.
+The horizon-0 morning claim deliberately does **not** follow it there, for two
+reasons that are properties of the claim rather than conveniences: it is emitted
+at **08:15**, when that session's attribution row does not exist — it isn't
+produced until the PM score runs after the close, and the grade has to land in
+that same evening's close brief; and it is explicitly a **price** call ("this
+gap holds into the close"), not a factor-adjusted one, so residualizing it would
+grade a different claim than the one the brief made to the reader. `_grade` is
+therefore a two-line dispatch over `_grade_open_close` (horizon 0) and
+`_grade_relative` (horizon ≥ 1), with `_verdict` shared so what counts as
+vindicated cannot drift between them. M13's residual grading replaces
+`_grade_relative`'s body and touches nothing else.
+*Rules out:* a `quotes` table keyed by capture timestamp; RVOL over pre-market
+volume; the open brief resolving claims; a section that knows which provider
+filled `quotes`; blocking §2/§3 on the data licence; one `MarketDataProvider`
+protocol widened to cover pre-market data; assuming a contract enum bump reaches
+a table's CHECK constraints without its own migration; grading a horizon-0 claim
+on anything but the open→close interval it claimed; residualizing a claim made
+before any attribution exists for the session; a shared closes dict that lets
+the tape's bootstrap seed answer for a held name.
+*Reverses if:* the premium pre-market licence lands (swap the provider and flip
+`constants.PREMARKET_FEED_IS_SYNTHETIC` — `TAPE_SEED_LEVELS` and the
+`data_quality.stale` marker both retire with no renderer change); a news feed
+lands (`has_news` starts firing with no other change); §1's salience upgrades
+from the largest gap to the largest overnight `|resid_z|` now that M13's
+attribution has landed — a change to one sort key in `_premarket`; or a
+same-morning attribution row ever exists, which would let the horizon-0 claim
+be residualized like every other type.

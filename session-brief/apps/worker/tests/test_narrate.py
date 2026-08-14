@@ -241,15 +241,12 @@ def test_open_prompt_asks_for_a_forward_looking_read() -> None:
     assert "ahead" in prompt.lower()
 
 
-def test_open_prompt_does_not_ask_for_per_name_why() -> None:
-    """docs/05 gives the open brief's sections no `why` line — asking for one
-    would invite prose the object has nowhere to put.
-
-    Only the *instruction* is checked: the serialized object appended below it
-    legitimately contains a null `why` key on every row.
-    """
-    instruction = build_open_prompt(_open_obj()).split("for context only")[0]
-    assert '"why"' not in instruction
+def test_open_prompt_asks_for_why_keyed_to_premarket_symbols() -> None:
+    """M15: §3's pre-market rows get a `why`, the same way §7's attribution
+    rows do on the close brief — it's §4/§5/§6 that carry no `why` line."""
+    prompt = build_open_prompt(_open_object_with_premarket("SNDK"))
+    assert "'SNDK'" in prompt
+    assert '"why"' in prompt
 
 
 def test_open_narration_fills_one_thing() -> None:
@@ -276,3 +273,195 @@ def test_open_narration_is_non_fatal() -> None:
         raise RuntimeError("401 Unauthorized")
 
     assert narrate_open_and_apply(obj, revoked) == obj
+
+
+# --- §2's read and §3's why (M15) ------------------------------------------
+
+
+def _open_object_with_tape() -> BriefObject:
+    """A minimal open brief carrying one §2 overnight-tape row."""
+    return BriefObject.model_validate(
+        {
+            "schema_version": 3,
+            "brief_id": "u-2026-08-13-open",
+            "user_id": "u",
+            "session_date": "2026-08-13",
+            "kind": "open",
+            "generated_at": "2026-08-13T12:15:00Z",
+            "subject": "Open - Thu Aug 13 - the day ahead",
+            "one_thing": None,
+            "sections": [
+                {
+                    "id": "overnight_tape",
+                    "tier": "full",
+                    "note": None,
+                    "rows": [
+                        {
+                            "symbol": "ES",
+                            "label": "E-mini S&P futures",
+                            "level": 5123.25,
+                            "overnight_pct": -0.004,
+                            "overnight_abs": None,
+                        }
+                    ],
+                }
+            ],
+            "flags": [],
+            "claims": [],
+            "resolved_claims": [],
+            "suppressed": [],
+            "data_quality": {"missing": [], "stale": []},
+        }
+    )
+
+
+def _open_object_with_premarket(symbol: str) -> BriefObject:
+    """A minimal open brief carrying one §3 pre-market row for ``symbol``."""
+    return BriefObject.model_validate(
+        {
+            "schema_version": 3,
+            "brief_id": "u-2026-08-13-open",
+            "user_id": "u",
+            "session_date": "2026-08-13",
+            "kind": "open",
+            "generated_at": "2026-08-13T12:15:00Z",
+            "subject": "Open - Thu Aug 13 - the day ahead",
+            "one_thing": None,
+            "sections": [
+                {
+                    "id": "premarket",
+                    "tier": "full",
+                    "note": None,
+                    "rows": [
+                        {
+                            "symbol": symbol,
+                            "pre_pct": -0.031,
+                            "gap_cents": -4820,
+                            "premarket_vol_mult": 2.1,
+                            "why": None,
+                        }
+                    ],
+                }
+            ],
+            "flags": [],
+            "claims": [],
+            "resolved_claims": [],
+            "suppressed": [],
+            "data_quality": {"missing": [], "stale": []},
+        }
+    )
+
+
+def test_tape_read_lands_in_the_overnight_section() -> None:
+    obj = _open_object_with_tape()
+    narrated = narrate_open_and_apply(
+        obj, lambda _p: json.dumps({"tape_read": "Risk-off overnight; your semis proxy is soft."})
+    )
+    section = next(s for s in narrated.sections if s.id.value == "overnight_tape")
+    assert section.note == "Risk-off overnight; your semis proxy is soft."
+
+
+def test_a_tape_read_with_a_digit_is_dropped() -> None:
+    """Invariant 2, unchanged: the tables carry every figure."""
+    obj = _open_object_with_tape()
+    narrated = narrate_open_and_apply(obj, lambda _p: json.dumps({"tape_read": "ES fell 0.4%."}))
+    section = next(s for s in narrated.sections if s.id.value == "overnight_tape")
+    assert section.note == next(
+        s for s in obj.sections if s.id.value == "overnight_tape"
+    ).note
+
+
+def test_why_fills_premarket_rows() -> None:
+    obj = _open_object_with_premarket("SNDK")
+    narrated = narrate_open_and_apply(
+        obj, lambda _p: json.dumps({"why": {"SNDK": "Memory pricing read-through."}})
+    )
+    row = next(s for s in narrated.sections if s.id.value == "premarket").rows[0]
+    assert row.why == "Memory pricing read-through."
+
+
+def test_parse_drops_a_why_for_an_unlisted_symbol() -> None:
+    """Mixes one valid symbol in with the invalid one on purpose: an
+    unlisted-only payload would pass even with the parser's `if symbol in
+    symbols` filter deleted, because `apply_narration`'s row lookup is keyed
+    on the row's own symbol and would find nothing to attach it to either
+    way. Pairing it with a real symbol is what makes the filter's drop
+    observable — mirrors the close brief's `test_parse_drops_unknown_symbols`."""
+    obj = _open_object_with_premarket("SNDK")
+    raw = json.dumps({"why": {
+        "SNDK": "Memory pricing read-through.",
+        "NVDA": "Not in this brief.",
+    }})
+    narration = parse_narration(raw, obj)
+    assert narration.why == {
+        "SNDK": "Memory pricing read-through."
+    }
+
+
+def test_narration_stays_non_fatal_for_the_open_brief() -> None:
+    """D19 parity: the always-sending brief keeps sending."""
+    obj = _open_object_with_tape()
+
+    def boom(_p: str) -> str:
+        raise RuntimeError("no key")
+
+    assert narrate_open_and_apply(obj, boom) == obj
+
+
+# --- C1: an empty §2 must never be overwritten by a hallucinated read ------
+
+_OMITTED_TAPE_NOTE = "No overnight tape captured for this session."
+
+
+def _open_object_with_empty_tape() -> BriefObject:
+    """A minimal open brief with §2 suppressed — no rows, the sentinel note."""
+    return BriefObject.model_validate(
+        {
+            "schema_version": 3,
+            "brief_id": "u-2026-08-13-open",
+            "user_id": "u",
+            "session_date": "2026-08-13",
+            "kind": "open",
+            "generated_at": "2026-08-13T12:15:00Z",
+            "subject": "Open - Thu Aug 13 - the day ahead",
+            "one_thing": None,
+            "sections": [
+                {
+                    "id": "overnight_tape",
+                    "tier": "suppressed",
+                    "note": _OMITTED_TAPE_NOTE,
+                    "rows": [],
+                }
+            ],
+            "flags": [],
+            "claims": [],
+            "resolved_claims": [],
+            "suppressed": [],
+            "data_quality": {"missing": [], "stale": []},
+        }
+    )
+
+
+def test_tape_read_never_overwrites_the_omitted_note() -> None:
+    """A `tape_read` returned for an empty §2 (the model was asked anyway, or a
+    stale/adversarial narrator response) must leave the honest sentinel note
+    intact — the digit guard cannot catch this because the hallucination is
+    prose, not a figure."""
+    obj = _open_object_with_empty_tape()
+    narrated = narrate_open_and_apply(
+        obj, lambda _p: json.dumps({"tape_read": "Futures point broadly higher overnight."})
+    )
+    section = next(s for s in narrated.sections if s.id.value == "overnight_tape")
+    assert section.note == _OMITTED_TAPE_NOTE
+
+
+def test_open_prompt_does_not_ask_for_tape_read_when_section_is_empty() -> None:
+    """The model is never invited to narrate absent data (C1's other half)."""
+    prompt = build_open_prompt(_open_object_with_empty_tape())
+    assert '"tape_read"' not in prompt
+
+
+def test_open_prompt_asks_for_tape_read_when_section_has_rows() -> None:
+    """The normal case still works: a populated §2 gets the ask."""
+    prompt = build_open_prompt(_open_object_with_tape())
+    assert '"tape_read"' in prompt

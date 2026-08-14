@@ -50,3 +50,30 @@ class MarketDataProvider(Protocol):
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         ...
+
+
+class PremarketProvider(Protocol):
+    """Pre-market prints and the overnight macro tape.
+
+    A separate protocol from MarketDataProvider because it is a separate,
+    premium, licensing-gated feed (D8) — a vendor may serve either, both, or
+    neither, and the EOD provider structurally cannot serve this.
+    """
+
+    def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Pre-market print and summed pre-market volume per symbol. Returns
+        ``{"symbol", "extended_last": Decimal, "extended_v": int,
+        "prev_close": Decimal}``; symbols with no prior close are omitted."""
+        ...
+
+    def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """``{"symbol", "last": Decimal, "prev_close": Decimal}`` for futures."""
+        ...
+
+    def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Same shape, for index and yield series (VIX, 10Y)."""
+        ...
+
+    def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Same shape, for currency series (DXY)."""
+        ...
