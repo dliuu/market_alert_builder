@@ -49,7 +49,7 @@ def test_calendar_events_map_to_the_seed_shape_and_filter_to_the_book() -> None:
             '  "release_date": "2026-08-14"}]'
         ),
     })
-    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    events, failed = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
     assert CalendarEvent("ZHELD", "earnings", date(2026, 8, 14), "ZHELD Q2 earnings") in events
     assert CalendarEvent("ZHELD", "ex_div", date(2026, 8, 17), "ZHELD ex-dividend") in events
     assert CalendarEvent(None, "macro", date(2026, 8, 14), "CPI (m/m)") in events
@@ -57,13 +57,20 @@ def test_calendar_events_map_to_the_seed_shape_and_filter_to_the_book() -> None:
     assert "ZOTHER" not in symbols                      # not in the book
     assert all(e.label != "ECB rate decision" for e in events)  # non-US macro dropped
     assert all(e.event_type != "lockup" for e in events)        # honestly absent live
+    assert failed == []                                  # every endpoint succeeded
 
 
 def test_a_failed_calendar_endpoint_degrades_to_what_fetched() -> None:
     """One endpoint's 500 must not suppress the other two's rows — an
     all-empty fixture can't distinguish "the others still contributed" from
     "everything happened to be empty," so this pairs the 500 with non-empty
-    earnings/dividends bodies and asserts both survive while macro is absent."""
+    earnings/dividends bodies and asserts both survive while macro is absent.
+
+    Fix A (M16 final review): the same 500 must also be *reported*, not just
+    tolerated — `_read_events`/`_DELETE_WINDOW` can't distinguish "no macro
+    releases this week" from "the endpoint was down," so `failed` is the
+    reader's only way to tell. This is the endpoint-500-with-real-siblings
+    case the fix asked for."""
     def handler(request: httpx.Request) -> httpx.Response:
         endpoint = request.url.path.rsplit("/", 1)[-1]
         if endpoint == "economic-calendar":
@@ -80,10 +87,11 @@ def test_a_failed_calendar_endpoint_degrades_to_what_fetched() -> None:
         return httpx.Response(200, text=bodies.get(endpoint, "[]"))
 
     client = FdnClient("k", transport=httpx.MockTransport(handler))
-    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    events, failed = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
     assert CalendarEvent("ZHELD", "earnings", date(2026, 8, 14), "ZHELD Q2 earnings") in events
     assert CalendarEvent("ZHELD", "ex_div", date(2026, 8, 17), "ZHELD ex-dividend") in events
     assert all(e.event_type != "macro" for e in events)
+    assert failed == ["calendar.economic"]
 
 
 def test_a_malformed_earnings_body_degrades_like_a_failed_endpoint() -> None:
@@ -98,8 +106,9 @@ def test_a_malformed_earnings_body_degrades_like_a_failed_endpoint() -> None:
         return httpx.Response(200, text="[]")
 
     client = FdnClient("k", transport=httpx.MockTransport(handler))
-    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    events, failed = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
     assert all(e.event_type != "earnings" for e in events)
+    assert failed == ["calendar.earnings"]
 
 
 def test_a_failed_earnings_endpoint_still_lets_macro_contribute_rows() -> None:
@@ -122,9 +131,10 @@ def test_a_failed_earnings_endpoint_still_lets_macro_contribute_rows() -> None:
         return httpx.Response(200, text="[]")
 
     client = FdnClient("k", transport=httpx.MockTransport(handler))
-    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    events, failed = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
     assert CalendarEvent(None, "macro", date(2026, 8, 14), "CPI (m/m)") in events
     assert all(e.event_type != "earnings" for e in events)
+    assert failed == ["calendar.earnings"]
 
 
 # --- ingest_events_for_session: DB round-trip + idempotency ----------------
@@ -188,10 +198,11 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
                 {"u": user_id, "sec": sector_id},
             )
 
-        first_written = ingest_events_for_session(
+        first_written, first_failed = ingest_events_for_session(
             engine, client, session_date=_DB_SESSION, user_id=user_id
         )
         assert first_written == 1
+        assert first_failed == []
 
         with engine.connect() as conn:
             first = _rows(conn, label_like="ZI6A%")
@@ -200,10 +211,11 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
             "occurs_at": _DB_SESSION, "label": "ZI6A Q2 earnings",
         }]
 
-        second_written = ingest_events_for_session(
+        second_written, second_failed = ingest_events_for_session(
             engine, client, session_date=_DB_SESSION, user_id=user_id
         )
         assert second_written == 1
+        assert second_failed == []
 
         with engine.connect() as conn:
             second = _rows(conn, label_like="ZI6A%")

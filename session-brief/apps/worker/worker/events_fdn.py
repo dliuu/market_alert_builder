@@ -24,24 +24,38 @@ from worker.providers.fdn import FEED_ERRORS, FdnClient
 
 def fetch_calendar_events(
     client: FdnClient, *, session_date: date, symbols: set[str]
-) -> list[CalendarEvent]:
+) -> tuple[list[CalendarEvent], list[str]]:
+    """Returns the fetched events alongside the `data_quality.missing`-style
+    names of any endpoint that failed on any day of the window — a day-8
+    `economic-calendar` 500 is reported the same as a day-0 one, since the
+    reader can't tell "quiet that day" from "down that day" either way."""
     events: list[CalendarEvent] = []
+    failed: set[str] = set()
     for offset in range(_CALENDAR_WINDOW_DAYS + 1):
         d = session_date + timedelta(days=offset)
-        events += _earnings(client, d, symbols)
-        events += _ex_dividends(client, d, symbols)
-        events += _macro(client, d)
+        e, ok = _earnings(client, d, symbols)
+        events += e
+        if not ok:
+            failed.add("calendar.earnings")
+        e, ok = _ex_dividends(client, d, symbols)
+        events += e
+        if not ok:
+            failed.add("calendar.dividends")
+        e, ok = _macro(client, d)
+        events += e
+        if not ok:
+            failed.add("calendar.economic")
     seen: set[tuple[str | None, str, date]] = set()
     unique: list[CalendarEvent] = []
-    for e in events:
-        key = (e.symbol, e.event_type, e.occurs_at)
+    for event in events:
+        key = (event.symbol, event.event_type, event.occurs_at)
         if key not in seen:
             seen.add(key)
-            unique.append(e)
-    return unique
+            unique.append(event)
+    return unique, sorted(failed)
 
 
-def _earnings(client: FdnClient, d: date, symbols: set[str]) -> list[CalendarEvent]:
+def _earnings(client: FdnClient, d: date, symbols: set[str]) -> tuple[list[CalendarEvent], bool]:
     try:
         records = client.fetch("earnings-calendar", date=d.isoformat())
         return [
@@ -53,12 +67,14 @@ def _earnings(client: FdnClient, d: date, symbols: set[str]) -> list[CalendarEve
             for r in records
             if (sym := str(r.get("trading_symbol"))) in symbols
             and r.get("earnings_announcement_date")
-        ]
+        ], True
     except FEED_ERRORS:
-        return []
+        return [], False
 
 
-def _ex_dividends(client: FdnClient, d: date, symbols: set[str]) -> list[CalendarEvent]:
+def _ex_dividends(
+    client: FdnClient, d: date, symbols: set[str]
+) -> tuple[list[CalendarEvent], bool]:
     try:
         records = client.fetch("dividends-calendar", date=d.isoformat())
         return [
@@ -68,12 +84,12 @@ def _ex_dividends(client: FdnClient, d: date, symbols: set[str]) -> list[Calenda
             )
             for r in records
             if (sym := str(r.get("trading_symbol"))) in symbols and r.get("ex_dividend_date")
-        ]
+        ], True
     except FEED_ERRORS:
-        return []
+        return [], False
 
 
-def _macro(client: FdnClient, d: date) -> list[CalendarEvent]:
+def _macro(client: FdnClient, d: date) -> tuple[list[CalendarEvent], bool]:
     try:
         records = client.fetch("economic-calendar", date=d.isoformat())
         return [
@@ -84,9 +100,9 @@ def _macro(client: FdnClient, d: date) -> list[CalendarEvent]:
             for r in records
             if str(r.get("country_code")) == "US"
             and r.get("release_date") and r.get("indicator_name")
-        ]
+        ], True
     except FEED_ERRORS:
-        return []
+        return [], False
 
 
 # Live ingest *replaces* the §4 window rather than merging into it. Merging was
@@ -104,11 +120,19 @@ def _macro(client: FdnClient, d: date) -> list[CalendarEvent]:
 # (yesterday's history and anything past the horizon are left alone), and it
 # shares the insert's transaction so §4 is never observed empty.
 #
-# The accepted cost: a morning where all three endpoints fail clears the window
-# and §4 renders its omitted-note instead of yesterday's rows. That is the
-# standing trade (omit rather than invent) taken deliberately — a *conditional*
-# delete would restore exactly the merge hazard above, since the rows it spared
-# would be the synthetic ones.
+# The accepted cost: a morning where every endpoint fails clears the window and
+# §4 renders its omitted-note instead of yesterday's rows. That is the standing
+# trade (omit rather than invent) taken deliberately — a *conditional* delete
+# would restore exactly the merge hazard above, since the rows it spared would
+# be the synthetic ones.
+#
+# A morning where only *some* endpoints fail is the same trade, category by
+# category: the delete is still total, so a failed macro fetch clears macro
+# rows the same as a failed everything, and §4 would render a quiet-looking
+# week indistinguishable from a genuinely quiet one. `fetch_calendar_events`
+# reports which endpoints failed so the caller can put that in
+# `data_quality.missing` instead — the reader is told, even though the row is
+# still gone.
 _DELETE_WINDOW = text("""
     DELETE FROM events WHERE occurs_at >= :window_start AND occurs_at <= :window_end
 """)
@@ -116,14 +140,19 @@ _DELETE_WINDOW = text("""
 
 def ingest_events_for_session(
     engine: Engine, client: FdnClient, *, session_date: date, user_id: str = DEV_USER_ID
-) -> int:
+) -> tuple[int, list[str]]:
     """Fetch the window's calendars for the book's symbols, then replace the
-    window's `events` rows with them (delete + upsert in one transaction)."""
+    window's `events` rows with them (delete + upsert in one transaction).
+
+    Returns the row count alongside any failed-endpoint names (see
+    `fetch_calendar_events`), for the caller to surface into
+    `data_quality.missing` — a partial fetch degrades the rows silently;
+    this is how the brief still discloses it."""
     from worker.scheduler import book_symbols
 
     with engine.connect() as conn:
         held = set(book_symbols(conn, user_id))
-    events = fetch_calendar_events(client, session_date=session_date, symbols=held)
+    events, failed = fetch_calendar_events(client, session_date=session_date, symbols=held)
     window_end = session_date + timedelta(days=_CALENDAR_WINDOW_DAYS)
     with engine.begin() as conn:
         conn.execute(
@@ -134,4 +163,4 @@ def ingest_events_for_session(
                 "symbol": e.symbol, "event_type": e.event_type,
                 "occurs_at": e.occurs_at, "label": e.label,
             })
-    return len(events)
+    return len(events), failed

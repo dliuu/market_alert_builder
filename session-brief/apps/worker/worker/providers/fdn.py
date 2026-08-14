@@ -121,6 +121,13 @@ def _capture_key(params: dict[str, str]) -> str:
     explicitly anyway, because the one thing this string must never do is put
     the API key in a database column (or in the probe's ✓ lines, which print
     the same values back to a human).
+
+    Warning: the identifier short-circuit below ignores every other param. If
+    `get_latest_prices` is ever paginated (the runbook's I3 remedy: page it
+    with `offset`), those calls still pass `identifier` — every page would key
+    on the same symbol and `ON CONFLICT DO NOTHING` would silently drop all
+    but the first, exactly the collision this function was written to fix.
+    The key must fold in the page/offset too, not just the identifier.
     """
     identifier = params.get("identifier") or params.get("identifiers")
     if identifier:

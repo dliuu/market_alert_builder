@@ -486,6 +486,7 @@ def run_open_session_job(
 
         client = FdnClient() if config.FDN_API_KEY else None
         news: dict[str, list[str]] = {}
+        missing: list[str] = []
         try:
             written = ingest_premarket_for_session(
                 engine, session_date=session_date, prior_session=prior,
@@ -498,9 +499,10 @@ def run_open_session_job(
                 from worker.news_fdn import fetch_held_news
                 from worker.providers.fdn import store_captured_payloads
 
-                n_events = ingest_events_for_session(
+                n_events, failed_calendar = ingest_events_for_session(
                     engine, client, session_date=session_date, user_id=user_id
                 )
+                missing.extend(failed_calendar)
                 with engine.connect() as conn:
                     held = set(book_symbols(conn, user_id))
                 news = fetch_held_news(client, session_date=session_date, held=held)
@@ -528,6 +530,7 @@ def run_open_session_job(
                     generated_at=now_utc,
                     narrator=default_narrator(),
                     news=news,
+                    missing=missing,
                 )
                 trans.commit()
             except Exception:

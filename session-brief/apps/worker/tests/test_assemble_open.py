@@ -230,6 +230,16 @@ def test_a_completely_empty_day_still_produces_a_valid_brief() -> None:
     assert calendar.note is not None  # says the day is clear, rather than vanishing
 
 
+def test_a_failed_calendar_endpoint_lands_in_data_quality_missing() -> None:
+    """Fix A (M16 final review): a partial calendar fetch still clears its whole
+    window (events_fdn.py's `_DELETE_WINDOW`), so §4 alone can't tell a quiet
+    week from a broken feed. `missing` is how `ingest_events_for_session`'s
+    failed-endpoint names (see `test_events_fdn.py`) are meant to surface —
+    this checks the BriefObject end of that wiring."""
+    obj = _open(missing=["calendar.economic"])
+    assert obj.data_quality.missing == ["calendar.economic"]
+
+
 def test_matches_frozen_fixture() -> None:
     """M15: the snapshot now carries a populated §2 and §3 — one tape read, one
     name gapping pre-market (SNDK, clears the threshold) and one flat (RKLB,

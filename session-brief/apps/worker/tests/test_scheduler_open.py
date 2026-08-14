@@ -239,9 +239,9 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
         assert client is fake_client
         return 3
 
-    def fake_ingest_events(*_args: Any, **_kwargs: Any) -> int:
+    def fake_ingest_events(*_args: Any, **_kwargs: Any) -> tuple[int, list[str]]:
         calls.append("ingest_events")
-        return 2
+        return 2, ["calendar.economic"]
 
     def fake_fetch_news(*_args: Any, **_kwargs: Any) -> dict[str, list[str]]:
         calls.append("fetch_news")
@@ -252,10 +252,12 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
         return 0
 
     captured_news: dict[str, list[str]] = {}
+    captured_missing: list[str] = []
 
     def fake_assemble(*_args: Any, **kwargs: Any) -> object:
         calls.append("assemble")
         captured_news.update(kwargs.get("news") or {})
+        captured_missing.extend(kwargs.get("missing") or [])
         raise _Stop
 
     monkeypatch.setattr("worker.providers.fdn.FdnClient", fake_client_factory)
@@ -276,3 +278,7 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
         "store_payloads", "close", "assemble",
     ]
     assert captured_news == {"ZHELD": ["ZHELD lands a contract"]}
+    # Fix A (M16 final review): a partial calendar fetch must reach
+    # `assemble_open_and_store` as `missing`, not just get swallowed at the
+    # ingest call — this is the scheduler-level half of that wiring.
+    assert captured_missing == ["calendar.economic"]

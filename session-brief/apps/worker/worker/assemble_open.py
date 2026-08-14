@@ -467,12 +467,18 @@ def assemble_open_and_store(
     generated_at: datetime,
     narrator: object | None = None,
     news: dict[str, list[str]] | None = None,
+    missing: list[str] | None = None,
 ) -> BriefObject:
     """Read the cached inputs, assemble, narrate, and upsert into ``briefs``.
 
     Always returns an object — there is no skip gate (docs/05). Idempotent on
     ``(user_id, session_date, kind)``. Unlike the close path this never calls
     ``compute_and_store``, so an open brief cannot fail on a missing bar.
+
+    ``missing`` (M16) carries any failed-calendar-endpoint names the scheduler
+    collected from ``ingest_events_for_session`` — a partial calendar fetch
+    still deletes-then-replaces its window (see ``events_fdn.py``), so this is
+    the disclosure that lets §4 read as "quiet" only when it actually was.
     """
     from worker.narrate import narrate_open_and_apply
 
@@ -497,6 +503,7 @@ def assemble_open_and_store(
         prior_session=prior_session,
         generated_at=generated_at,
         news=news,
+        missing=missing,
     )
     # Stage ⑤ — non-fatal by construction (D19): a failed call ships tables-only.
     obj = narrate_open_and_apply(obj, narrator, headlines=news)  # type: ignore[arg-type]

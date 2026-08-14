@@ -221,8 +221,11 @@ fact. So this is a one-time human step:
 
 ```sql
 -- Every pre-market quote row written before the key went live is synthetic.
--- Substitute the session date of the first live 08:00 ingest.
-DELETE FROM quotes WHERE session_date < '<first live session date>';
+-- Substitute the session date of the first live 08:00 ingest. `<=`, not `<`:
+-- if the key is set mid-day, that morning's 08:00 run already fired synthetic
+-- before the switch, so the first live session's own pre-key row is itself
+-- synthetic and must be purged with the rest, not spared into the base.
+DELETE FROM quotes WHERE session_date <= '<first live session date>';
 ```
 
 Consequence of skipping it: for the first ~10 live sessions, §3's "×N average
