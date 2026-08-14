@@ -89,8 +89,10 @@ invents** — the standing M15 rule.
 ```
 worker/providers/fdn.py     FdnClient (transport + capture)
                             FdnPremarketProvider (the 4 seam methods)
-                            FdnProvider gains real calendar methods
-worker/events_fdn.py        3 calendars → CalendarEvent → events upsert
+                            FdnProvider unchanged — the M11 stub class, NOT the
+                            live feed (its NotImplementedErrors now name the
+                            real homes; the calendars went to events_fdn.py)
+worker/events_fdn.py        3 calendars → CalendarEvent → events window-replace
 worker/news_fdn.py          latest-news → {symbol: [headline, …]}
 worker/scheduler.py         live/synthetic branch + raw-payload store + events/news wiring
 worker/assemble_open.py     news → has_news gate; passes headlines to narration
@@ -129,28 +131,24 @@ Expect: `All checks passed!`
 ```bash
 uv run mypy
 ```
-Expect (per the M16 DoD): clean. **As of this writing it is not** — `uv run
-mypy` reports two pre-existing `attr-defined` errors in
-`tests/test_scheduler_open.py` (`Module "worker.scheduler" does not explicitly
-export attribute "config"`), introduced in `fix(m16): widen fdn feed error
-handling; harden scheduler wiring tests` (Task 7 territory, already merged).
-This is a real gap the offline DoD line doesn't yet meet — flag it rather than
-paper over it; Task 9 is docs-only and does not touch code, so the fix (an
-explicit re-export or `from worker.scheduler import config as scheduler_config`
-in the two test call sites) is follow-up work, not done here.
+Expect (per the M16 DoD): `Success: no issues found in 87 source files`. This
+briefly did fail — two `attr-defined` errors in `tests/test_scheduler_open.py`
+(`Module "worker.scheduler" does not explicitly export attribute "config"`),
+introduced alongside the Task 7 test hardening and fixed in `fix(m16):
+mypy-strict tests-dir violation and fdn-probe traceback`. Note there is **no
+path argument**: the project config checks all 87 files including `tests/`, and
+`uv run mypy worker` would quietly skip the half where that regression lived.
 
 ```bash
 uv run -m worker.cli fdn-probe
 ```
-Expect (per the design intent): a clear error naming `FDN_API_KEY`, not a
-traceback. **As currently implemented, this is not what happens**: `FdnClient.__init__`
-raises a bare `RuntimeError("FDN_API_KEY is not set (see repo-root .env)")`
-with nothing catching it in `_fdn_probe_cmd`/`main`, so the command exits with
-a full Python traceback — the last line (`RuntimeError: FDN_API_KEY is not
-set (see repo-root .env)`) does name the variable, but it is not the "clean
-error" the tool's own docstring promises. Worth a one-line `try/except
-RuntimeError` → `raise SystemExit(str(exc))` in `_fdn_probe_cmd` as follow-up;
-out of scope for this docs-only task.
+Expect: a clear error naming `FDN_API_KEY`, pointing at both the repo-root
+`.env` and `fly secrets set`, and saying that the synthetic feed is a valid
+state rather than a failure — not a traceback. This originally *did* exit with
+a full Python traceback out of `FdnClient.__init__`'s bare `RuntimeError`;
+`_fdn_probe_cmd` now catches it and raises `SystemExit` with that guidance
+(`fix(m16): mypy-strict tests-dir violation and fdn-probe traceback`, covered
+by `test_probe_cmd_gives_guidance_instead_of_a_traceback_when_keyless`).
 
 ```bash
 uv run -m worker.cli seed-premarket --date 2026-08-13
@@ -201,15 +199,56 @@ drop it when you intend to send.
 
 ### Live mode (once the Premium key is set)
 
+#### Step 0 — REQUIRED before the first live send: purge the synthetic `quotes` history
+
+**Do this before the key is live for an 08:15 fire.** Skipping it means the
+first live brief prints an invented figure with no synthetic banner to warn
+anyone — the exact failure the user complained about, made worse by the
+banner's removal.
+
+Why: §3's `premarket_vol_mult` is a live numerator over a synthetic base.
+`premarket._typical_volume` averages the last `PREMARKET_VOL_WINDOW = 10`
+sessions of `quotes.extended_v`, and every one of those rows today is
+hash-fabricated by `SyntheticPremarketProvider`. On switch-on the numerator
+becomes a real summed pre-market volume while the denominator stays fake, so
+the printed multiple is meaningless — and unlike §4's calendar it cannot
+self-clean daily, because the 10-session base is legitimately historical data
+the pipeline needs to keep.
+
+There is deliberately **no code that guesses which rows are synthetic**. There
+is no provenance column, and inferring one from row shape would be inventing a
+fact. So this is a one-time human step:
+
+```sql
+-- Every pre-market quote row written before the key went live is synthetic.
+-- Substitute the session date of the first live 08:00 ingest.
+DELETE FROM quotes WHERE session_date < '<first live session date>';
+```
+
+Consequence of skipping it: for the first ~10 live sessions, §3's "×N average
+pre-market volume" column is a real volume divided by a fabricated average.
+Every other §3 figure (`pre_pct`, `gap_cents`) is unaffected — those come from
+`extended_last` and `prev_close`, both live from day one.
+
+After the purge, `_typical_volume` returns `None` until
+`PREMARKET_VOL_MIN_OBS` live sessions have accumulated, and §3 omits the volume
+multiple rather than printing one — omit-rather-than-invent, working as
+designed. That empty column for the first days is the *correct* state.
+
+#### Step 1 — set the key and probe
+
 ```bash
 fly secrets set FDN_API_KEY=...   # run from apps/worker/, per fly.toml's app name
 uv run -m worker.cli fdn-probe
 ```
 Expect: one line per check — `FDN_TAPE_IDENTIFIERS` entries (futures/index/
-forex/stock-quotes identifier guesses), a held-name `latest-prices` UTC-
-timestamp check, an ES `futures-prices` session-dated-bar check, a
+forex/stock-quotes identifier guesses, each with its raw record keys, so the
+`index-quotes` route's `price`/`change` field names are confirmed too), a
+held-name `latest-prices` record-count + UTC-timestamp check, an ES
+`futures-prices` session-dated-bar check with an explicit verdict, a
 `stock-quotes` field-name dump, the three calendar endpoints, and `latest-news`
-(twice — once for reachability, once for the page-size assumption). Every
+(three times — reachability, the page-size assumption, and whether a per-symbol
+filter is honoured). Every
 check prints `✓ …` or `✗ …`; the command always exits 0 (`_fdn_probe`'s own
 docstring: "read-only … a human reads the ✓/✗ lines"). The key itself never
 appears in any line (`_safe_error` strips it out of httpx exception text).
@@ -219,6 +258,87 @@ edit the mapping in `worker/constants.py`'s `FDN_TAPE_IDENTIFIERS` — it's a
 `dict[str, tuple[str, str]]` of internal symbol → `(fdn endpoint, fdn
 identifier)` — then re-run `fdn-probe`. No other code changes; a symbol left
 unmapped is simply omitted from §2, never invented (docs/07 D28).
+
+#### What the probe is really asking, and what to do with each answer
+
+Three vendor-shape assumptions in the shipped code **cannot be settled without
+a real key**, and all three are the kind that fail silently — an empty section,
+not an error. The probe was extended so each prints its own verdict. Read these
+three lines first; they decide whether the first live brief is any good.
+
+Each is **unresolved as of this writing**. Nothing below has been observed
+against the live vendor. The code ships with the optimistic assumption in each
+case, because the pessimistic branch degrades to an omitted section rather than
+a wrong number — safe to ship, not safe to ignore.
+
+**1. `latest-prices` pagination vs. the 300-record cap (§3 disappears entirely)**
+
+Probe line: `✓ latest-prices <SYM> (UTC assumption + 300-record cap): N record(s), latest times=[…]`
+
+`FdnPremarketProvider.get_latest_prices` fetches with no pagination. The vendor
+documents a 300-record limit per request, and a current *week* of minute bars is
+roughly 1,950 records. If the response is oldest-first, it ends days before
+today, the pre-market window filter matches nothing, and **every held name is
+omitted** — §3 renders its omitted-note and the email has no pre-market section
+at all.
+
+- **Answer is fine** if the count is well under 300, *or* the count is ~300 and
+  the latest `time` is within minutes of `now(UTC)` (newest-first truncation —
+  harmless, the window we want is at the front).
+- **Answer is a problem** if the count is at/near 300 *and* the latest `time` is
+  hours or days stale. That is oldest-first truncation.
+- **Remedy:** add pagination to `FdnPremarketProvider.get_latest_prices` —
+  page with `offset` until a record's `time` reaches the window, or narrow the
+  request if the endpoint accepts a date/time bound (check the probe's key dump
+  and the vendor docs for a supported parameter). Do **not** widen the window
+  filter to compensate; that would admit yesterday's prints as this morning's.
+
+**2. `futures-prices` has no session-dated bar at 08:00 ET (§2 loses 3 of 6 rows)**
+
+Probe line: `✓ futures-prices ES (session-dated bar): … → NO session-dated bar → ES=F/NQ=F/CL=F are DROPPED from §2`
+
+`_futures_rows` requires `len(bars) >= 2` and `bars[0]["date"] == session_date`.
+But this spec's own verified facts say `futures-prices` returns **daily** bars
+with "No live overnight print" — so at 08:00 ET a bar dated *today* very
+probably does not exist, and ES=F / NQ=F / CL=F silently fall out of §2,
+leaving the overnight tape with 3 of its 6 fixed rows.
+
+- **Answer is fine** if the verdict reads `session-dated bar EXISTS`.
+- **Answer is a problem** on `NO session-dated bar` — the likely outcome.
+- **Remedy — a decision, not a patch.** Three options, in preference order:
+  1. Move futures to a quote endpoint if one covers them (check whether
+     `index-quotes` accepts the futures identifiers — the probe's check 1
+     already dumps each route's record count and keys). This is the only option
+     that yields a genuine overnight read.
+  2. Accept the omission: §2 renders three rows and the tape is thinner. Honest,
+     and the current behavior — no code change.
+  3. Redefine the row as *prior settle vs. the settle before it* using
+     `bars[0]`/`bars[1]` whatever their dates. **Only if the label changes with
+     it** — presenting a stale daily change as an overnight move is inventing a
+     number, which the brief does not do.
+
+**3. `latest-news` has no per-symbol filter (the news gate is always empty)**
+
+Probe line: `✓ latest-news identifier=<SYM> (per-symbol filter honoured?): N record(s), M mention <SYM> → HONOURED | IGNORED`
+
+`fetch_held_news` pulls 3 pages × 10 **market-wide** articles and keeps whatever
+mentions a held name. Thirty most-recent market-wide headlines will rarely touch
+any of ~10 holdings, so `has_news` stays `False` and the narration headline
+block stays empty — a feature that reports as working while doing nothing.
+
+- **`HONOURED`** (every returned record mentions the symbol): rework
+  `news_fdn.fetch_held_news` to fetch **per held symbol** rather than paging the
+  market-wide feed — one call per name, `_PER_SYMBOL_CAP` headlines each, and
+  drop the `_PAGES` loop. Costs ~10 calls a morning instead of 3.
+- **`IGNORED`** (the param was silently dropped): the guess was wrong, not the
+  idea. Check the vendor docs for the real filter parameter name and re-probe
+  by editing check 7's parameter in `worker/cli.py`. If no per-symbol filter
+  exists at any tier, keep market-wide paging and accept that the news gate is
+  mostly decorative — but say so, rather than leaving a reader to assume §3's
+  news threshold is live.
+- Either way the failure is silent, so **verify by eye** on the first live
+  morning: the job prints `open <date>: N calendar events, news for [...]`. An
+  always-empty list there is this finding, not a quiet news day.
 
 **Confirming the switch actually flipped**, once the next open brief has sent:
 - The email/web brief must **not** carry the `"synthetic feed · not live
@@ -245,6 +365,35 @@ Expect: rows across the endpoints the morning job touches — `futures-prices`,
 `index-quotes`, `stock-quotes`, `latest-prices`, `earnings-calendar`,
 `dividends-calendar`, `economic-calendar`, `latest-news` — each `as_of` the
 session date, `fetched_at` around the 08:00 ET ingest fire.
+
+Note the `symbol` column for the symbol-less endpoints: the calendars key on
+`date=YYYY-MM-DD` and news on `date=…|offset=N`, one row per fetch. This is
+load-bearing for invariant 5 — they all used to key on a single `'*'`, so the
+window's eight calendar days collided on `(source, endpoint, symbol, as_of)`
+and `ON CONFLICT DO NOTHING` kept only the first, leaving §4 and the news gate
+unreplayable. Expect **8 `earnings-calendar` rows**, not 1:
+
+```sql
+SELECT endpoint, count(*), min(symbol), max(symbol)
+FROM raw_payloads
+WHERE source = 'fdn' AND as_of = '<today''s session date>'
+GROUP BY endpoint ORDER BY endpoint;
+```
+
+`events` is **replaced** across the §4 window on every live run, not merged —
+the synthetic `events_seed` rows (invented lockups, fake macro releases) are
+purged automatically each morning, which is why no manual step is needed there
+and why lockup expiries go honestly absent. Confirm no synthetic remnant
+survives inside the window:
+
+```sql
+SELECT event_type, count(*) FROM events
+WHERE occurs_at BETWEEN '<today''s session date>'
+                    AND '<today''s session date>'::date + 7
+GROUP BY event_type;
+```
+Expect `earnings` / `ex_div` / `macro` only — **no `lockup`**. A `lockup` row
+inside the window means the live calendar ingest did not run.
 
 ```sql
 SELECT symbol, session_date, captured_at, last, prev_close, extended_last, extended_v
