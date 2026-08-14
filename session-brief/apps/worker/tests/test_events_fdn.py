@@ -60,13 +60,55 @@ def test_calendar_events_map_to_the_seed_shape_and_filter_to_the_book() -> None:
 
 
 def test_a_failed_calendar_endpoint_degrades_to_what_fetched() -> None:
+    """One endpoint's 500 must not suppress the other two's rows — an
+    all-empty fixture can't distinguish "the others still contributed" from
+    "everything happened to be empty," so this pairs the 500 with non-empty
+    earnings/dividends bodies and asserts both survive while macro is absent."""
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("economic-calendar"):
+        endpoint = request.url.path.rsplit("/", 1)[-1]
+        if endpoint == "economic-calendar":
             return httpx.Response(500)
+        bodies = {
+            "earnings-calendar": (
+                '[{"trading_symbol": "ZHELD", "fiscal_period": "Q2",'
+                '  "earnings_announcement_date": "2026-08-14"}]'
+            ),
+            "dividends-calendar": (
+                '[{"trading_symbol": "ZHELD", "ex_dividend_date": "2026-08-17"}]'
+            ),
+        }
+        return httpx.Response(200, text=bodies.get(endpoint, "[]"))
+
+    client = FdnClient("k", transport=httpx.MockTransport(handler))
+    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    assert CalendarEvent("ZHELD", "earnings", date(2026, 8, 14), "ZHELD Q2 earnings") in events
+    assert CalendarEvent("ZHELD", "ex_div", date(2026, 8, 17), "ZHELD ex-dividend") in events
+    assert all(e.event_type != "macro" for e in events)
+
+
+def test_a_failed_earnings_endpoint_still_lets_macro_contribute_rows() -> None:
+    """The converse direction: a 500 on earnings-calendar must not suppress a
+    non-empty economic-calendar. Each helper (_earnings/_ex_dividends/_macro)
+    wraps its own client.fetch in its own try/except with no shared state, so
+    this exercises the same isolation mechanism from the other side."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        endpoint = request.url.path.rsplit("/", 1)[-1]
+        if endpoint == "earnings-calendar":
+            return httpx.Response(500)
+        if endpoint == "economic-calendar":
+            return httpx.Response(
+                200,
+                text=(
+                    '[{"indicator_name": "CPI (m/m)", "country_code": "US",'
+                    '  "release_date": "2026-08-14"}]'
+                ),
+            )
         return httpx.Response(200, text="[]")
 
     client = FdnClient("k", transport=httpx.MockTransport(handler))
-    assert fetch_calendar_events(client, session_date=_SESSION, symbols=set()) == []
+    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    assert CalendarEvent(None, "macro", date(2026, 8, 14), "CPI (m/m)") in events
+    assert all(e.event_type != "earnings" for e in events)
 
 
 # --- ingest_events_for_session: DB round-trip + idempotency ----------------
