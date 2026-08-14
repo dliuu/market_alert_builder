@@ -214,7 +214,7 @@ def _ranked() -> BriefObject:
 
 def test_attribution_rows_ranked_by_abs_resid_z_desc_none_last() -> None:
     obj = _ranked()
-    assert obj.schema_version == 4
+    assert obj.schema_version == SCHEMA_VERSION
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     assert [r.symbol for r in attribution.rows] == ["B", "A", "D"]
     b_row = attribution.rows[0]
