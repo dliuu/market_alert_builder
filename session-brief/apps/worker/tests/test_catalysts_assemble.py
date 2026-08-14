@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from fractions import Fraction
+from typing import cast
 
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
@@ -19,6 +20,12 @@ from worker.compute import Lot, Price, compute
 
 _D = date(2026, 8, 13)
 _USER = "00000000-0000-0000-0000-000000000001"
+
+
+def rows_of(section: dict[str, object]) -> list[dict[str, object]]:
+    """`catalysts_section` returns the loose dict shape assemble.py's other
+    section builders use, so the rows need narrowing before indexing."""
+    return cast("list[dict[str, object]]", section["rows"])
 
 
 def _close_brief(*, catalysts: list[CatalystItem], kind: str = "close") -> BriefObject:
@@ -56,20 +63,20 @@ def test_an_empty_feed_suppresses_the_whole_section() -> None:
     section = catalysts_section([], held=["SNDK", "RKLB"])
 
     assert section["tier"] == "suppressed"
-    assert section["rows"] == []
+    assert rows_of(section) == []
     assert "SNDK" in str(section["note"]) and "RKLB" in str(section["note"])
 
 
 def test_names_with_no_catalysts_become_one_roll_up_line() -> None:
     section = catalysts_section([item(symbol="SNDK")], held=["SNDK", "RKLB", "ASTS"])
 
-    assert [r["symbol"] for r in section["rows"]] == ["SNDK"]
+    assert [r["symbol"] for r in rows_of(section)] == ["SNDK"]
     assert section["note"] == "No catalysts: ASTS, RKLB"
 
 
 def test_a_cluster_row_carries_its_figures_not_prose() -> None:
     section = catalysts_section([item()], held=["SNDK"])
-    row = section["rows"][0]
+    row = rows_of(section)[0]
 
     assert row["source"] == "insider"
     assert row["kind"] == "cluster"
@@ -88,13 +95,13 @@ def test_rows_are_ordered_by_severity_descending() -> None:
         held=["SNDK", "RKLB"],
     )
 
-    assert [r["symbol"] for r in section["rows"]] == ["SNDK", "RKLB"]
+    assert [r["symbol"] for r in rows_of(section)] == ["SNDK", "RKLB"]
 
 
 def test_a_decayed_tier_rides_on_the_row() -> None:
     section = catalysts_section([item(tier="brief")], held=["SNDK"])
 
-    assert section["rows"][0]["tier"] == "brief"
+    assert rows_of(section)[0]["tier"] == "brief"
 
 
 def test_the_section_id_is_in_the_contract() -> None:
@@ -111,7 +118,7 @@ def test_a_decimal_from_the_detail_json_becomes_a_contract_number() -> None:
               detail={"shares": "600000", "pct_of_float": "0.006"})],
         held=["SNDK"],
     )
-    row = section["rows"][0]
+    row = rows_of(section)[0]
 
     assert row["shares"] == 600000.0
     assert row["pct_of_float"] == 0.006
@@ -152,4 +159,4 @@ def test_an_ambiguous_code_is_carried_onto_the_row() -> None:
         held=["SNDK"],
     )
 
-    assert section["rows"][0]["ambiguous_code"] is True
+    assert rows_of(section)[0]["ambiguous_code"] is True

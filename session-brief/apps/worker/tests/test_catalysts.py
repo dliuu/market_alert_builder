@@ -12,6 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from worker.catalysts import (
+    CatalystSignal,
     InsiderTx,
     ProposedSale,
     ReportingState,
@@ -46,8 +47,8 @@ def tx(
     )
 
 
-def kinds(signals: list[object]) -> set[str]:
-    return {s.kind for s in signals}  # type: ignore[attr-defined]
+def kinds(signals: list[CatalystSignal]) -> set[str]:
+    return {s.kind for s in signals}
 
 
 def test_open_market_purchase_by_the_cfo_is_the_top_signal() -> None:
