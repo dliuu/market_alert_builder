@@ -230,6 +230,16 @@ def test_a_completely_empty_day_still_produces_a_valid_brief() -> None:
     assert calendar.note is not None  # says the day is clear, rather than vanishing
 
 
+def test_a_failed_calendar_endpoint_lands_in_data_quality_missing() -> None:
+    """Fix A (M16 final review): a partial calendar fetch still clears its whole
+    window (events_fdn.py's `_DELETE_WINDOW`), so §4 alone can't tell a quiet
+    week from a broken feed. `missing` is how `ingest_events_for_session`'s
+    failed-endpoint names (see `test_events_fdn.py`) are meant to surface —
+    this checks the BriefObject end of that wiring."""
+    obj = _open(missing=["calendar.economic"])
+    assert obj.data_quality.missing == ["calendar.economic"]
+
+
 def test_matches_frozen_fixture() -> None:
     """M15: the snapshot now carries a populated §2 and §3 — one tape read, one
     name gapping pre-market (SNDK, clears the threshold) and one flat (RKLB,
@@ -349,3 +359,21 @@ def test_sector_setup_carries_the_premarket_column() -> None:
     )
     row = _section(_assemble(sectors=[sector]), "sector_setup").rows[0]
     assert row.premarket == 0.004
+
+
+# --- News: the §3 has_news gate (M16) ---------------------------------------
+
+
+def test_a_sub_threshold_name_with_news_still_gets_a_row_but_no_claim() -> None:
+    """News is a visibility gate and a narration input only — it must not
+    create a claim, because news presence is not a directional call."""
+    quote = _pm("ZNEWS", "100.50", "100.00")  # +0.5%, under PREMARKET_THRESHOLD
+    obj = _assemble(
+        premarket=[quote],
+        holdings={"ZNEWS": "owned"},
+        claims=emit_premarket_gap([quote]),
+        news={"ZNEWS": ["Zed lands a contract"]},
+    )
+    pre = _section(obj, "premarket")
+    assert [r.symbol for r in pre.rows] == ["ZNEWS"]  # 0.5% gap, shown via news
+    assert obj.claims == []                            # news is not a directional call

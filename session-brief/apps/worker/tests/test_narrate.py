@@ -465,3 +465,13 @@ def test_open_prompt_asks_for_tape_read_when_section_has_rows() -> None:
     """The normal case still works: a populated §2 gets the ask."""
     prompt = build_open_prompt(_open_object_with_tape())
     assert '"tape_read"' in prompt
+
+
+# --- News headlines in the open prompt (M16) --------------------------------
+
+
+def test_open_prompt_carries_headlines_verbatim() -> None:
+    obj = _open_obj()
+    prompt = build_open_prompt(obj, headlines={"ASTS": ["FCC approves"]})
+    assert "FCC approves" in prompt
+    assert build_open_prompt(obj) == build_open_prompt(obj, headlines={})

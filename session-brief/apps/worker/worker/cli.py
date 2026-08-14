@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
@@ -15,10 +16,11 @@ from worker import calendar
 from worker.assemble import assemble_and_store
 from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
-from worker.constants import DEV_USER_ID
+from worker.constants import DEV_USER_ID, FDN_TAPE_IDENTIFIERS
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
+from worker.providers.fdn import FEED_ERRORS, FdnClient
 from worker.providers.tiingo import TiingoProvider
 
 
@@ -50,6 +52,12 @@ def main() -> None:
         help="capture a session's pre-market quotes + macro tape (M15 bootstrap)",
     )
     seed_premarket.add_argument("--date", help="session date YYYY-MM-DD; defaults to today")
+
+    fdn_probe = sub.add_parser(
+        "fdn-probe",
+        help="verify FDN_API_KEY, identifier mapping, and feed assumptions (read-only)",
+    )
+    fdn_probe.add_argument("--symbols", help="held symbols to probe, comma-separated")
 
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument("--kind", default="close", choices=("open", "close"), help="brief kind")
@@ -158,6 +166,10 @@ def main() -> None:
 
     if args.command == "seed-premarket":
         _seed_premarket(date_arg=args.date)
+        return
+
+    if args.command == "fdn-probe":
+        _fdn_probe_cmd(symbols_arg=args.symbols)
         return
 
     if args.command == "brief":
@@ -411,6 +423,191 @@ def _seed_premarket(date_arg: str | None) -> None:
     )
 
     print(f"seed-premarket: {written} quote(s) captured for {session_date}")
+
+
+def _fdn_probe_cmd(symbols_arg: str | None) -> None:
+    engine = get_engine()
+    symbols = _resolve_symbols(symbols_arg, engine)
+    # fdn-probe is the day-one diagnostic — often the first thing run, quite
+    # possibly before the key arrives — so a missing FDN_API_KEY is guidance,
+    # not a crash; the raw RuntimeError from FdnClient() would print a
+    # traceback for what is really a usage error.
+    try:
+        client = FdnClient()
+    except RuntimeError:
+        raise SystemExit(
+            "FDN_API_KEY is not set. For local runs, add it to the repo-root "
+            ".env; for the deployed worker, `fly secrets set FDN_API_KEY=...`. "
+            "Without it, the open brief runs on the synthetic feed — a valid "
+            "state, not an error."
+        ) from None
+    _fdn_probe(client, symbols=symbols)
+
+
+def _safe_error(exc: Exception) -> str:
+    """Renders a caught FEED_ERRORS exception for a human to read, without
+    ever leaking the vendor key: FdnClient authenticates via a `key` query
+    parameter (never a header — see its docstring's "never log request URLs"),
+    and httpx's own __str__ for HTTPStatusError and most other HTTPError
+    subclasses embeds the full request URL, key included. This diagnostic's
+    entire purpose is to be pasted and screenshotted by a human, so the raw
+    exception text must never reach `print`. Non-httpx members of FEED_ERRORS
+    (ValueError, TypeError, AttributeError, KeyError, ArithmeticError) are our
+    own messages, not the vendor's, and are safe to show as-is."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+    if isinstance(exc, httpx.HTTPError):
+        return type(exc).__name__
+    return str(exc)
+
+
+def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
+    """Day-one verification (M16 Task 8): the handful of vendor assumptions
+    that could not be checked offline. Read-only — no database writes, no
+    raw_payloads capture — and every check is independently fault-tolerant so
+    one bad endpoint never stops the rest from reporting. Always exits 0;
+    a human reads the ✓/✗ lines and decides whether FDN_TAPE_IDENTIFIERS or
+    the parsing code needs an edit before the first live send."""
+    print(f"fdn-probe: now={datetime.now(UTC).isoformat()}")
+
+    # 1. Every FDN_TAPE_IDENTIFIERS entry: fetch, record count, first
+    # trading_symbol, raw keys — verifies each futures/index/forex identifier
+    # guess. The keys matter as much as the count: `_quote_rows` assumes
+    # `price` and `change` on *both* index-quotes and stock-quotes, and only
+    # the latter is dumped by check 4 below.
+    for symbol, (endpoint, identifier) in FDN_TAPE_IDENTIFIERS.items():
+        label = f"tape {symbol} -> {endpoint} identifier={identifier}"
+        try:
+            param = "identifier" if endpoint == "futures-prices" else "identifiers"
+            records = client.fetch(endpoint, **{param: identifier})
+            first_symbol = records[0].get("trading_symbol") if records else "n/a"
+            keys = sorted(records[0].keys()) if records else []
+            print(
+                f"✓ {label}: {len(records)} record(s), "
+                f"first trading_symbol={first_symbol!r}, keys={keys}"
+            )
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {_safe_error(exc)}")
+
+    # 2. latest-prices for one held symbol: the record count and the two most
+    # recent `time` values next to datetime.now(UTC). Two open questions in
+    # one line — the UTC assumption in `_parse_fdn_time` by eye, and the
+    # pagination question (I3): a week of minute bars is ~1,950 records
+    # against a documented 300-record cap, so a count at or near 300 whose
+    # latest `time` is days old means the response is oldest-first and
+    # truncated, `FdnPremarketProvider.get_latest_prices` finds an empty
+    # window for *every* held name, and §3 disappears from the brief.
+    if symbols:
+        held = symbols[0]
+        label = f"latest-prices {held} (UTC assumption + 300-record cap)"
+        try:
+            records = client.fetch("latest-prices", identifier=held)
+            times = sorted(str(r.get("time")) for r in records)[-2:]
+            print(
+                f"✓ {label}: {len(records)} record(s), latest times={times}  "
+                f"now(UTC)={datetime.now(UTC).isoformat()}"
+            )
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {_safe_error(exc)}")
+    else:
+        print("✗ latest-prices: no held symbols to probe")
+
+    # 3. futures-prices for ES: does a bar dated *today* exist at pre-open?
+    # `_futures_rows` requires one and drops the symbol otherwise, so a "no"
+    # costs §2 three of its six fixed rows (ES=F/NQ=F/CL=F). The spec's own
+    # verified facts say these are daily bars with "no live overnight print",
+    # which makes "no" the likely answer — hence the explicit verdict rather
+    # than two dates for the reader to compare.
+    label = "futures-prices ES (session-dated bar)"
+    try:
+        bars = client.fetch("futures-prices", identifier="ES")
+        bars.sort(key=lambda r: str(r.get("date", "")), reverse=True)
+        latest_date = str(bars[0].get("date")) if bars else "n/a"
+        today_iso = date.today().isoformat()
+        verdict = (
+            "session-dated bar EXISTS → §2 futures rows render"
+            if latest_date == today_iso
+            else "NO session-dated bar → ES=F/NQ=F/CL=F are DROPPED from §2"
+        )
+        print(
+            f"✓ {label}: {len(bars)} bar(s), latest bar date={latest_date}  "
+            f"today={today_iso}  → {verdict}"
+        )
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {_safe_error(exc)}")
+
+    # 4. stock-quotes for one proxy ETF: raw record keys — verifies the
+    # price/change field assumption.
+    label = "stock-quotes EWT (raw record keys)"
+    try:
+        records = client.fetch("stock-quotes", identifiers="EWT")
+        keys = sorted(records[0].keys()) if records else []
+        print(f"✓ {label}: keys={keys}")
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {_safe_error(exc)}")
+
+    # 5. Each calendar + latest-news for today: record counts (also proves
+    # the key's tier covers Premium).
+    today = date.today().isoformat()
+    for endpoint in ("earnings-calendar", "dividends-calendar", "economic-calendar"):
+        label = f"{endpoint} {today}"
+        try:
+            records = client.fetch(endpoint, date=today)
+            print(f"✓ {label}: {len(records)} record(s)")
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {_safe_error(exc)}")
+
+    label = f"latest-news {today}"
+    try:
+        records = client.fetch("latest-news", date=today)
+        print(f"✓ {label}: {len(records)} record(s)")
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {_safe_error(exc)}")
+
+    # 6. latest-news page size (Task 7 review finding): news_fdn.py hardcodes
+    # offset=page*10, assuming 10 records per page. Confirm live, and confirm
+    # the `date` param is accepted (not silently ignored).
+    label = "latest-news page size (news_fdn.py assumes 10/page)"
+    try:
+        records = client.fetch("latest-news", date=today, offset="0")
+        print(
+            f"✓ {label}: expected=10  got={len(records)}  "
+            f"date param accepted (200 for date={today})"
+        )
+    except FEED_ERRORS as exc:
+        print(f"✗ {label}: {_safe_error(exc)}")
+
+    # 7. Does latest-news accept a per-symbol filter? (I6.) `fetch_held_news`
+    # pulls 3 pages × 10 *market-wide* articles and keeps whatever mentions a
+    # held name — but 30 market-wide headlines will rarely touch any of ~10
+    # holdings, so the §3 has_news gate and the narration headlines are
+    # almost always empty. If `identifier` is honoured, news should be fetched
+    # per symbol instead. The vendor's other endpoints use `identifier`, so
+    # that is the guess; an unknown param is typically ignored rather than
+    # rejected, which is exactly why this checks the *records*, not the status
+    # code — an all-mentions response means honoured, anything else means
+    # silently dropped.
+    if symbols:
+        held = symbols[0]
+        label = f"latest-news identifier={held} (per-symbol filter honoured?)"
+        try:
+            records = client.fetch("latest-news", date=today, identifier=held)
+            mentions = sum(
+                1 for r in records
+                if held in {str(s) for s in (r.get("trading_symbols") or [])}
+            )
+            if records and mentions == len(records):
+                verdict = "HONOURED → switch news_fdn.py to per-symbol fetching"
+            else:
+                verdict = (
+                    "IGNORED (param silently dropped) → keep market-wide paging "
+                    "and expect an empty news gate, or find the real filter param"
+                )
+            print(f"✓ {label}: {len(records)} record(s), {mentions} mention {held} → {verdict}")
+        except FEED_ERRORS as exc:
+            print(f"✗ {label}: {_safe_error(exc)}")
+    else:
+        print("✗ latest-news per-symbol filter: no held symbols to probe")
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:

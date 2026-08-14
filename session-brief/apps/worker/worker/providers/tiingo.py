@@ -51,13 +51,22 @@ class TiingoProvider:
         raise NotImplementedError("company news is a TBD source gap (M8)")
 
     def latest_minute(self, symbol: str) -> dict[str, Any]:
-        raise NotImplementedError("Tiingo free tier has no minute data; use FdnProvider (M11)")
+        raise NotImplementedError(
+            "Tiingo free tier has no minute data; fdn's latest-prices is the live "
+            "minute source (FdnPremarketProvider, M16)"
+        )
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError("dividends feed is an M12 concern")
 
     def dividends_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("Tiingo free tier has no dividends calendar; M14 §4 seeds")
+        raise NotImplementedError(
+            "Tiingo free tier has no dividends calendar; §4 uses worker/events_fdn.py "
+            "live (M16) and events_seed.py keyless"
+        )
 
     def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("Tiingo has no economic calendar; M14 §4 seeds")
+        raise NotImplementedError(
+            "Tiingo has no economic calendar; §4 uses worker/events_fdn.py live (M16) "
+            "and events_seed.py keyless"
+        )
