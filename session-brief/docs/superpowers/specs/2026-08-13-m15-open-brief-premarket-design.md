@@ -46,6 +46,17 @@ re-seeding replaces rather than duplicates:
   overnight change. These symbols are shared reference series, ingested once per
   symbol (docs/02 scaling shape), not per user.
 
+Nothing above the seam actually supplies that `prev_close` on the first run:
+nothing ingests daily bars for futures, yield, or forex series, and the tape's
+own prior capture is itself seeded from the same recursion — with no base, §2
+would be empty on every run, forever. `constants.TAPE_SEED_LEVELS` supplies a
+nominal, lowest-priority base for exactly these symbols, overwritten the moment
+a real prior capture exists, and the object says so: while
+`constants.PREMARKET_FEED_IS_SYNTHETIC` is True, `assemble_open` marks §2 stale
+whenever it has rows, and both renderers key a "synthetic feed" header marker
+off that flag (D24, final-pass review). The seed is scoped to the tape only — it
+must never answer for a held name with no `bars_daily` row of its own.
+
 The four premium methods (`get_latest_prices` / `get_futures_prices` /
 `get_index_quotes` / `get_forex_quotes`) do **not** widen `MarketDataProvider`.
 Protocols are structural: `TiingoProvider`, the EOD provider, structurally cannot
@@ -102,9 +113,14 @@ the contract pinned `horizon_sessions` to `"minimum": 1`, `resolve_due_claims` r
 only `session_date < :session_date` (excluding same-day claims), and
 `_resolve_session` offset by `horizon - 1` (i.e. `-1` at horizon 0). Horizon 0 is a
 genuine change to the D17 resolution engine: resolution now admits same-session
-claims and resolves horizon 0 on the emit session's own bar, while horizon-1 claims
-stay excluded from their own session (a regression test asserts this). This is the
-first time the open→close same-day accountability loop (D16b) runs live. Claim
+claims and, once that session has a bar, grades horizon 0 **open→close on the
+emit session itself** — not close-to-close. Close-to-close (D-1's close vs. D's
+close) contains the claimed pre-market gap as a sub-interval, so a name that
+gapped up pre-market and fully faded intraday would still grade "correct"; the
+gap is what the claim is *about*, so it cannot also be what grades it (D24,
+final-pass review). Horizon-1 claims are untouched — still graded close-to-close
+and still excluded from their own session (a regression test asserts both). This
+is the first time the open→close same-day accountability loop (D16b) runs live. Claim
 type is a new `premarket_gap`; emission is idempotent per the existing
 `UNIQUE (user_id, symbol, claim_type, session_date)` key, but the **`claims` table**
 also needed its own migration — contract v4 widened the JSON Schema's claim-type

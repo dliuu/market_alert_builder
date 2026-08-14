@@ -208,14 +208,44 @@ The **horizon-0 morning claim** is a genuine change to the D17 engine, not a
 `claim_type` seam ride: the contract pinned `horizon_sessions` to `minimum: 1`,
 `resolve_due_claims` read only `session_date < :session_date`, and
 `_resolve_session` offset by `horizon - 1`. Resolution now admits same-session
-claims and resolves horizon 0 on the emit session's own bar; horizon-1 claims are
-still excluded from their own session by `_resolve_session`, which is asserted by
-a regression test. The open brief emits and **never resolves** — resolving at
-08:15 would consume the due claims before the close brief's §7 could report them.
+claims and, once that session has a bar, grades horizon 0 **open→close on the
+emit session itself** — `(c − o) / o` for both the name and the benchmark — not
+close-to-close and not the emit session's own bar as first shipped. Close-to-close
+(D-1's close vs. D's close) contains the pre-market gap `emit_premarket_gap`
+claimed as a sub-interval, so a name that gapped up pre-market and fully faded
+intraday still graded "correct" — the gap is what the claim is *about*, so it
+cannot also be what grades it. Horizon-1+ claims are untouched, still graded
+close-to-close, and still excluded from their own session by `_resolve_session`,
+which is asserted by a regression test (`test_claims.py`/`test_claims_db.py`
+unmodified). The open brief emits and **never resolves** — resolving at 08:15
+would consume the due claims before the close brief's §7 could report them.
 `schema_version` bumps to **4** (§2 `level`/`overnight_pct`/`overnight_abs`, §3
 `pre_pct`/`gap_cents`/`premarket_vol_mult`, the claim changes); narration gains a
 `tape_read` key that lands in §2's existing `note`, so the read paragraph costs
 no schema surface and inherits the digit guard.
+
+**§2 is marked synthetic, and the tape's bootstrap seed is scoped to the tape.**
+Final-pass review (post-ship) found two gaps this entry hadn't recorded.
+First, `constants.TAPE_SEED_LEVELS` — plausible nominal levels for the six macro
+symbols plus the five foreign proxies — ships invented market levels to a
+reader with nothing telling them so. Nothing ingests bars for futures, yield, or
+forex series, and the tape's own history is itself seeded from this same
+recursion, so without a seed §2 has no base to gap from on any run, ever
+(confirmed empirically: 0 of the tape symbols ever carry a `bars_daily` row).
+It is deliberately the **lowest-priority** source in `ingest_premarket_for_session`
+— a real prior capture, once one exists, always overwrites it — and it is
+reflected in the object: while `constants.PREMARKET_FEED_IS_SYNTHETIC` is True,
+`assemble_open` adds `"overnight_tape.synthetic"` to `data_quality.stale`
+whenever §2 has rows, and both renderers key a header marker off that one entry.
+Second, that seed lived in one `closes` dict shared between the held-name fetch
+and the tape fetch, so a user holding one of the five foreign-proxy ETFs
+directly (EWT, say) with no `bars_daily` row yet — a brand-new holding, or a
+failed EOD ingest — picked up the seed's invented level as their §3 base and
+could emit a horizon-0 claim off it. `ingest_premarket_for_session` now builds
+two disjoint closes dicts and ingests held names and the tape in two separate
+calls; a held name's base comes from `bars_daily` alone, so a symbol with no
+real prior close is omitted, never invented, exactly as
+`worker/providers/synthetic.py` already promised for every other symbol.
 
 **The pre-market seam turned out to need its own protocol.** The plan (like the
 design spec) had the four premium methods widening `MarketDataProvider` itself.
@@ -247,8 +277,12 @@ stack.
 volume; the open brief resolving claims; a section that knows which provider
 filled `quotes`; blocking §2/§3 on the data licence; one `MarketDataProvider`
 protocol widened to cover pre-market data; assuming a contract enum bump reaches
-a table's CHECK constraints without its own migration.
-*Reverses if:* the premium pre-market licence lands (swap the provider, delete
-nothing else); a news feed lands (`has_news` starts firing with no other change);
-or M13's attribution lands and §1's salience upgrades from the largest gap to the
+a table's CHECK constraints without its own migration; grading a horizon-0 claim
+on anything but the open→close interval it claimed; a shared closes dict that
+lets the tape's bootstrap seed answer for a held name.
+*Reverses if:* the premium pre-market licence lands (swap the provider and flip
+`constants.PREMARKET_FEED_IS_SYNTHETIC` — `TAPE_SEED_LEVELS` and the
+`data_quality.stale` marker both retire with no renderer change); a news feed
+lands (`has_news` starts firing with no other change); or M13's attribution
+lands and §1's salience upgrades from the largest gap to the
 largest overnight `|resid_z|` — a change to one sort key in `_premarket`.
