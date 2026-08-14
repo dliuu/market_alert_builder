@@ -10,9 +10,55 @@ not implemented here.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import date
+from decimal import Decimal
 from typing import Any
+
+import httpx
+
+from worker import config
+
+_FDN_BASE_URL = "https://financialdata.net/api/v1"
+
+
+class FdnClient:
+    """Thin transport over financialdata.net (M16). Deliberately not the fdnpy
+    SDK: fdnpy parses prices as float, and the money invariant wants
+    parse_float=Decimal on every byte — the same reason TiingoProvider speaks
+    httpx directly. The vendor authenticates via a `key` query parameter (it
+    has no header auth); never log request URLs.
+
+    Every successful fetch is captured as (endpoint, symbol, verbatim text) so
+    the caller can honour invariant 5 (raw payloads stored verbatim) — the
+    client itself never touches the database.
+    """
+
+    def __init__(
+        self, api_key: str | None = None, *,
+        base_url: str = _FDN_BASE_URL,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        key = api_key if api_key is not None else config.FDN_API_KEY
+        if not key:
+            raise RuntimeError("FDN_API_KEY is not set (see repo-root .env)")
+        self._key = key
+        self._base_url = base_url
+        self._client = httpx.Client(transport=transport, timeout=30.0)
+        self.captured: list[tuple[str, str, str]] = []
+
+    def fetch(self, endpoint: str, **params: str) -> list[dict[str, Any]]:
+        response = self._client.get(
+            f"{self._base_url}/{endpoint}", params={**params, "key": self._key}
+        )
+        response.raise_for_status()
+        data = json.loads(response.text, parse_float=Decimal)
+        if not isinstance(data, list):
+            raise ValueError(f"fdn returned non-list for {endpoint}: {data!r}")
+        symbol = params.get("identifier") or params.get("identifiers") or "*"
+        self.captured.append((endpoint, symbol, response.text))
+        return data
 
 
 class FdnProvider:
