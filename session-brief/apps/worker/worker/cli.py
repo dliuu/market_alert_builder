@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from fractions import Fraction
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from contracts.brief import BriefObject
 from worker import calendar
@@ -122,7 +123,26 @@ def main() -> None:
     a_concordance.add_argument("--start", required=True, help="range start YYYY-MM-DD")
     a_concordance.add_argument("--end", required=True, help="range end YYYY-MM-DD")
 
+    catalysts = sub.add_parser("catalysts", help="insider flow + Form 144 catalysts (M17)")
+    cat_sub = catalysts.add_subparsers(dest="cat_command")
+    c_ingest = cat_sub.add_parser("ingest", help="pull filings into raw_payloads + typed tables")
+    c_ingest.add_argument("--date", required=True, help="session date YYYY-MM-DD")
+    c_ingest.add_argument("--symbols", help="comma-separated; defaults to the book")
+    c_detect = cat_sub.add_parser(
+        "detect", help="recompute signals from stored rows (no API calls)"
+    )
+    c_detect.add_argument("--date", required=True, help="session date YYYY-MM-DD")
+    c_rebuild = cat_sub.add_parser(
+        "rebuild", help="drop and rebuild signals; reporting state is preserved"
+    )
+    c_rebuild.add_argument("--date", required=True, help="session date YYYY-MM-DD")
+
     args = parser.parse_args()
+
+    if args.command == "catalysts":
+        _catalysts(args.cat_command, date_arg=getattr(args, "date", None),
+                   symbols_arg=getattr(args, "symbols", None))
+        return
 
     if args.command == "backfill":
         _backfill(symbols_arg=args.symbols, days=args.days)
@@ -172,6 +192,79 @@ def main() -> None:
 
     if args.command in (None, "hello"):
         print("worker: ok")
+
+
+def _catalysts(
+    cat_command: str | None, *, date_arg: str | None, symbols_arg: str | None
+) -> None:
+    """M17 stages. ``ingest`` is the only one that touches a vendor; ``detect``
+    and ``rebuild`` read the stored rows alone, which is what makes a rule
+    change cost zero API calls."""
+    from worker.catalysts import rebuild_signals
+    from worker.catalysts_ingest import ingest_catalysts
+    from worker.constants import CATALYST_MODEL_VERSION, DEV_USER_ID
+    from worker.providers.synthetic import SyntheticCatalystProvider
+
+    if date_arg is None:
+        raise SystemExit("--date is required")
+    session_date = date.fromisoformat(date_arg)
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        if cat_command == "ingest":
+            symbols = (
+                [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+                if symbols_arg else _book_symbols(conn, DEV_USER_ID)
+            )
+            # The live FdnProvider swaps in here once M16's FdnClient lands;
+            # nothing above the seam changes (D29).
+            counts = ingest_catalysts(
+                conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
+            )
+            print(f"catalysts ingest {session_date}: {counts}")
+            return
+
+        if cat_command in ("detect", "rebuild"):
+            floats = _book_floats(conn, session_date)
+            stored = rebuild_signals(
+                conn, model_version=CATALYST_MODEL_VERSION,
+                as_of=session_date, earnings=_next_earnings(conn), floats=floats,
+            )
+            print(f"catalysts {cat_command} {session_date}: {stored} signals")
+            return
+
+    raise SystemExit("usage: catalysts {ingest|detect|rebuild} --date YYYY-MM-DD")
+
+
+def _book_symbols(conn: Connection, user_id: str) -> list[str]:
+    rows = conn.execute(
+        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u ORDER BY symbol"),
+        {"u": user_id},
+    ).scalars().all()
+    return [str(s) for s in rows]
+
+
+def _next_earnings(conn: Connection) -> dict[str, date]:
+    """The earnings dates `pre_earnings` measures against, from the `events`
+    table M14 populates. A symbol absent here simply skips the rule."""
+    rows = conn.execute(text(
+        "SELECT symbol, min(occurs_at::date) AS d FROM events "
+        "WHERE event_type = 'earnings' AND symbol IS NOT NULL "
+        "AND occurs_at >= now() GROUP BY symbol"
+    )).mappings().all()
+    return {r["symbol"]: r["d"] for r in rows}
+
+
+def _book_floats(conn: Connection, session_date: date) -> dict[str, Decimal]:
+    """Public float per symbol, from `fundamentals.shares_out` where it exists.
+    Shares outstanding overstates float, so this is an upper bound and
+    `large_144` is correspondingly conservative — open question 4 is whether the
+    vendor exposes a true float."""
+    rows = conn.execute(text(
+        "SELECT DISTINCT ON (symbol) symbol, shares_out FROM fundamentals "
+        "WHERE shares_out IS NOT NULL AND as_of <= :d ORDER BY symbol, as_of DESC"
+    ), {"d": session_date}).mappings().all()
+    return {r["symbol"]: Decimal(str(r["shares_out"])) for r in rows}
 
 
 def _attribution(

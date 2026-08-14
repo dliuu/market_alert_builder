@@ -12,6 +12,7 @@ from pathlib import Path
 
 from contracts.brief import BriefObject, Row
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
+from worker.catalysts import CatalystItem
 from worker.compute import Lot, Price, compute
 from worker.tape import TapeMetrics
 
@@ -93,7 +94,26 @@ def _mixed() -> BriefObject:
     }
     result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
     return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
-                    kind="close", generated_at=_GENERATED_AT)
+                    kind="close", generated_at=_GENERATED_AT,
+                    catalysts=_catalysts())
+
+
+def _catalysts() -> list[CatalystItem]:
+    """A full-tier cluster and a condensed 144, so the frozen fixture actually
+    exercises the M17 rendering path — an empty section would let the template
+    and the 80KB size check regress unnoticed."""
+    return [
+        CatalystItem(
+            source="insider", symbol="A", kind="cluster", ref_date=date(2026, 8, 11),
+            severity=4, tier="full",
+            detail={"insider_count": 3, "total_value_cents": 1_420_000_000},
+        ),
+        CatalystItem(
+            source="proposed", symbol="B", kind="standard_144", ref_date=date(2026, 8, 10),
+            severity=2, tier="brief",
+            detail={"shares": "1200000", "pct_of_float": "0.0024"},
+        ),
+    ]
 
 
 def test_tiers_partition_every_name() -> None:
@@ -160,10 +180,10 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_five() -> None:
+def test_schema_version_is_six() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
-    # horizon-0 morning claim, on top of it (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 5
+    # horizon-0 morning claim; v6 = M17's catalysts section (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 6
 
 
 def test_material_residual_predicate() -> None:

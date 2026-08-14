@@ -55,6 +55,7 @@ class Id(Enum):
     sector_rotation = 'sector_rotation'
     after_hours = 'after_hours'
     accountability = 'accountability'
+    catalysts = 'catalysts'
 
 
 class Tier(Enum):
@@ -79,6 +80,15 @@ class Tag(Enum):
     macro = 'macro'
     holding = 'holding'
     watchlist = 'watchlist'
+
+
+class Source(Enum):
+    insider = 'insider'
+    proposed = 'proposed'
+    index = 'index'
+    etf = 'etf'
+    lockup = 'lockup'
+    eligibility = 'eligibility'
 
 
 class Row(BaseModel):
@@ -182,6 +192,49 @@ class Row(BaseModel):
     premarket_vol_mult: float | None = Field(
         None,
         description='Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15).',
+    )
+    source: Source | None = Field(
+        None,
+        description='Close brief catalysts: which feed produced the signal (M17). One row per signal, not per symbol — the renderer groups by symbol.',
+    )
+    kind: str | None = Field(
+        None,
+        description='Close brief catalysts: the signal type within its source, e.g. `cluster`, `clevel_buy`, `large_144` (M17).',
+    )
+    ref_date: date | None = Field(
+        None,
+        description='Close brief catalysts: the date the signal is about — a transaction date, a filing date, a lockup expiry (M17).',
+    )
+    insider_count: int | None = Field(
+        None, description='Close brief catalysts: distinct insiders in a cluster (M17).'
+    )
+    value_cents: int | None = Field(
+        None,
+        description='Close brief catalysts: transaction value in integer cents. Never float (M17).',
+    )
+    pct_of_holding: float | None = Field(
+        None,
+        description="Close brief catalysts: shares sold as a fraction of the insider's pre-transaction holding. Null when `shares_after` is unknown — the rule never assumes a denominator (M17).",
+    )
+    shares: float | None = Field(
+        None,
+        description='Close brief catalysts: share count on a Form 144 proposal (M17).',
+    )
+    pct_of_float: float | None = Field(
+        None,
+        description='Close brief catalysts: proposed shares as a fraction of public float. Null renders as "size unknown" rather than the row being dropped — an unknown size is information (M17, open question 4).',
+    )
+    days_to_event: int | None = Field(
+        None,
+        description='Close brief catalysts: trading days from an insider sale to the next known earnings date (M17).',
+    )
+    days_outstanding: int | None = Field(
+        None,
+        description='Close brief catalysts: calendar days a Form 144 has gone unconverted (M17).',
+    )
+    ambiguous_code: bool | None = Field(
+        None,
+        description="Close brief catalysts: the vendor's transaction type did not map to a known Form 4 code, so tax withholding and option exercises could not be filtered. Severity is reduced by one and the row is annotated rather than silently included or dropped (M17, open question 2).",
     )
 
 
