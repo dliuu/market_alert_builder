@@ -4,11 +4,11 @@ Five tables, in three layers (docs/superpowers/specs/2026-08-14-m17-catalysts-de
 
 **Raw** — `catalyst_insider_tx`, `catalyst_proposed_sales`. Typed replays of
 vendor payloads, deduped on a `natural_key`. They carry no `payload` column:
-verbatim bodies live once, in `raw_payloads` (invariant 5, D13, D29), so these
+verbatim bodies live once, in `raw_payloads` (invariant 5, D13, D30), so these
 rebuild from there without a fetch.
 
 **Signals** — `catalyst_signals`, one table across every source rather than one
-per source plus a union view (D29). The per-source typed fields live in
+per source plus a union view (D30). The per-source typed fields live in
 `detail`, exactly as `flags` carries nine heterogeneous types in one `payload`.
 `member_ids` points back at the raw rows that produced a signal: the audit
 trail for drill-down and for debugging false positives. Disposable by design —

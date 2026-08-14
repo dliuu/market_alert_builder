@@ -65,12 +65,12 @@ on a severity increase), which is a property of a *reader's* attention rather
 than of the signal — sharing one curve would open user #2's first brief at
 "condensed" because user #1 had already read it. It is keyed on the signal's
 **natural identity**, not `catalyst_signals.id`, because a rebuild reassigns that
-id; and it is never dropped when signals are rebuilt (D29). If it were, every
+id; and it is never dropped when signals are rebuilt (D30). If it were, every
 stale cluster would resurface at full volume on the next brief.
 
 `catalyst_signals` is one table across all six sources — the source spec's six
 per-source tables plus a `UNION ALL` view, collapsed into the single row shape
-that view produced anyway (D29). The typed per-source fields live in `detail`,
+that view produced anyway (D30). The typed per-source fields live in `detail`,
 exactly as `flags` carries nine heterogeneous types in one `payload jsonb`.
 `member_ids` points back to the raw rows that produced a signal: the audit trail
 for drill-down and for debugging false positives.

@@ -1,7 +1,7 @@
 """M17 catalysts against a real database (skipped without DATABASE_URL).
 
 The two properties that are only provable here: a signal rebuild costs zero API
-calls and leaves reporting state untouched (D29), and the decay curve advances
+calls and leaves reporting state untouched (D30), and the decay curve advances
 across sessions because it is stored, not recomputed.
 """
 
@@ -116,7 +116,7 @@ def test_a_signal_that_worsens_re_escalates_to_full(db_conn: Connection) -> None
 
 def test_two_users_decay_independently(db_conn: Connection) -> None:
     """Reporting state carries user_id precisely so user #2's first brief does
-    not open at 'condensed' because user #1 already read it (D29)."""
+    not open at 'condensed' because user #1 already read it (D30)."""
     other = "00000000-0000-0000-0000-0000000000cb"
     _seed_user(db_conn)
     db_conn.execute(

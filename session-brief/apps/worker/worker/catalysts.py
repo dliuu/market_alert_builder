@@ -88,7 +88,7 @@ class CatalystSignal:
 class ReportingState:
     """What a *reader* has already been told about a signal. Keyed on the
     signal's natural identity, never on ``catalyst_signals.id``, because a
-    rebuild reassigns that id (D29)."""
+    rebuild reassigns that id (D30)."""
 
     report_count: int
     max_severity_seen: int
@@ -516,7 +516,7 @@ def rebuild_signals(
 
     ``catalyst_reporting_state`` is deliberately untouched. If it lived on the
     signal row, this function would wipe it and every stale cluster would
-    resurface at full volume on the next brief (D29).
+    resurface at full volume on the next brief (D30).
     """
     conn.execute(
         text("DELETE FROM catalyst_signals WHERE model_version = :mv"),
@@ -542,7 +542,7 @@ def read_catalysts(
     lookback_days: int = CATALYST_LOOKBACK_DAYS,
 ) -> list[CatalystItem]:
     """The feed for one reader, one session — the source spec's ``catalyst_feed``
-    view as a query (D29), with each row's tier resolved through that reader's
+    view as a query (D30), with each row's tier resolved through that reader's
     decay state. Rows that decay to nothing are dropped here, so assembly never
     sees them."""
     if not symbols:

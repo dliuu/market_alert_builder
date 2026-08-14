@@ -2,7 +2,7 @@
 
 The provider seam is a third protocol, not a widened MarketDataProvider — M15
 proved that breaks `mypy --strict` because protocols are structural and the EOD
-provider cannot serve these endpoints (D28, D29).
+provider cannot serve these endpoints (D28, D30).
 """
 
 from __future__ import annotations

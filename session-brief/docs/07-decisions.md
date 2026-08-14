@@ -334,7 +334,7 @@ be residualized like every other type.
 
 ---
 
-**D29 — M17/M18 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
+**D30 — M17/M18 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
 The catalysts module (insider flow, Form 144, index and ETF membership, lockups,
 index eligibility) arrives as an external spec written against a generic repo.
 Seven of its structural choices are reconciled here; the detector rules,

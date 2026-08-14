@@ -5,7 +5,7 @@ The two-stage shape is invariant 5 / D13, not a new idea: the verbatim vendor
 body lives exactly once, in ``raw_payloads``, and everything typed replays from
 it. M16's ``FdnClient`` already does this for the pre-market feed with
 ``store_captured_payloads``; this reuses the same table and the same unique key
-rather than inventing a second capture path (D29).
+rather than inventing a second capture path (D30).
 
 ``normalize_*`` is pure — no network, no database — so a frozen payload
 fixture reproduces the typed rows byte for byte, the property M2 proved for

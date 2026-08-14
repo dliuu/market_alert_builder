@@ -217,7 +217,7 @@ def _catalysts(
                 if symbols_arg else _book_symbols(conn, DEV_USER_ID)
             )
             # The live FdnProvider swaps in here once M16's FdnClient lands;
-            # nothing above the seam changes (D29).
+            # nothing above the seam changes (D30).
             counts = ingest_catalysts(
                 conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
             )

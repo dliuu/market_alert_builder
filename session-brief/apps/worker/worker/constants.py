@@ -96,7 +96,7 @@ PREMARKET_FEED_IS_SYNTHETIC: bool = True
 # Severity is 1-5 and stays internal to worker/catalysts.py: assembly maps it to
 # the BriefObject's `tier`, because assembly decides suppression and the
 # renderer never does (D16). Thresholds live here rather than in a YAML config
-# layer this repo doesn't have — the M15 TAPE_SYMBOLS precedent (D29). Expect
+# layer this repo doesn't have — the M15 TAPE_SYMBOLS precedent (D30). Expect
 # them to move: cross-source calibration needs weeks of live tuning.
 
 # §5.1 insider (Form 4)
