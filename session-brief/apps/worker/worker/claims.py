@@ -131,12 +131,20 @@ _RESOLVE_SESSION = text("""
 """)
 
 # Same-session day returns for the name and the benchmark (LAG for prev close).
+# Horizon >= 1 only — see `_grade`'s horizon-0 branch for why horizon 0 cannot
+# reuse this close-to-close base.
 _RETURNS = text("""
     SELECT symbol, c, prev_c FROM (
         SELECT symbol, session_date, c,
                LAG(c) OVER (PARTITION BY symbol ORDER BY session_date) AS prev_c
         FROM bars_daily
     ) ranked
+    WHERE session_date = :session_date AND symbol = ANY(:symbols)
+""")
+
+# Horizon 0's base: the *same* session's own open and close (I1, M15 review).
+_RETURNS_OPEN_CLOSE = text("""
+    SELECT symbol, o, c FROM bars_daily
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
 """)
 
@@ -182,7 +190,9 @@ def resolve_due_claims(
         )
         if resolve_on is None or resolve_on > session_date:
             continue  # the horizon hasn't elapsed yet
-        outcome = _grade(conn, row["symbol"], row["direction"], resolve_on)
+        outcome = _grade(
+            conn, row["symbol"], row["direction"], resolve_on, row["horizon_sessions"]
+        )
         if outcome is None:
             continue  # can't grade (missing benchmark bar) — leave for next run
         conn.execute(
@@ -221,15 +231,39 @@ def _resolve_session(
     ).scalar()
 
 
-def _grade(conn: Connection, symbol: str, direction: str, resolve_on: date) -> str | None:
+def _grade(
+    conn: Connection, symbol: str, direction: str, resolve_on: date, horizon: int
+) -> str | None:
     """Did relative strength persist? correct/wrong for the claimed direction,
-    or None when the data to judge isn't there."""
-    returns = {
-        row["symbol"]: _day_return(row["c"], row["prev_c"])
-        for row in conn.execute(
-            _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
-        ).mappings()
-    }
+    or None when the data to judge isn't there.
+
+    Horizon 0 grades open→close on ``resolve_on`` — the emit session itself —
+    not close-to-close (I1, M15 review). ``emit_premarket_gap`` takes its
+    direction from ``extended_last / prev_close - 1``, session D-1's close as
+    the base, and the close-to-close base (D-1's close vs. D's close) contains
+    that same gap as a sub-interval: a name that gaps up pre-market and then
+    fully fades intraday would still grade "correct", because the overnight gap
+    alone would carry the close-to-close return past the benchmark's. The gap is
+    what the claim is *about*, so it cannot also be what grades it — open→close
+    excludes the gap and grades only what happened during the session the claim
+    was about. Horizon >= 1 is untouched: it keeps grading close-to-close,
+    exactly as before this change (test_claims.py, test_claims_db.py unmodified).
+    """
+    if horizon == 0:
+        returns = {
+            row["symbol"]: _day_return(row["c"], row["o"])
+            for row in conn.execute(
+                _RETURNS_OPEN_CLOSE,
+                {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]},
+            ).mappings()
+        }
+    else:
+        returns = {
+            row["symbol"]: _day_return(row["c"], row["prev_c"])
+            for row in conn.execute(
+                _RETURNS, {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]}
+            ).mappings()
+        }
     sym = returns.get(symbol)
     bench = returns.get(BENCHMARK_SYMBOL)
     if sym is None or bench is None:
