@@ -1,10 +1,13 @@
-"""A deterministic pre-market feed, standing in for the licensed one (M15).
+"""A deterministic pre-market feed, the keyless fallback for the licensed one.
 
 Pre-market quotes and the overnight macro tape are Premium-tier, redistribution-
 gated data (docs/02, D8). Rather than block the sections on procurement, M15
-builds them against this provider — the M7 `fundamentals` / M14 `events`
-pattern — and swaps to `FdnProvider` once licensed. Both satisfy the same four
-`PremarketProvider` methods, so nothing above the seam changes.
+built them against this provider — the M7 `fundamentals` / M14 `events`
+pattern. M16 shipped the live half: with `FDN_API_KEY` set,
+`ingest_premarket_for_session` constructs `FdnPremarketProvider` instead and
+this file is not consulted. Both satisfy the same four `PremarketProvider`
+methods, so nothing above the seam changes — which is why the switch is a
+config value, not a code edit.
 
 Determinism is the whole design constraint: the gap for a symbol is a pure
 function of `(symbol, session_date)` via a hash, never `random`. That is what

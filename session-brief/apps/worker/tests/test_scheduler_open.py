@@ -218,7 +218,17 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
     monkeypatch.setattr(scheduler, "book_symbols", lambda *_a, **_kw: ["ZHELD"])
 
     calls: list[str] = []
-    fake_client = object()  # never a real FdnClient; identity is all we check
+
+    class _FakeClient:
+        """Never a real FdnClient; identity is all the wiring assertions check.
+        `close` is recorded because the job must release the connection pool it
+        opened — the worker is long-lived, so a client left open leaks a pool
+        per trading day (M16 final review, finding 9)."""
+
+        def close(self) -> None:
+            calls.append("close")
+
+    fake_client = _FakeClient()
 
     def fake_client_factory(*_a: Any, **_kw: Any) -> object:
         calls.append("FdnClient")
@@ -263,6 +273,6 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
         )
     assert calls == [
         "FdnClient", "ingest", "ingest_events", "fetch_news",
-        "store_payloads", "assemble",
+        "store_payloads", "close", "assemble",
     ]
     assert captured_news == {"ZHELD": ["ZHELD lands a contract"]}

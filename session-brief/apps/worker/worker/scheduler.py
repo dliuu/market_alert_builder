@@ -379,7 +379,10 @@ def ingest_premarket_for_session(
         prior_closes,
         tape_universe,
     )
+    from worker.providers.fdn import FdnClient, FdnPremarketProvider, store_captured_payloads
     from worker.providers.synthetic import SyntheticPremarketProvider
+
+    live_client = client or (FdnClient() if config.FDN_API_KEY else None)
 
     with engine.connect() as conn:
         held = book_symbols(conn, user_id)
@@ -390,22 +393,25 @@ def ingest_premarket_for_session(
         # docstring above.
         held_closes = prior_closes(conn, held, prior_session)
 
-        # Tape: lowest priority first (C2, M15 review), the nominal seed, so
-        # the tape always has *some* base on a cold start — nothing ingests
-        # bars for futures/yield/forex series, so without this §2 can never
-        # bootstrap. Each higher-priority source below overwrites it where
-        # real data exists. Scoped to tape symbols only.
-        tape_closes = dict(TAPE_SEED_LEVELS)
-        tape_closes |= prior_closes(conn, tape_symbols, prior_session)
+        # The tape's base is a synthetic-branch concern only: live tape rows
+        # derive prev_close from the vendor itself, so building this dict on
+        # the live branch cost two DB queries for a value that was thrown
+        # away. Built where it is used.
+        tape_closes: dict[str, Decimal] = {}
+        if live_client is None:
+            # Lowest priority first (C2, M15 review), the nominal seed, so
+            # the tape always has *some* base on a cold start — nothing
+            # ingests bars for futures/yield/forex series, so without this §2
+            # can never bootstrap. Each higher-priority source below
+            # overwrites it where real data exists. Scoped to tape symbols.
+            tape_closes = dict(TAPE_SEED_LEVELS)
+            tape_closes |= prior_closes(conn, tape_symbols, prior_session)
 
-        # The tape's own prior capture, where one exists, wins over both the
-        # seed and `bars_daily` (which never carries these symbols) — it's the
-        # freshest real base once the tape has run at least once before.
-        tape_closes |= _prior_tape_levels(conn, tape_symbols, prior_session)
+            # The tape's own prior capture, where one exists, wins over both
+            # the seed and `bars_daily` (which never carries these symbols) —
+            # it's the freshest real base once the tape has run before.
+            tape_closes |= _prior_tape_levels(conn, tape_symbols, prior_session)
 
-    from worker.providers.fdn import FdnClient, FdnPremarketProvider, store_captured_payloads
-
-    live_client = client or (FdnClient() if config.FDN_API_KEY else None)
     if live_client is not None:
         # Live (M16): held prev_closes still come from bars_daily — the one
         # authoritative base — while tape rows derive theirs from the vendor,
@@ -415,23 +421,32 @@ def ingest_premarket_for_session(
     else:
         held_provider = provider or SyntheticPremarketProvider(held_closes, session_date)
         tape_provider = provider or SyntheticPremarketProvider(tape_closes, session_date)
-    with engine.begin() as conn:
-        stamp = capture_stamp(session_date)
-        written = ingest_premarket(
-            conn, held_provider,
-            held=held, tape=[],
-            session_date=session_date,
-            captured_at=stamp,
-        )
-        written += ingest_premarket(
-            conn, tape_provider,
-            held=[], tape=tape,
-            session_date=session_date,
-            captured_at=stamp,
-        )
-        if live_client is not None:
-            store_captured_payloads(conn, live_client, as_of=session_date)
-        return written
+
+    # Close only a client we built. One passed in belongs to the caller — the
+    # open job reuses a single client across pre-market, calendars and news —
+    # and closing it here would break its next fetch.
+    owned_client = live_client if client is None else None
+    try:
+        with engine.begin() as conn:
+            stamp = capture_stamp(session_date)
+            written = ingest_premarket(
+                conn, held_provider,
+                held=held, tape=[],
+                session_date=session_date,
+                captured_at=stamp,
+            )
+            written += ingest_premarket(
+                conn, tape_provider,
+                held=[], tape=tape,
+                session_date=session_date,
+                captured_at=stamp,
+            )
+            if live_client is not None:
+                store_captured_payloads(conn, live_client, as_of=session_date)
+            return written
+    finally:
+        if owned_client is not None:
+            owned_client.close()
 
 
 def run_open_session_job(
@@ -470,27 +485,37 @@ def run_open_session_job(
         from worker.providers.fdn import FdnClient
 
         client = FdnClient() if config.FDN_API_KEY else None
-        written = ingest_premarket_for_session(
-            engine, session_date=session_date, prior_session=prior,
-            user_id=user_id, client=client,
-        )
-        print(f"open {session_date}: captured {written} pre-market quotes.")
-
         news: dict[str, list[str]] = {}
-        if client is not None:
-            from worker.events_fdn import ingest_events_for_session
-            from worker.news_fdn import fetch_held_news
-            from worker.providers.fdn import store_captured_payloads
-
-            n_events = ingest_events_for_session(
-                engine, client, session_date=session_date, user_id=user_id
+        try:
+            written = ingest_premarket_for_session(
+                engine, session_date=session_date, prior_session=prior,
+                user_id=user_id, client=client,
             )
-            with engine.connect() as conn:
-                held = set(book_symbols(conn, user_id))
-            news = fetch_held_news(client, session_date=session_date, held=held)
-            with engine.begin() as conn:
-                store_captured_payloads(conn, client, as_of=session_date)
-            print(f"open {session_date}: {n_events} calendar events, news for {sorted(news)}.")
+            print(f"open {session_date}: captured {written} pre-market quotes.")
+
+            if client is not None:
+                from worker.events_fdn import ingest_events_for_session
+                from worker.news_fdn import fetch_held_news
+                from worker.providers.fdn import store_captured_payloads
+
+                n_events = ingest_events_for_session(
+                    engine, client, session_date=session_date, user_id=user_id
+                )
+                with engine.connect() as conn:
+                    held = set(book_symbols(conn, user_id))
+                news = fetch_held_news(client, session_date=session_date, held=held)
+                with engine.begin() as conn:
+                    store_captured_payloads(conn, client, as_of=session_date)
+                print(
+                    f"open {session_date}: {n_events} calendar events, "
+                    f"news for {sorted(news)}."
+                )
+        finally:
+            # One client, one connection pool, and this process outlives every
+            # fire (docs/02: long-running, no cold starts) — an unclosed client
+            # leaks a pool per trading day. Every fdn fetch is done by here.
+            if client is not None:
+                client.close()
 
         with engine.connect() as conn:
             trans = conn.begin()
