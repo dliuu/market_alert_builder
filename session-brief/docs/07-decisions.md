@@ -334,7 +334,7 @@ be residualized like every other type.
 
 ---
 
-**D30 — M17/M18 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
+**D30 — M17/M19 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
 The catalysts module (insider flow, Form 144, index and ETF membership, lockups,
 index eligibility) arrives as an external spec written against a generic repo.
 Seven of its structural choices are reconciled here; the detector rules,
@@ -423,7 +423,7 @@ archive.
 **`index_events` gets curated as a side effect, and that is the quiet win.** The
 table exists since `0010_attribution_econometrics` and is already read by
 `exclusions.contaminated_days()` (M12's fit mask) and `concordance.py` (D26),
-both documenting it as "empty until curated." M18's index differ curates it for
+both documenting it as "empty until curated." M19's index differ curates it for
 one additive `ON CONFLICT DO NOTHING` insert per signal: reconstitution days
 become real fit-exclusions, so a reconstitution-driven move stops contaminating
 β, and the concordance check gains event mass beyond earnings alone.
@@ -449,7 +449,7 @@ renderer bypassing the object; `MarketDataProvider` widened a second time;
 reintroducing `fdnpy` as a dependency, or any unbounded fetch that walks an
 issuer's full filing history; naive
 `timedelta` arithmetic where trading days are meant; partitioned snapshot tables
-in M18.
+in M19.
 
 *Reverses if:* a signal source appears whose row genuinely cannot be expressed in
 the common `detail jsonb` shape, or a typed column needs querying at a volume
@@ -462,3 +462,56 @@ effective-membership only (open question 1 — the index signal becomes lagging,
 not leading, and needs a news-based supplement to keep its stated purpose); or
 FTSE Russell constituent data proves unavailable on any tier (open question 7),
 which removes three of the six tracked indices.
+
+---
+
+**D31 — M18 EDGAR fundamentals: point-in-time on the filing date, into the table that already exists**
+`fundamentals` has been empty since M7 created it — the only writer is
+`scripts/dry_run_flags.py`, which rolls its transaction back — so three shipped
+or planned features have been reading nothing: M7's `runway` and `dilution`
+flags (the open brief's §6 exposure check, "finally the flags' intended home"),
+M17's `large_144` (`pct_of_float` universally null, every 144 degrading to
+`standard_144`), and three of M19's five eligibility criteria. This is the third
+recurrence of the pattern D23(4) and D28 both record — a table created for a
+feature and never wired to a source, found by the *next* milestone rather than
+the one that shipped it.
+
+**The source was already chosen and never built.** `docs/02` has named SEC EDGAR
+`companyfacts` since day one: free, keyless, authoritative XBRL. So this
+milestone touches no licensing question — it is independent of D8, of FDN, and
+of all seven catalyst open questions.
+
+**`as_of` is the `filed` date, not the period `end`.** An XBRL fact carries
+both, weeks or months apart. A Q2 figure is not knowable on the last day of Q2;
+it is knowable when the 10-Q is filed. Keying on period end would let a metric
+computed for session D read a number the market did not have until D+45 —
+precisely the look-ahead M11's shuffled-calendar null test (D21) exists to
+detect, injected into the one table that feeds position-risk flags. `period_end`
+is kept as its own column so a trailing-4Q sum groups by period rather than by
+filing, and an amendment lands as a new row (later `as_of`, same `period_end`)
+rather than mutating history — the same discipline `attribution.model_version`
+applies.
+
+**It extends `fundamentals` rather than adding a table**, because four consumers
+already read that name; `0015_edgar_fundamentals` adds `period_end`,
+`fiscal_period`, `net_income_cents`, `domicile`, `cik`, and a `source` column
+defaulting to `'edgar'` so synthetic dry-run rows stay distinguishable. Verbatim
+responses go to `raw_payloads` (invariant 5) so a concept-mapping bug is fixed
+by re-normalizing rather than re-fetching several MB per symbol. `EdgarClient`
+speaks httpx directly with `parse_float=Decimal`, the `TiingoProvider`/M16
+`FdnClient` precedent — XBRL values arrive as JSON numbers and this is the only
+place the money invariant can be lost. EDGAR gets its own
+`FundamentalsProvider` protocol rather than widening any existing one (D28: one
+protocol per capability).
+
+*Rules out:* keying fundamentals on the period the facts describe; mutating a
+stored period on restatement; a general XBRL/financials store (revenue, margins,
+segments are out of scope); putting EDGAR behind `MarketDataProvider`,
+`PremarketProvider` or `CatalystProvider`; any request without the SEC-required
+contact `User-Agent`; moving `next_earnings_date` off the calendar feed.
+
+*Reverses if:* a vendor supplies a true public float (open question 4) — then
+`shares_out` stops standing in for float and `large_144` loses its conservative
+bias; the `dei` domicile concept proves unreliable across registrants, leaving
+M19's `domicile` criterion `unknown`; or the symbol universe grows enough that
+one multi-MB response per symbol per week stops being the cheap option.

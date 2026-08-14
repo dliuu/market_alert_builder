@@ -91,7 +91,7 @@ TAPE_SEED_LEVELS: dict[str, Decimal] = {
 PREMARKET_FEED_IS_SYNTHETIC: bool = True
 
 
-# --- Catalysts (M17/M18) ----------------------------------------------------
+# --- Catalysts (M17/M19) ----------------------------------------------------
 #
 # Severity is 1-5 and stays internal to worker/catalysts.py: assembly maps it to
 # the BriefObject's `tier`, because assembly decides suppression and the

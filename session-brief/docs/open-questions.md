@@ -15,13 +15,13 @@ degrade.
 
 ---
 
-## Catalysts — FinancialData.net (M17/M18)
+## Catalysts — FinancialData.net (M17/M19)
 
 Design: `docs/superpowers/specs/2026-08-14-m17-catalysts-design.md`.
 
 ### Q7 — Does `index-constituents` cover the Russell family at all?
 
-**Blocks:** M18 index snapshot + diff · **Status:** open · **Ask first**
+**Blocks:** M19 index snapshot + diff · **Status:** open · **Ask first**
 
 The design tracks six indices: `^GSPC`, S&P 400, S&P 600, Russell 1000, Russell
 2000, Russell 3000. FTSE Russell licenses constituent data separately from S&P
@@ -37,7 +37,7 @@ writing the differ, not after.
 
 ### Q1 — Does `index-constituents` reflect announcement or effective membership?
 
-**Blocks:** M18 index snapshot + diff · **Status:** open · **High priority**
+**Blocks:** M19 index snapshot + diff · **Status:** open · **High priority**
 
 S&P announces changes after the close, typically Friday, effective roughly a week
 later. If the endpoint reflects **effective** membership only, a snapshot diff
@@ -78,7 +78,7 @@ whichever is used.
 
 ### Q4 — Does `securities-information` provide public float reliably?
 
-**Blocks:** M18 lockups, M17 `large_144` · **Status:** open
+**Blocks:** M19 lockups, M17 `large_144` · **Status:** open, **downgraded by M18**
 
 `pct_of_float` is what makes a supply signal legible: 1.2M shares means nothing,
 0.24% of float means something.
@@ -87,9 +87,17 @@ whichever is used.
 than the row being dropped. An unknown size is information; a missing row is not.
 `large_144` (≥0.5% of float) cannot fire and degrades to `standard_144`.
 
+*M18 changes the stakes here.* EDGAR supplies **shares outstanding**, which is an
+upper bound on float — every restricted or insider-held share is counted in it.
+Using it as the denominator makes `pct_of_float` systematically *understate* the
+true percentage, so `large_144` fires less often than it should but never on a
+name that doesn't deserve it. That is the right direction to be wrong in, and it
+means the rule works on real data before this question is answered. A true float
+figure sharpens it; it is no longer a precondition.
+
 ### Q5 — What is the actual `etf-holdings` call volume for the tracked set?
 
-**Blocks:** M18 ETF snapshot · **Status:** open
+**Blocks:** M19 ETF snapshot · **Status:** open
 
 `etf-holdings` pages at 50 records. SPY alone is ~10 calls; 30 ETFs is on the
 order of 300 calls per full pass. The weekday stagger exists to spread this, but
@@ -100,7 +108,7 @@ pass, log call counts per endpoint per run, and set the stagger from the result.
 
 ### Q6 — Does `initial-public-offerings` cover de-SPACs and direct listings?
 
-**Blocks:** M18 lockups · **Status:** open
+**Blocks:** M19 lockups · **Status:** open
 
 The lockup calendar derives entirely from `listing_date`, so a listing type
 missing from this endpoint produces no lockup signal at all — silently.

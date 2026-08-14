@@ -1,4 +1,4 @@
-# M17/M18 — Catalysts: insider flow, index & ETF membership, lockups
+# M17/M19 — Catalysts: insider flow, index & ETF membership, lockups
 
 *Design spec. 2026-08-14. Builds on M13 (attribution consumers) and M15 (the
 provider-seam pattern). Covers two milestones — see "Milestone split" below.*
@@ -212,7 +212,7 @@ accordingly.
 The source puts severity definitions in `config/severity.yaml`. **This repo has
 no YAML config layer** — M15 put `TAPE_SYMBOLS`, `LEVEL_QUOTED` and
 `FOREIGN_PROXIES` in `worker/constants.py`, and that is the precedent. A new
-`# --- Catalysts (M17/M18) ---` block goes there. The source's real requirement
+`# --- Catalysts (M17/M19) ---` block goes there. The source's real requirement
 is *"thresholds in one place, tunable without touching detector code"*, and a
 constants module satisfies it; introducing a YAML loader, a schema validator and
 a config-precedence story to satisfy the letter of it is the kind of speculative
@@ -265,7 +265,8 @@ story invalidates.
 
 ## Data model
 
-Migration **`0014_catalysts`** (M17) and **`0015_catalyst_membership`** (M18).
+Migration **`0014_catalysts`** (M17) and **`0016_catalyst_membership`** (M19 —
+`0015` is M18's EDGAR fundamentals).
 Note `0010` is already doubled in `alembic/versions/` — `0014` is the next free
 number, not the next after a count.
 
@@ -325,7 +326,7 @@ catalyst_reporting_state (
 | `lockup` | `listing_date`, `expiry_date`, `shares_releasable`, `pct_of_float`, `date_source` |
 | `eligibility` | `criterion`, `status`, `value`, `threshold`, `changed_from_prior` |
 
-### M18 tables
+### M19 tables
 
 ```sql
 catalyst_index_constituents (index_symbol, snapshot_date, symbol, weight,
@@ -357,7 +358,7 @@ regime.
 contaminated-day fit mask, and `concordance.py` for M13's event-concordance
 check (D26). Both docs describe it as "empty until curated."
 
-**M18's index differ is what curates it.** Every `source='index'` signal also
+**M19's index differ is what curates it.** Every `source='index'` signal also
 writes `(symbol, trade_date)` to `index_events`. This is the highest-leverage
 integration in the milestone and costs one insert: index-reconstitution days
 become real fit-exclusions, so a reconstitution-driven move stops contaminating
@@ -415,7 +416,7 @@ forward-looking supply signal in the module. Frame the output that way.
 `(symbol, insider_name)` within a tolerance window. Track conversion lag per
 symbol — it is cheap here and nobody else computes it.
 
-### Index membership (`source='index'`, M18)
+### Index membership (`source='index'`, M19)
 
 Nightly snapshot of `^GSPC`, S&P 400, S&P 600, Russell 1000, 2000, 3000. Diff
 `snapshot_date = T` against the most recent prior snapshot.
@@ -441,9 +442,9 @@ produce a brief claiming your entire book left the S&P 500.
 typically Friday, effective roughly a week later. If the endpoint is
 effective-only, the diff detects changes ~5 trading days late and the signal is
 lagging rather than leading — which changes what the section is *for*. This must
-be answered before M18 ships.
+be answered before M19 ships.
 
-### ETF holdings (`source='etf'`, M18)
+### ETF holdings (`source='etf'`, M19)
 
 20–40 relevant ETFs (SMH, SOXX, ARKX, ARKQ, BOTZ, ROBO, XLK, IGV, plus themes
 matching the book's sectors — the same book-relevance principle as M15's
@@ -464,7 +465,7 @@ symbol — as a mechanical-demand measure. The reverse index
 `(symbol, snapshot_date DESC)` makes "which ETFs hold X, at what weight" one
 indexed lookup.
 
-### Lockups (`source='lockup'`, M18)
+### Lockups (`source='lockup'`, M19)
 
 **Zero API polling.** Derived from `catalyst_ipos.listing_date`:
 
@@ -487,7 +488,7 @@ Fire at T-30 (severity 2), T-5 (3), T-0 (4). `pct_of_float` from
 unknown" rather than being omitted — an unknown size is information, a missing
 row is not.
 
-### Index eligibility (`source='eligibility'`, M18)
+### Index eligibility (`source='eligibility'`, M19)
 
 **The highest-value component.** Everything else in this module reports what
 happened; this one reports what is *about to become possible*. Recompute daily,
@@ -690,11 +691,11 @@ render path. WP-0 (partial), WP-1, WP-2, WP-6, WP-8, WP-9 (partial).
 - `schema_version` 6, the `catalysts` section, both renderers, `contracts:gen`
 - Report-once decay + re-escalation, PM-stage scheduling
 
-### M18 — Catalysts: membership, lockups, eligibility
+### M19 — Catalysts: membership, lockups, eligibility
 
 The state-and-calendar sources. WP-3, WP-4, WP-5, WP-7, remainder of WP-9.
 
-- `0015_catalyst_membership` — constituents, ETF holdings, IPOs
+- `0016_catalyst_membership` — constituents, ETF holdings, IPOs
 - Index and ETF snapshot + diff, `index_events` curation
 - Lockup calendar + overrides
 - The eligibility engine
@@ -706,7 +707,7 @@ Dependency shape within each:
 0014 ─ fdn_client ─┬─ insider ingest ── insider detect ─┬─ section ── schedule   M17
                    └─ proposed ingest ─ proposed detect ┘
 
-0015 ──────────────┬─ index snapshot ── index diff ── index_events              M18
+0016 ──────────────┬─ index snapshot ── index diff ── index_events              M19
                    ├─ etf snapshot ──── etf diff
                    ├─ ipo ingest ────── lockup calendar
                    └─ eligibility engine
@@ -747,7 +748,7 @@ Form 144 flow, decaying on repeat and re-escalating on severity, rebuildable
 from stored payloads without an API call, and it pairs a residual-material name
 with its catalyst — or says there isn't one.
 
-### M18
+### M19
 
 1. **Diff correctness** — a synthetic fixture with one known addition and one
    deletion produces exactly two events; a first run against an empty table
@@ -770,7 +771,7 @@ with its catalyst — or says there isn't one.
 6. **Degradation** — killing any single ingest mid-run still produces a brief
    with the remaining sources and names the stale one.
 
-**M18 DoD:** membership, lockup and eligibility catalysts land in the same
+**M19 DoD:** membership, lockup and eligibility catalysts land in the same
 section, index reconstitution days feed attribution's exclusion mask, and an
 eligibility transition emits a `catalyst_pending` claim the close brief later
 grades against the realized residual.
@@ -784,13 +785,13 @@ blocks a specific package — none of them block starting.
 
 | # | Question | Blocks | If unresolved |
 |---|---|---|---|
-| 1 | Does `index-constituents` reflect announcement or effective membership? | M18 index diff | Changes detected ~5 trading days late; may need a news-based supplement |
+| 1 | Does `index-constituents` reflect announcement or effective membership? | M19 index diff | Changes detected ~5 trading days late; may need a news-based supplement |
 | 2 | Does `insider-transactions` distinguish tax-withholding and option exercises? | M17 detectors | False positives on `outsized_sale` / `cluster`; severity −1 and annotate |
 | 3 | Does `proposed-sales` expose a stable filing identifier? | M17 ingest | Falls back to a composite hash; slightly weaker dedup |
-| 4 | Does `securities-information` provide float reliably? | M18 lockups, M17 `large_144` | Size context renders "unknown" |
-| 5 | Actual `etf-holdings` call volume for the tracked set | M18 ETF | Rate-limit budget unknown |
-| 6 | Does `initial-public-offerings` cover de-SPACs and direct listings? | M18 lockups | Silent gaps in the lockup calendar |
-| 7 | Does `index-constituents` cover the Russell family at all? | M18 index diff | FTSE Russell licenses constituent data separately from S&P; three of the six tracked indices may simply not be available |
+| 4 | Does `securities-information` provide float reliably? | M19 lockups, M17 `large_144` | Size context renders "unknown" |
+| 5 | Actual `etf-holdings` call volume for the tracked set | M19 ETF | Rate-limit budget unknown |
+| 6 | Does `initial-public-offerings` cover de-SPACs and direct listings? | M19 lockups | Silent gaps in the lockup calendar |
+| 7 | Does `index-constituents` cover the Russell family at all? | M19 index diff | FTSE Russell licenses constituent data separately from S&P; three of the six tracked indices may simply not be available |
 
 Question 7 is not in the source spec and should be checked **first** — it is one
 API call, and it determines whether half the index work exists.
