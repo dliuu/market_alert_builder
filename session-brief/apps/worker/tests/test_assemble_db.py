@@ -166,6 +166,36 @@ def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> N
     assert by_symbol["ZZA"]["resid_z"] == 0.3
 
 
+def test_read_attribution_decomp_rounds_half_up_not_truncated(db_conn: Connection) -> None:
+    # Stored *_bps are fractional Decimals; the read coercion must round-half-up
+    # (assemble._round_bps's convention), not truncate toward zero — int(34.7)
+    # would wrongly read 34, and int(-34.7) would wrongly read -34 instead of -35.
+    from worker.attribution import read_attribution_decomp
+
+    db_conn.execute(
+        text(
+            "INSERT INTO attribution "
+            "(symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, "
+            " resid_z, beta_market, beta_theme, r2, n_obs, provisional, cold_start, synthetic, "
+            " revised, computed_at) "
+            "VALUES ('ZZR', :d, :mv, :market_bps, :theme_bps, :resid_bps, :total_bps, "
+            " :resid_z, 1, 0, 0.5, 60, false, false, false, false, :now)"
+        ),
+        {
+            "d": _SESSION, "mv": ATTRIBUTION_MODEL_VERSION,
+            "market_bps": Decimal("34.7"), "theme_bps": Decimal("-34.7"),
+            "resid_bps": Decimal("-0.5"), "total_bps": Decimal("-0.5"),
+            "resid_z": Decimal("0.1"), "now": datetime.now(UTC),
+        },
+    )
+
+    decomp = read_attribution_decomp(db_conn, ["ZZR"], _SESSION, ATTRIBUTION_MODEL_VERSION)
+
+    assert decomp["ZZR"]["market_bps"] == 35  # 34.7 rounds up, not int()-truncated to 34
+    assert decomp["ZZR"]["theme_bps"] == -35  # -34.7 rounds to -35, not int()-truncated to -34
+    assert decomp["ZZR"]["resid_bps"] == -1  # -0.5 tie rounds away from zero, not to 0
+
+
 def test_reassembly_upserts_not_duplicates(db_conn: Connection) -> None:
     _seed_book(db_conn)
 

@@ -1,6 +1,7 @@
 """Scheduler + dead-man's switch (M10). Pure fire-time math, the poll loop, and
-the go/no-go job's holiday-skip and failure-ping paths — all without a clock,
-a network, or a database."""
+the go/no-go job's holiday-skip and failure-ping paths — mostly without a clock,
+a network, or a database; one DB test at the bottom drives run_reconcile_job's
+real body end to end (skipped without DATABASE_URL)."""
 
 from __future__ import annotations
 
@@ -11,8 +12,14 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
+from tests.helpers_attribution import seed_bars_for
 from worker import calendar, scheduler
+from worker.attribution import refit, score
+from worker.constants import ATTRIBUTION_MODEL_VERSION as MV
+from worker.themes_seed import seed_themes
 
 UTC = ZoneInfo("UTC")
 _DELAY = timedelta(minutes=45)
@@ -378,3 +385,79 @@ def test_run_refit_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) 
             healthcheck_url="https://hc.example/refit",
         )
     assert pings == [("fail", "https://hc.example/refit")]
+
+
+# --- run_reconcile_job through the real scheduled path (DB, DoD #4) ---------
+#
+# The tests above monkeypatch worker.reconcile.reconcile, so the join between
+# the scheduler's calendar math (today_et -> previous_session) and the real
+# reconcile() body is untested. That path needs a genuine DB.
+#
+# run_reconcile_job takes an Engine and opens its own `engine.begin()`. The
+# project's only DB fixture (`db_conn`) is a single connection whose
+# transaction is rolled back at teardown — the safe pattern every other DB
+# test in this repo relies on, including the reconcile seeding this test
+# mirrors (tests/test_reconcile.py), which seeds real symbols (SPY, NVDA, ...)
+# into shared, unscoped tables (bars_daily, attribution_fits, basket_returns).
+# Handing run_reconcile_job a *real* Engine would make it open a second, truly
+# committed transaction — risking a permanent overwrite of real historical
+# bars for those symbols if this dev DB already has them backfilled, with no
+# way to undo it afterwards. `_ConnEngine` avoids that: it satisfies the same
+# `.begin()` duck type run_reconcile_job expects (the pattern `_FakeEngine`
+# above already uses for the connectionless tests) but hands back the
+# fixture's own open connection instead of a second real transaction, so every
+# write here still rolls back at fixture teardown like any other DB test.
+
+
+class _ConnEngine:
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+
+    def begin(self) -> Any:
+        return contextlib.nullcontext(self._conn)
+
+
+def test_run_reconcile_job_flips_revised_through_scheduled_path(db_conn: Connection) -> None:
+    # Mirrors tests/test_reconcile.py's seeding: fit + PM-synthesize a session,
+    # then corrupt one symbol's synthetic total_bps so it diverges from the
+    # real official bar beyond RECONCILE_TOL.
+    symbols = ["NVDA", "AMD", "MU", "SNDK", "AVGO", "SPY"]
+    trade_date = date(2020, 6, 30)
+    fit_now = datetime(2020, 6, 30, 22, 0, tzinfo=UTC)
+
+    seed_themes(db_conn)
+    seed_bars_for(db_conn, symbols, sessions=121, end=trade_date)
+    refit(db_conn, trade_date, now_utc=fit_now, model_version=MV)
+    score(db_conn, trade_date, now_utc=fit_now, model_version=MV, synthetic=True)
+    db_conn.execute(
+        text(
+            "UPDATE attribution SET total_bps = 99999 "
+            "WHERE trade_date = :d AND symbol = 'NVDA' AND model_version = :mv"
+        ),
+        {"d": trade_date, "mv": MV},
+    )
+
+    # Wed 2020-07-01, 07:00 ET (a real session) -> previous_session == trade_date.
+    reconcile_now = datetime(2020, 7, 1, 11, 0, tzinfo=UTC)
+    assert calendar.today_et(reconcile_now) == date(2020, 7, 1)
+    assert calendar.previous_session(date(2020, 7, 1)) == trade_date
+
+    outcome = scheduler.run_reconcile_job(
+        _ConnEngine(db_conn),  # type: ignore[arg-type]
+        now_utc=reconcile_now,
+        healthcheck_url="",
+    )
+    assert outcome == "reconciled"
+
+    row = db_conn.execute(
+        text(
+            "SELECT revised, provisional, synthetic FROM attribution "
+            "WHERE trade_date = :d AND symbol = 'NVDA' AND model_version = :mv"
+        ),
+        {"d": trade_date, "mv": MV},
+    ).mappings().one()
+    # The divergent bar flips revised end to end, through run_reconcile_job's
+    # own calendar math and engine.begin() — not just reconcile() in isolation.
+    assert row["revised"] is True
+    assert row["provisional"] is False
+    assert row["synthetic"] is False

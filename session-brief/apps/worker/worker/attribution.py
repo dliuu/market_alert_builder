@@ -356,13 +356,22 @@ def read_attribution_decomp(
         _READ_DECOMP, {"d": trade_date, "mv": model_version, "syms": symbols}
     ).mappings():
         out[row["symbol"]] = {
-            "market_bps": int(row["market_bps"]) if row["market_bps"] is not None else None,
-            "theme_bps": int(row["theme_bps"]) if row["theme_bps"] is not None else None,
-            "resid_bps": int(row["resid_bps"]) if row["resid_bps"] is not None else None,
+            "market_bps": _round_half_up(row["market_bps"]),
+            "theme_bps": _round_half_up(row["theme_bps"]),
+            "resid_bps": _round_half_up(row["resid_bps"]),
             "resid_z": float(row["resid_z"]) if row["resid_z"] is not None else None,
             "provisional": bool(row["provisional"]),
         }
     return out
+
+
+def _round_half_up(value: Decimal | None) -> int | None:
+    """Round a fractional stored *_bps to the nearest integer, ties away from
+    zero — matches assemble._round_bps's convention. Plain ``int()`` truncates
+    toward zero and is wrong-direction for negatives (int(-34.7) == -34)."""
+    if value is None:
+        return None
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 _UPSERT_ATTR = text("""
