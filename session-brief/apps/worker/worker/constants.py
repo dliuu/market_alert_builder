@@ -45,3 +45,34 @@ FOREIGN_PROXIES: dict[str, tuple[str, str]] = {
 
 # §3's line: only names moving more than this pre-market get a row (docs/05).
 PREMARKET_THRESHOLD: Decimal = Decimal("0.01")
+
+# Nominal seed levels for the tape universe (C2, M15 review): a base for the
+# *first* capture of each symbol, before any real prior capture exists.
+#
+# §2's prior levels come from `bars_daily` (via `prior_closes`) and from the
+# tape's own prior capture (via `_prior_tape_levels`) — but nothing ingests
+# daily bars for futures, yield, or forex series (`book_symbols` is holdings ∪
+# sector benchmarks ∪ SPY; Tiingo serves none of ES=F/NQ=F/^TNX/DXY/^VIX/CL=F
+# or the foreign proxies), and the tape's own history is itself seeded from
+# this same recursion — so with no seed the base is never established and §2
+# is empty on every run, forever (confirmed empirically: 0 of the 7 tape
+# symbols ever have a `bars_daily` row).
+#
+# These are plausible index/yield/price levels, not live data — nothing here is
+# redistributed, and `ingest_premarket_for_session` treats this as the
+# lowest-priority source, so a real prior capture (once one exists) always
+# wins. This dict disappears the day a licensed pre-market/futures feed lands
+# and `prior_closes`/`_prior_tape_levels` have real data to return.
+TAPE_SEED_LEVELS: dict[str, Decimal] = {
+    "ES=F": Decimal("5620.00"),   # E-mini S&P 500 futures, nominal index level
+    "NQ=F": Decimal("19800.00"),  # E-mini Nasdaq-100 futures
+    "^TNX": Decimal("4.20"),      # 10Y yield, around 4%
+    "DXY": Decimal("103.00"),     # Dollar index
+    "^VIX": Decimal("15.00"),     # VIX, in the teens
+    "CL=F": Decimal("65.00"),     # WTI crude, in the sixties
+    "EWT": Decimal("54.00"),      # Taiwan (semis) proxy
+    "EWJ": Decimal("72.00"),      # Japan (tech) proxy
+    "EWC": Decimal("44.00"),      # Canada (energy) proxy
+    "EUFN": Decimal("26.00"),     # Europe (financials) proxy
+    "EWG": Decimal("34.00"),      # Germany (industrials) proxy
+}

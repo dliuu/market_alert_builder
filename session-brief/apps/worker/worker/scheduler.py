@@ -298,8 +298,9 @@ def _prior_tape_levels(
     conn: Connection, symbols: list[str], prior_session: date
 ) -> dict[str, Decimal]:
     """Yesterday's capture is today's base for the macro tape — nothing ingests
-    futures or yield bars, so the tape bootstraps off its own history. On the
-    first morning it is empty and §2 renders its note."""
+    futures or yield bars, so the tape bootstraps off its own history. Empty on
+    the very first capture (there is no "yesterday" yet), which is exactly when
+    `TAPE_SEED_LEVELS` (C2) supplies the base instead."""
     return {
         str(row["symbol"]): Decimal(str(row["last"]))
         for row in conn.execute(
@@ -322,7 +323,16 @@ def ingest_premarket_for_session(
     The provider defaults to the synthetic feed. That is not a test seam — it is
     the shipping configuration until the premium pre-market licence lands (D8),
     and swapping it is a one-line change here.
+
+    The tape's prior-level bases are seeded from `TAPE_SEED_LEVELS` (C2, M15
+    review) at lowest priority: nothing ingests bars for the futures/yield/forex
+    symbols the tape reads, so without a seed §2 has no base to gap from on any
+    run, ever. Once a real prior capture exists (`bars_daily` for the held
+    names, or the tape's own history for the rest), it always wins over the
+    seed. The seed goes away entirely the day a licensed feed lands and these
+    symbols get real bars.
     """
+    from worker.constants import TAPE_SEED_LEVELS
     from worker.premarket import (
         capture_stamp,
         ingest_premarket,
@@ -334,13 +344,19 @@ def ingest_premarket_for_session(
     with engine.connect() as conn:
         held = book_symbols(conn, user_id)
         tape = tape_universe(sector_benchmarks(conn, user_id))
-        closes = prior_closes(
+
+        # Lowest priority first (C2, M15 review): the nominal seed, so the tape
+        # always has *some* base on a cold start — nothing ingests bars for
+        # futures/yield/forex series, so without this §2 can never bootstrap.
+        # Each higher-priority source below overwrites it where real data exists.
+        closes = dict(TAPE_SEED_LEVELS)
+        closes |= prior_closes(
             conn, held + [symbol for symbol, _, _ in tape], prior_session
         )
 
-        # The tape symbols have no bars (nothing ingests futures), so seed their
-        # bases from the tape's own prior capture where one exists, and skip the
-        # rest — a symbol with no base is omitted rather than invented.
+        # The tape's own prior capture, where one exists, wins over both the
+        # seed and `bars_daily` (which never carries these symbols) — it's the
+        # freshest real base once the tape has run at least once before.
         closes |= _prior_tape_levels(conn, [s for s, _, _ in tape], prior_session)
 
     prov = provider or SyntheticPremarketProvider(closes, session_date)
