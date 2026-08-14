@@ -33,6 +33,11 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const overnightTape = brief.sections.find((s) => s.id === "overnight_tape");
+  // Same key as the email template: `assemble_open` appends this exact string
+  // to `data_quality.stale` while `constants.PREMARKET_FEED_IS_SYNTHETIC` is
+  // True. One flag, one place to flip it — nothing here changes the day a
+  // licensed feed lands.
+  const tapeIsSynthetic = brief.data_quality.stale.includes("overnight_tape.synthetic");
   const premarket = brief.sections.find((s) => s.id === "premarket");
   const calendar = brief.sections.find((s) => s.id === "calendar");
   const sectors = brief.sections.find((s) => s.id === "sector_setup");
@@ -153,7 +158,12 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
       {/* Overnight tape — the open brief's §2 */}
       {overnightTape && overnightTape.rows.length > 0 && (
         <section style={S.card}>
-          <h2 style={S.h2}>Overnight tape</h2>
+          <h2 style={S.h2}>
+            Overnight tape
+            {tapeIsSynthetic && (
+              <span style={S.sectionNote}> · synthetic feed · not live prices</span>
+            )}
+          </h2>
           <table style={S.table}>
             <thead>
               <tr>
@@ -395,8 +405,12 @@ function signedDollars(cents: number): string {
 function bps(value: number): string {
   return `${value >= 0 ? "+" : ""}${value}bps`;
 }
+// U+2212 (minus sign), not ASCII "-" — see `signedAbs` below; `toFixed` would
+// otherwise emit the ASCII glyph here while §2's level-quoted rows and §3's
+// gap column use U+2212, splitting the sign glyph within the same row.
 function pct(fraction: number): string {
-  return `${fraction >= 0 ? "+" : ""}${(fraction * 100).toFixed(2)}%`;
+  const sign = fraction >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(fraction * 100).toFixed(2)}%`;
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : pct(fraction);
@@ -442,6 +456,7 @@ const S: Record<string, React.CSSProperties> = {
   },
   card: { border: "1px solid #e2e2e2", borderRadius: 10, padding: "14px 16px", margin: "16px 0" },
   h2: { margin: "0 0 12px", fontSize: "1rem", color: "#333" },
+  sectionNote: { fontWeight: 400, fontSize: "0.78rem", color: "#888" },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 },
   statLabel: {
     fontSize: "0.72rem",

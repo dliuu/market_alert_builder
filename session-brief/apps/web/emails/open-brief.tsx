@@ -29,6 +29,11 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
   const section = (id: string) => brief.sections.find((s) => s.id === id);
   const tape = section("overnight_tape");
   const pre = section("premarket");
+  // The one place this marker is keyed: `data_quality.stale` carrying this
+  // exact string, appended by `assemble_open` while
+  // `constants.PREMARKET_FEED_IS_SYNTHETIC` is True. Nothing here needs to
+  // change the day a licensed feed lands — the entry just stops appearing.
+  const tapeIsSynthetic = brief.data_quality.stale.includes("overnight_tape.synthetic");
   const calendar = section("calendar");
   const sectors = section("sector_setup");
   const dateLong = formatDate(brief.session_date);
@@ -78,7 +83,14 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
           {/* overnight tape */}
           {tape && tape.rows.length > 0 && (
             <Sec style={sec}>
-              <SectionHead title="Overnight tape" note="vs prior close" />
+              <SectionHead
+                title="Overnight tape"
+                note={
+                  tapeIsSynthetic
+                    ? "vs prior close · synthetic feed · not live prices"
+                    : "vs prior close"
+                }
+              />
               <Tape rows={tape.rows} />
               {tape.note && <p style={note}>{tape.note}</p>}
             </Sec>
@@ -367,8 +379,12 @@ function shortDate(iso: string | null | undefined): string {
     timeZone: "UTC",
   });
 }
+// U+2212 (minus sign), not ASCII "-" — see `signedAbs` below; `toFixed` would
+// otherwise emit the ASCII glyph here while the level-quoted branch of `Tape`
+// uses U+2212, splitting the sign glyph across §2's own change column.
 function signedPct(pct: number): string {
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  const sign = pct >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(pct).toFixed(2)}%`;
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
