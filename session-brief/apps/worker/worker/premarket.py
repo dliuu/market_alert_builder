@@ -10,8 +10,11 @@ Two rules earn their own module here:
   30-day daily RVOL. Pre-market volume is a different, far thinner series, and a
   daily-volume ratio over it is a number that looks meaningful and isn't (D3,
   docs/05).
-- **The gap is dollars.** A percent tells you how the stock moved; cents tell you
-  what the position did, which is the figure you act on (docs/01).
+- **The gap is dollars, per share.** A percent tells you how the stock moved;
+  cents tell you what a share of it did, which is the figure you act on
+  (docs/01). Per-share, not per-position — the open brief carries no position
+  data by design (no lots, no shares held), so there is no P&L figure here to
+  compute.
 """
 
 from __future__ import annotations
@@ -130,17 +133,31 @@ def tape_universe(sector_benchmarks: list[str]) -> list[tuple[str, str, str]]:
 
 # --- Database layer -------------------------------------------------------
 
-_UPSERT = text("""
-    INSERT INTO quotes (symbol, session_date, captured_at, last, prev_close,
+# Two column-scoped upserts, not one (I3, M15 review): a symbol that shows up
+# in both the held list and the tape list (a holding whose ticker is also a
+# sector's foreign proxy, e.g. holding EWT while running a semis sleeve
+# benchmarked to SMH) must have both writes compose rather than clobber. Each
+# statement touches only its own feed's value columns plus `captured_at`, so
+# the second write can never blank the first's columns back to NULL.
+_UPSERT_HELD = text("""
+    INSERT INTO quotes (symbol, session_date, captured_at, prev_close,
                         extended_last, extended_v)
-    VALUES (:symbol, :session_date, :captured_at, :last, :prev_close,
+    VALUES (:symbol, :session_date, :captured_at, :prev_close,
             :extended_last, :extended_v)
     ON CONFLICT (symbol, session_date) DO UPDATE
         SET captured_at = EXCLUDED.captured_at,
-            last = EXCLUDED.last,
             prev_close = EXCLUDED.prev_close,
             extended_last = EXCLUDED.extended_last,
             extended_v = EXCLUDED.extended_v
+""")
+
+_UPSERT_TAPE = text("""
+    INSERT INTO quotes (symbol, session_date, captured_at, last, prev_close)
+    VALUES (:symbol, :session_date, :captured_at, :last, :prev_close)
+    ON CONFLICT (symbol, session_date) DO UPDATE
+        SET captured_at = EXCLUDED.captured_at,
+            last = EXCLUDED.last,
+            prev_close = EXCLUDED.prev_close
 """)
 
 _READ_PRIOR_CLOSES = text("""
@@ -151,7 +168,7 @@ _READ_PRIOR_CLOSES = text("""
 _READ_PREMARKET = text("""
     SELECT symbol, extended_last, extended_v, prev_close FROM quotes
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
-      AND extended_last IS NOT NULL
+      AND extended_last IS NOT NULL AND prev_close IS NOT NULL
     ORDER BY symbol
 """)
 
@@ -169,7 +186,7 @@ _READ_PRIOR_VOLUMES = text("""
 _READ_TAPE = text("""
     SELECT symbol, last, prev_close FROM quotes
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
-      AND last IS NOT NULL
+      AND last IS NOT NULL AND prev_close IS NOT NULL
 """)
 
 
@@ -203,11 +220,10 @@ def ingest_premarket(
     """
     written = 0
     for record in provider.get_latest_prices(held):
-        conn.execute(_UPSERT, {
+        conn.execute(_UPSERT_HELD, {
             "symbol": record["symbol"],
             "session_date": session_date,
             "captured_at": captured_at,
-            "last": None,
             "prev_close": record["prev_close"],
             "extended_last": record["extended_last"],
             "extended_v": record["extended_v"],
@@ -224,14 +240,12 @@ def ingest_premarket(
     }
     for feed, symbols in by_feed.items():
         for record in fetch[feed](symbols):
-            conn.execute(_UPSERT, {
+            conn.execute(_UPSERT_TAPE, {
                 "symbol": record["symbol"],
                 "session_date": session_date,
                 "captured_at": captured_at,
                 "last": record["last"],
                 "prev_close": record["prev_close"],
-                "extended_last": None,
-                "extended_v": None,
             })
             written += 1
     return written

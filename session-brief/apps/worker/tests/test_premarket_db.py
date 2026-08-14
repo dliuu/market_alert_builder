@@ -128,6 +128,52 @@ def test_a_live_provider_takes_the_same_path(db_conn: Connection) -> None:
     assert quote.extended_v == 999
 
 
+def test_a_symbol_in_both_held_and_tape_keeps_both_writes(db_conn: Connection) -> None:
+    """I3, M15 review: a holding whose ticker is also a tape/foreign-proxy
+    symbol (e.g. holding EWT while running a semis sleeve benchmarked to SMH)
+    must not have one write blank the other's columns. Before the fix, the
+    tape write landed second and nulled `extended_last`/`extended_v` back out,
+    silently dropping the symbol from §3."""
+    from worker.premarket import capture_stamp, ingest_premarket, read_premarket, read_tape
+
+    for symbol, close in (("EWT", "50.00"),):
+        db_conn.execute(
+            text("INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v, adj_c) "
+                 "VALUES (:s, :d, :c, :c, :c, :c, 1000, :c)"),
+            {"s": symbol, "d": _PRIOR, "c": Decimal(close)},
+        )
+
+    class BothFeeds:
+        """A symbol served by both `get_latest_prices` (held) and
+        `get_index_quotes` (tape) in the same capture — the overlap case."""
+
+        def get_latest_prices(self, symbols: list[str]) -> list[dict[str, object]]:
+            return [{"symbol": s, "extended_last": Decimal("51.00"),
+                     "extended_v": 42_000, "prev_close": Decimal("50.00")} for s in symbols]
+
+        def get_futures_prices(self, symbols: list[str]) -> list[dict[str, object]]:
+            return []
+
+        def get_index_quotes(self, symbols: list[str]) -> list[dict[str, object]]:
+            return [{"symbol": s, "last": Decimal("50.75"),
+                     "prev_close": Decimal("50.00")} for s in symbols]
+
+        get_forex_quotes = get_futures_prices
+
+    ingest_premarket(
+        db_conn, BothFeeds(),
+        held=["EWT"], tape=[("EWT", "Taiwan (semis)", "index")],
+        session_date=_SESSION, captured_at=capture_stamp(_SESSION),
+    )
+
+    (premarket_row,) = read_premarket(db_conn, ["EWT"], _SESSION)
+    assert premarket_row.extended_last == Decimal("51.00")
+    assert premarket_row.extended_v == 42_000
+
+    (tape_row,) = read_tape(db_conn, _SESSION, sector_benchmarks=["SMH"])
+    assert tape_row.last == Decimal("50.75")
+
+
 def test_typical_volume_excludes_today_and_respects_the_window(db_conn: Connection) -> None:
     """`_typical_volume` is the riskiest SQL in this module: it must exclude
     today's session, order by session_date DESC, and take only the most recent

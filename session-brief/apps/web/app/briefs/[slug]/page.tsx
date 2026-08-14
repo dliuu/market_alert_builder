@@ -187,7 +187,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
               <tr>
                 <th style={S.th}>Name</th>
                 <th style={S.thR}>Pre</th>
-                <th style={S.thR}>Gap</th>
+                <th style={S.thR}>Gap/sh</th>
                 <th style={S.thR}>Pre vol</th>
               </tr>
             </thead>
@@ -404,13 +404,19 @@ function pctOrDash(fraction: number | null | undefined): string {
 function fmtLevel(level: number | null | undefined): string {
   return level == null ? "—" : level.toFixed(2);
 }
+// U+2212 (minus sign), not ASCII "-" — same convention as `dollarsOrDash`
+// below, so the sign reads consistently within one row (docs/06).
 function signedAbs(v: number | null | undefined): string {
-  return v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+  if (v == null) return "";
+  const sign = v >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(v).toFixed(2)}`;
 }
-// The gap is dollars, not percent — that's the figure you act on (docs/01).
+// The gap is dollars per share, not percent — that's the figure you act on
+// (docs/01). Per-share, not per-position: the open brief carries no position
+// data by design.
 function dollarsOrDash(cents: number | null | undefined): string {
   if (cents == null) return "—";
-  const sign = cents >= 0 ? "+" : "-";
+  const sign = cents >= 0 ? "+" : "−";
   return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 function multOrDash(m: number | null | undefined): string {

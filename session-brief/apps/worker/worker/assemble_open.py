@@ -354,6 +354,10 @@ def read_open_inputs(
     sectors = _read_sectors(conn, user_id, prior_session, session_date)
     benchmarks = [s.benchmark_symbol for s in sectors if s.benchmark_symbol]
     tape = read_tape(conn, session_date, benchmarks)
+    # §3 deliberately covers every name in `holdings` — owned *and* watchlist —
+    # not just owned positions (ruled: this is correct, not an incidental
+    # consequence of reusing the holdings dict). A watchlist name gapping 5%
+    # pre-market is exactly what the reader opened the brief to find.
     premarket = read_premarket(conn, sorted(holdings), session_date)
     return events, sectors, holdings, tape, premarket
 
