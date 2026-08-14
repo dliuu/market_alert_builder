@@ -19,6 +19,7 @@ from worker.assemble_open import (
     assemble_open,
     trailing_return,
 )
+from worker.claims import emit_premarket_gap
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate
 from worker.premarket import PremarketQuote, TapeQuote
@@ -230,7 +231,18 @@ def test_a_completely_empty_day_still_produces_a_valid_brief() -> None:
 
 
 def test_matches_frozen_fixture() -> None:
-    got = _open().model_dump(mode="json")
+    """M15: the snapshot now carries a populated §2 and §3 — one tape read, one
+    name gapping pre-market (SNDK, clears the threshold) and one flat (RKLB,
+    rolls up into suppressed[]) — plus the horizon-0 claim SNDK's gap emits."""
+    premarket = [
+        _pm("SNDK", "49.26", "47.32"),
+        _pm("RKLB", "24.98", "25.00"),
+    ]
+    got = _open(
+        tape=_tape(),
+        premarket=premarket,
+        claims=emit_premarket_gap(premarket),
+    ).model_dump(mode="json")
     assert got == json.loads(_FIXTURE.read_text())
 
 

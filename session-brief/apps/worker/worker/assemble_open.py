@@ -65,7 +65,7 @@ _SECTOR_WINDOW = 5
 _CALENDAR_WINDOW_DAYS = 7
 
 _OMITTED_TAPE = "No overnight tape captured for this session."
-_QUIET_PREMARKET = "Nothing moved pre-market."
+_QUIET_PREMARKET = "Nothing moved pre-market:"
 # Replaces M14's "lands with the delayed-quote feed" — the feed exists now, so
 # an empty §3 means no capture landed for this session, not a missing milestone.
 _OMITTED_PREMARKET = "No pre-market quotes captured for this session."

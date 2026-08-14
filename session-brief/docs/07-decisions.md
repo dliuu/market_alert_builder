@@ -181,3 +181,74 @@ D22 set the shape; implementation surfaced five decisions it doesn't cover.
 
 *Rules out:* sharing the weekly flag budget across both briefs; resolving claims in the morning; running compute just to obtain weights; a second delay-based fire for the open brief; two independent scheduler triggers; paying for a Premium calendar feed to ship M14; trusting the generated Pydantic as the contract.
 *Reverses if:* a flag turns out to be genuinely close-relevant (the cap then needs a per-kind budget — a `flags` schema change); the calendar feed is licensed (§4 swaps behind the provider seam without touching the section); or the per-kind schedule needs independent triggers or a leader-lock (D20's own reversal).
+
+---
+
+**D24 — M15 pre-market: a real `quotes` table, a deterministic synthetic feed, and horizon-0 as an engine change**
+§2 (overnight tape) and §3 (pre-market names) run on a **new `quotes` table** —
+migration `0011_quotes`. The design spec said the feeds needed no migration
+because `quotes` already existed; it never did (`docs/03` sketched it, `0003`
+created only `raw_payloads`/`bars_daily`), the same shape of error M14 found with
+`events`. It is keyed **`(symbol, session_date)`** rather than the sketch's
+`(symbol, captured_at)`: every read is "the capture for session D", and the
+session key makes re-seeding idempotent. Shared, no `user_id` (D18/D21).
+Data comes from `SyntheticPremarketProvider` — deterministic by hash over
+`(symbol, session_date)`, never `random`, so a seeded morning is
+snapshot-testable — behind four premium pre-market methods a licensed
+fdnpy feed will implement (`get_latest_prices` / `get_futures_prices` /
+`get_index_quotes` / `get_forex_quotes`). One ingest function serves both, which
+is what makes the swap a constructor change (D8 stays a business call).
+§3's volume multiple is **pre-market-specific** — this morning's `extended_v`
+against the mean of the prior sessions' captures — never the 30-day RVOL, which
+over a pre-market tape is a number that looks meaningful and isn't (D3).
+The `>1% **or carrying news**` threshold ships half-wired: `clears_threshold`
+takes `has_news` and nothing sets it, because there is no news feed (docs/02:
+Premium, unwired) — the D18 `short_interest` precedent.
+The **horizon-0 morning claim** is a genuine change to the D17 engine, not a
+`claim_type` seam ride: the contract pinned `horizon_sessions` to `minimum: 1`,
+`resolve_due_claims` read only `session_date < :session_date`, and
+`_resolve_session` offset by `horizon - 1`. Resolution now admits same-session
+claims and resolves horizon 0 on the emit session's own bar; horizon-1 claims are
+still excluded from their own session by `_resolve_session`, which is asserted by
+a regression test. The open brief emits and **never resolves** — resolving at
+08:15 would consume the due claims before the close brief's §7 could report them.
+`schema_version` bumps to **4** (§2 `level`/`overnight_pct`/`overnight_abs`, §3
+`pre_pct`/`gap_cents`/`premarket_vol_mult`, the claim changes); narration gains a
+`tape_read` key that lands in §2's existing `note`, so the read paragraph costs
+no schema surface and inherits the digit guard.
+
+**The pre-market seam turned out to need its own protocol.** The plan (like the
+design spec) had the four premium methods widening `MarketDataProvider` itself.
+That broke `mypy --strict` — clean at the milestone's base, 6 errors after —
+because protocols are structural: `TiingoProvider`, the EOD provider, satisfied
+the narrower `MarketDataProvider` fine, but widening that one protocol to also
+demand `get_latest_prices`/`get_futures_prices`/`get_index_quotes`/`get_forex_quotes`
+made `TiingoProvider` stop conforming, and it structurally cannot serve pre-market
+prints — there's no vendor call to add. The four methods live instead on a
+separate `PremarketProvider` protocol (`worker/providers/base.py`): `FdnProvider`
+is intended to satisfy both once licensed, `SyntheticPremarketProvider` only the
+pre-market one, and `ingest_premarket` takes a `PremarketProvider`. One protocol
+per capability was the fix; one protocol for "every provider" was the wrong shape
+the moment two providers only partially overlap.
+
+**The `claims` table needed its own migration, separate from the contract bump.**
+Contract v4 widened `brief-object.schema.json`'s claim-type enum to admit
+`premarket_gap` and dropped `horizon_sessions`' `minimum` to 0, but the `claims`
+table carries its own CHECK constraints from migration `0006` —
+`claim_type IN ('catalyst_pending', 'relative_strength', 'supply_overhang',
+'breadth')` and `horizon_sessions >= 1` — which the contract bump never touched;
+Python owns the schema (invariant 1), and a JSON Schema edit is not a migration.
+Migration `0012_claims_premarket_gap` widens both CHECKs to match. The general
+lesson: a contract enum and a database CHECK are two separate sources of truth,
+and changing one does not change the other — the same shape of gap D23(1) found
+between the generated Pydantic and the canonical schema, one level down the
+stack.
+*Rules out:* a `quotes` table keyed by capture timestamp; RVOL over pre-market
+volume; the open brief resolving claims; a section that knows which provider
+filled `quotes`; blocking §2/§3 on the data licence; one `MarketDataProvider`
+protocol widened to cover pre-market data; assuming a contract enum bump reaches
+a table's CHECK constraints without its own migration.
+*Reverses if:* the premium pre-market licence lands (swap the provider, delete
+nothing else); a news feed lands (`has_news` starts firing with no other change);
+or M13's attribution lands and §1's salience upgrades from the largest gap to the
+largest overnight `|resid_z|` — a change to one sort key in `_premarket`.
