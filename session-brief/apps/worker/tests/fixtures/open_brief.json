@@ -301,6 +301,8 @@
   ],
   "data_quality": {
     "missing": [],
-    "stale": []
+    "stale": [
+      "overnight_tape.synthetic"
+    ]
   }
 }

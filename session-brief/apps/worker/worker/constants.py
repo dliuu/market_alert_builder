@@ -76,3 +76,15 @@ TAPE_SEED_LEVELS: dict[str, Decimal] = {
     "EUFN": Decimal("26.00"),     # Europe (financials) proxy
     "EWG": Decimal("34.00"),      # Germany (industrials) proxy
 }
+
+# The one switch a licensed pre-market/futures feed flips (final-pass review,
+# M15). While this is True, §2 (overnight tape) is running on
+# `SyntheticPremarketProvider`, not live prints: `assemble_open` reads it to add
+# `"overnight_tape.synthetic"` to `data_quality.stale`, and both renderers
+# (`open-brief.tsx`, `briefs/[slug]/page.tsx`) key their "synthetic feed · not
+# live prices" header marker off that one `data_quality.stale` entry — neither
+# renderer reads this constant directly. The day `TAPE_SEED_LEVELS` above goes
+# away and `ingest_premarket_for_session` starts constructing a live provider,
+# flip this too. Nothing else needs to change: the marker comes off both
+# renderers automatically once `data_quality.stale` stops carrying the entry.
+PREMARKET_FEED_IS_SYNTHETIC: bool = True

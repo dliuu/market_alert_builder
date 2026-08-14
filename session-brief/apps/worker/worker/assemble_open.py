@@ -45,6 +45,7 @@ from contracts.brief import BriefObject
 from worker.assemble import SCHEMA_VERSION
 from worker.assemble_shared import claim_dict, session_label
 from worker.claims import Claim, emit_premarket_gap, store_emitted_claims
+from worker.constants import PREMARKET_FEED_IS_SYNTHETIC
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
 from worker.premarket import (
@@ -63,6 +64,12 @@ _SECTOR_WINDOW = 5
 # §4 looks this far ahead. "On the clock today" leads with today, but a brief
 # that only ever showed today would bury a Monday lockup on Friday afternoon.
 _CALENDAR_WINDOW_DAYS = 7
+
+# The `data_quality.stale` entry that marks §2 as running on invented levels
+# rather than a live print (final-pass review, M15). Both renderers key their
+# header marker off this exact string, so it is the one thing that has to stay
+# byte-identical between here and `open-brief.tsx` / `briefs/[slug]/page.tsx`.
+STALE_OVERNIGHT_TAPE_SYNTHETIC = "overnight_tape.synthetic"
 
 _OMITTED_TAPE = "No overnight tape captured for this session."
 _QUIET_PREMARKET = "Nothing moved pre-market:"
@@ -129,6 +136,16 @@ def assemble_open(
     brief's job.
     """
     premarket_section, skipped = _premarket(premarket or [])
+    tape_section = _overnight_tape(tape)
+
+    # §2 carries invented levels while `PREMARKET_FEED_IS_SYNTHETIC` is True
+    # (final-pass review, M15) — flag it in `data_quality.stale` rather than
+    # silently rendering a made-up ES print next to real ones. Only when §2
+    # actually has rows: an empty/suppressed section has nothing to mark stale.
+    stale_list = list(stale or [])
+    if tape_section["rows"] and PREMARKET_FEED_IS_SYNTHETIC:
+        stale_list.append(STALE_OVERNIGHT_TAPE_SYNTHETIC)
+
     payload = {
         "schema_version": SCHEMA_VERSION,
         "brief_id": f"{user_id}-{session_date.isoformat()}-open",
@@ -140,7 +157,7 @@ def assemble_open(
         "one_thing": None,  # narration, stage ⑤
         # `book` is deliberately absent, not null: no performance, no P&L.
         "sections": [
-            _overnight_tape(tape),
+            tape_section,
             premarket_section,
             _calendar(events, holdings, session_date),
             _sector_setup(sectors),
@@ -152,7 +169,7 @@ def assemble_open(
         "suppressed": skipped,  # names that didn't clear §3's threshold
         "data_quality": {
             "missing": missing or [],
-            "stale": stale or [],
+            "stale": stale_list,
         },
     }
     # model_validate enforces the contract (extra='forbid', required keys, types).
