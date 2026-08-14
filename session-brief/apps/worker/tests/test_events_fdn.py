@@ -8,7 +8,7 @@ mocked `FdnClient`, plus a `db_conn`-adjacent engine test for
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 import httpx
@@ -129,6 +129,13 @@ def test_a_failed_earnings_endpoint_still_lets_macro_contribute_rows() -> None:
 
 # --- ingest_events_for_session: DB round-trip + idempotency ----------------
 
+# The DB tests run against the dev database, and `ingest_events_for_session`
+# now *replaces* its date window (finding 2) rather than merging into it — so
+# a test session date inside the real calendar would delete the dev book's
+# coming week of §4 rows. Far-future, per `test_scheduler_fdn.py`'s
+# `_LIVE_SESSION`, keeps the blast radius inside the test's own rows.
+_DB_SESSION = date(2099, 3, 15)
+
 
 def _rows(conn: Connection, *, label_like: str) -> list[dict[str, object]]:
     return [
@@ -161,7 +168,7 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
     client = _client({
         "earnings-calendar": (
             '[{"trading_symbol": "ZI6A", "fiscal_period": "Q2",'
-            '  "earnings_announcement_date": "2026-08-14"}]'
+            '  "earnings_announcement_date": "2099-03-15"}]'
         ),
     })
     try:
@@ -182,7 +189,7 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
             )
 
         first_written = ingest_events_for_session(
-            engine, client, session_date=_SESSION, user_id=user_id
+            engine, client, session_date=_DB_SESSION, user_id=user_id
         )
         assert first_written == 1
 
@@ -190,11 +197,11 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
             first = _rows(conn, label_like="ZI6A%")
         assert first == [{
             "symbol": "ZI6A", "event_type": "earnings",
-            "occurs_at": _SESSION, "label": "ZI6A Q2 earnings",
+            "occurs_at": _DB_SESSION, "label": "ZI6A Q2 earnings",
         }]
 
         second_written = ingest_events_for_session(
-            engine, client, session_date=_SESSION, user_id=user_id
+            engine, client, session_date=_DB_SESSION, user_id=user_id
         )
         assert second_written == 1
 
@@ -204,4 +211,63 @@ def test_ingest_events_for_session_round_trips_and_is_idempotent(engine: Engine)
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM events WHERE symbol = 'ZI6A'"))
+            conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})
+
+
+def test_live_ingest_replaces_the_window_and_spares_rows_outside_it(engine: Engine) -> None:
+    """Switch-on data hygiene (M16 final review, finding 2). The `events` table
+    has been seeded synthetically since M14 — `events_seed._PER_SYMBOL` invents
+    a "{symbol} lockup expiry" at +6d — and `_read_events` has no provenance
+    column to filter on, so a merging ingest would render invented lockups in a
+    brief whose synthetic-feed banner is *off*. The live ingest must therefore
+    replace the window, while leaving history and anything past the horizon
+    alone (a truncate would be its own bug)."""
+    from worker.assemble_open import _CALENDAR_WINDOW_DAYS
+
+    user_id = str(uuid4())
+    session = _DB_SESSION
+    inside = session + timedelta(days=6)                        # the seed's lockup slot
+    outside = session + timedelta(days=_CALENDAR_WINDOW_DAYS + 1)
+    client = _client({
+        "earnings-calendar": (
+            '[{"trading_symbol": "ZI6B", "fiscal_period": "Q2",'
+            '  "earnings_announcement_date": "2099-03-15"}]'
+        ),
+    })
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:u, :e)"),
+                {"u": user_id, "e": f"{user_id}@example.invalid"},
+            )
+            sector_id = conn.execute(
+                text("INSERT INTO sectors (user_id, name) VALUES (:u, 'M16 Test') "
+                     "RETURNING id"),
+                {"u": user_id},
+            ).scalar()
+            conn.execute(
+                text("INSERT INTO holdings (user_id, sector_id, symbol, status) "
+                     "VALUES (:u, :sec, 'ZI6B', 'owned')"),
+                {"u": user_id, "sec": sector_id},
+            )
+            # A synthetic-style row inside the window, and one beyond it.
+            for occurs_at, label in ((inside, "ZI6B lockup expiry"),
+                                     (outside, "ZI6B lockup expiry (outside)")):
+                conn.execute(
+                    text("INSERT INTO events (symbol, event_type, occurs_at, label) "
+                         "VALUES ('ZI6B', 'lockup', :d, :label)"),
+                    {"d": occurs_at, "label": label},
+                )
+
+        ingest_events_for_session(engine, client, session_date=session, user_id=user_id)
+
+        with engine.connect() as conn:
+            rows = _rows(conn, label_like="ZI6B%")
+        occurrences = {(r["event_type"], r["occurs_at"]) for r in rows}
+        assert ("lockup", inside) not in occurrences        # purged with the window
+        assert ("lockup", outside) in occurrences           # untouched beyond it
+        assert ("earnings", session) in occurrences         # the live row landed
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM events WHERE symbol = 'ZI6B'"))
             conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})

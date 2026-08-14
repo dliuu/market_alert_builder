@@ -1,11 +1,15 @@
-"""fdnpy-backed provider (D21), added alongside Tiingo behind MarketDataProvider.
+"""The FinancialData.net feed. Two unrelated classes live here, and which one
+you want depends on why you opened this file:
 
-M11 needs only ``latest_minute()`` for PM synthesis. The spec named a
-``get_latest_prices`` source that does not exist in this codebase, so the live
-minute fetch is injected (``latest_minute_fn``) — fully testable offline — and
-the real fdnpy premium call is wired once licensed (the M15 pattern).
-``daily_bars`` / ``earnings_calendar`` / ``dividends`` are declared for M12 and
-not implemented here.
+- ``FdnClient`` + ``FdnPremarketProvider`` (M16) are **the live feed**. They
+  speak httpx directly to financialdata.net and are what the 08:00 open-brief
+  ingest runs on whenever ``FDN_API_KEY`` is set. The other live fdn surfaces
+  are ``worker/events_fdn.py`` (§4 calendars) and ``worker/news_fdn.py``
+  (the §3 news gate) — both over the same ``FdnClient``.
+- ``FdnProvider`` (M11) is the older ``MarketDataProvider``-shaped seam, kept
+  for its injectable ``latest_minute()``. Its other methods are unimplemented
+  stubs; read its class docstring before concluding anything about the feed
+  from them.
 """
 
 from __future__ import annotations
@@ -89,9 +93,40 @@ class FdnClient:
         data = json.loads(response.text, parse_float=Decimal)
         if not isinstance(data, list):
             raise ValueError(f"fdn returned non-list for {endpoint}: {data!r}")
-        symbol = params.get("identifier") or params.get("identifiers") or "*"
-        self.captured.append((endpoint, symbol, response.text))
+        self.captured.append((endpoint, _capture_key(params), response.text))
         return data
+
+    def close(self) -> None:
+        """Release the underlying connection pool. The worker is a long-lived
+        process (docs/02) that builds a fresh client every 08:00 fire, so a
+        client that is never closed leaks one pool per trading day."""
+        self._client.close()
+
+
+def _capture_key(params: dict[str, str]) -> str:
+    """The `symbol` half of a raw_payloads row's identity.
+
+    Symbol-scoped endpoints key on the identifier(s), as before. The
+    symbol-less ones — the three calendars (`date=`) and news (`date=`,
+    `offset=`) — used to collapse onto a single `'*'`, so eight days of
+    `earnings-calendar` and three pages of news all landed on the same
+    `(source, endpoint, symbol, as_of)` and `ON CONFLICT DO NOTHING` kept only
+    the first. Invariant 5 says recomputation replays from `raw_payloads`, and
+    it could not: §4 and the news gate were unreplayable. Folding the
+    distinguishing params into the key lets the existing unique constraint
+    separate them.
+
+    `key` is the vendor secret. `FdnClient.fetch` adds it at request time, not
+    through `params`, so it should never reach here — but it is excluded
+    explicitly anyway, because the one thing this string must never do is put
+    the API key in a database column (or in the probe's ✓ lines, which print
+    the same values back to a human).
+    """
+    identifier = params.get("identifier") or params.get("identifiers")
+    if identifier:
+        return identifier
+    distinguishing = sorted((k, v) for k, v in params.items() if k != "key")
+    return "|".join(f"{k}={v}" for k, v in distinguishing) or "*"
 
 
 _INSERT_RAW = text("""
@@ -104,7 +139,9 @@ _INSERT_RAW = text("""
 def store_captured_payloads(conn: Connection, client: FdnClient, *, as_of: date) -> int:
     """Invariant 5 for the fdn feeds: every captured response, verbatim.
     Batch endpoints store under the joined identifiers string; symbol-less
-    endpoints (calendars, news) under '*'. Returns new rows written."""
+    endpoints (calendars, news) under their distinguishing params — see
+    `_capture_key`, without which a whole window of calendar days would
+    conflict onto one row and become unreplayable. Returns new rows written."""
     written = 0
     for endpoint, symbol, body in client.captured:
         result = conn.execute(
@@ -237,6 +274,22 @@ class FdnPremarketProvider:
 
 
 class FdnProvider:
+    """The M11 ``MarketDataProvider``-shaped fdn seam. **Not the live feed.**
+
+    Only ``latest_minute()`` is live, and only through an injected
+    ``latest_minute_fn``. Every other method below is an unimplemented stub,
+    and none of them is on the path the open brief actually runs: M16 wired
+    the real feed elsewhere in this package, so a ``NotImplementedError`` here
+    says nothing about whether that surface is live. The live homes are:
+
+    - pre-market prints and the §2 tape → ``FdnPremarketProvider`` (this file)
+    - §4 earnings / ex-div / macro calendars → ``worker/events_fdn.py``
+    - the §3 ``has_news`` gate and narration headlines → ``worker/news_fdn.py``
+
+    Kept rather than deleted because ``latest_minute`` is a real seam with a
+    real caller; the stubs are the leftovers of a shape M16 did not need.
+    """
+
     def __init__(
         self, api_key: str | None = None, *,
         latest_minute_fn: Callable[[str], dict[str, Any]] | None = None,
@@ -259,40 +312,40 @@ class FdnProvider:
         raise NotImplementedError
 
     def earnings_calendar(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("earnings calendar feeds the open brief's §4 (M14/M15)")
+        raise NotImplementedError("§4's live earnings calendar is worker/events_fdn.py (M16)")
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
         raise NotImplementedError("dividends feed is an M12 concern")
 
     def news(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError
+        raise NotImplementedError("live held-name news is worker/news_fdn.py (M16)")
 
-    # The §4 calendar seam (M14). fdnpy really does expose these —
-    # get_earnings_calendar / get_dividends_calendar / get_economic_calendar —
-    # but they are Premium tier, personal-use-only, with redistribution behind
-    # Enterprise (docs/02, D8). That is the same licensing gate M15 defers, so
-    # M14 seeds synthetically and these stay declared-but-unwired.
+    # The §4 calendar seam, declared in M14 and never wired *on this class*.
+    # M16 shipped the live calendars over FdnClient in worker/events_fdn.py
+    # instead — `date`-per-day fetches mapped onto the events-seed shape —
+    # because §4 wants a session window, not a per-symbol range. These two
+    # stubs are the unused older shape, not a statement that §4 is synthetic:
+    # with FDN_API_KEY set, §4 is live.
 
     def dividends_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy dividends calendar is Premium; M14 §4 seeds")
+        raise NotImplementedError("live ex-div calendar is worker/events_fdn.py (M16)")
 
     def economic_calendar(self, start: date, end: date) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy economic calendar is Premium; M14 §4 seeds")
+        raise NotImplementedError("live macro calendar is worker/events_fdn.py (M16)")
 
-    # The M15 pre-market seam. fdnpy exposes all four (get_latest_prices,
-    # get_futures_prices, get_index_quotes, get_forex_quotes) at Premium tier,
-    # personal-use-only, with redistribution behind Enterprise (docs/02, D8).
-    # Until that is licensed the open brief runs on SyntheticPremarketProvider —
-    # a business decision, not a code blocker.
+    # The pre-market seam. `FdnPremarketProvider` — same file, a few hundred
+    # lines up — implements these same four method names live against
+    # FdnClient, and is what `ingest_premarket_for_session` constructs when
+    # FDN_API_KEY is set. These four stubs are dead; call the provider.
 
     def get_latest_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy latest prices are Premium; M15 seeds synthetically")
+        raise NotImplementedError("live pre-market prints are FdnPremarketProvider (M16)")
 
     def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy futures are Premium; M15 seeds synthetically")
+        raise NotImplementedError("live futures are FdnPremarketProvider (M16)")
 
     def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy index quotes are Premium; M15 seeds synthetically")
+        raise NotImplementedError("live index quotes are FdnPremarketProvider (M16)")
 
     def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
-        raise NotImplementedError("fdnpy forex is Premium; M15 seeds synthetically")
+        raise NotImplementedError("live forex is FdnPremarketProvider (M16)")
