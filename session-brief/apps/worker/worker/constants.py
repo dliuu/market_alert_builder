@@ -130,3 +130,11 @@ CATALYST_LOOKBACK_DAYS = 30
 # Stamped on every signal so a rule change produces a new version alongside the
 # old rather than mutating history — the ATTRIBUTION_MODEL_VERSION pattern (D21).
 CATALYST_MODEL_VERSION = "1"
+
+# --- EDGAR fundamentals (M18) ----------------------------------------------
+
+# How old the newest filing for a held symbol may get before the weekly refresh
+# reports itself unhealthy. An active registrant files quarterly, so past a
+# quarter plus filing lag the likely explanation is our pipeline rather than
+# their silence — which is the failure a Healthchecks ping alone cannot see.
+STALE_FUNDAMENTALS_DAYS = 120

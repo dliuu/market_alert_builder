@@ -217,7 +217,11 @@ def _fundamentals(
     """M18 stages. `ingest` is the only one that touches the network; `replay`
     rebuilds from stored payloads, which is what makes a concept-mapping fix
     cost nothing."""
-    from worker.fundamentals import ingest_fundamentals, replay_fundamentals
+    from worker.fundamentals import (
+        ingest_fundamentals,
+        replay_fundamentals,
+        stale_symbols,
+    )
     from worker.providers.edgar import EdgarClient
 
     engine = get_engine()
@@ -226,20 +230,27 @@ def _fundamentals(
             [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
             if symbols_arg else _book_symbols(conn, DEV_USER_ID)
         )
-        if not symbols:
-            raise SystemExit("no symbols: pass --symbols or add holdings to the book")
+    if not symbols:
+        raise SystemExit("no symbols: pass --symbols or add holdings to the book")
 
-        if fund_command == "ingest":
-            as_of = date.fromisoformat(date_arg) if date_arg else date.today()
-            result = ingest_fundamentals(conn, EdgarClient(), symbols, as_of=as_of)
-            print(f"fundamentals ingest {as_of}: {result['stored']} rows")
-            if result["skipped"]:
-                print(f"  skipped (no CIK at EDGAR): {', '.join(result['skipped'])}")
-            return
+    if fund_command == "ingest":
+        as_of = date.fromisoformat(date_arg) if date_arg else date.today()
+        # Engine, not connection: ingest opens a transaction per symbol so no
+        # multi-MB fetch ever happens inside one.
+        result = ingest_fundamentals(engine, EdgarClient(), symbols, as_of=as_of)
+        print(f"fundamentals ingest {as_of}: {result['stored']} rows")
+        if result["skipped"]:
+            print(f"  skipped (no CIK at EDGAR): {', '.join(result['skipped'])}")
+        with engine.begin() as conn:
+            stale = stale_symbols(conn, symbols, as_of=as_of)
+        if stale:
+            print(f"  STALE (newest filing too old): {', '.join(stale)}")
+        return
 
-        if fund_command == "replay":
+    if fund_command == "replay":
+        with engine.begin() as conn:
             print(f"fundamentals replay: {replay_fundamentals(conn, symbols)} rows")
-            return
+        return
 
     raise SystemExit("usage: fundamentals {ingest|replay} [--symbols A,B]")
 

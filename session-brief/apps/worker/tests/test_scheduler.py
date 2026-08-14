@@ -476,13 +476,14 @@ def test_run_fundamentals_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> 
 
     seen: dict[str, Any] = {}
 
-    def fake_ingest(conn: Any, client: Any, symbols: list[str], **k: Any) -> dict[str, Any]:
+    def fake_ingest(engine: Any, client: Any, symbols: list[str], **k: Any) -> dict[str, Any]:
         seen["symbols"] = symbols
         return {"stored": 3, "skipped": []}
 
     monkeypatch.setattr(fundamentals, "ingest_fundamentals", fake_ingest)
     monkeypatch.setattr(scheduler, "_edgar_client", lambda: object())
     monkeypatch.setattr(scheduler, "_fundamentals_symbols", lambda conn: ["AAA", "BBB"])
+    monkeypatch.setattr(fundamentals, "stale_symbols", lambda conn, syms, **k: [])
 
     out = scheduler.run_fundamentals_job(
         _FakeEngine(),  # type: ignore[arg-type]
@@ -495,15 +496,16 @@ def test_run_fundamentals_job_pings_success(monkeypatch: pytest.MonkeyPatch) -> 
     assert pings == [("ok", "https://hc.example/fundamentals")]
 
 
-def test_run_fundamentals_job_without_a_user_agent_skips_rather_than_crashing(
+def test_run_fundamentals_job_without_a_user_agent_goes_red_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """EDGAR needs no key, but it does need a contact User-Agent. Unset, the
-    weekly fire must degrade to a no-op the dead-man's switch still sees — a
-    crash-looping fire would be indistinguishable from a dead worker."""
+    fire must not crash — a crash-looping job in a blocking scheduler takes the
+    briefs down with it — but it must not ping success either, or forgetting the
+    secret is undetectable. Skip quietly, fail the check loudly."""
     pings: list[Any] = []
     monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
-    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url, d)))
     monkeypatch.setattr(worker_config, "EDGAR_USER_AGENT", "")
 
     out = scheduler.run_fundamentals_job(
@@ -513,4 +515,37 @@ def test_run_fundamentals_job_without_a_user_agent_skips_rather_than_crashing(
     )
 
     assert out == "skipped-no-user-agent"
-    assert pings == [("ok", "https://hc.example/fundamentals")]
+    assert [p[0] for p in pings] == ["fail"]
+    assert "EDGAR_USER_AGENT" in pings[0][2]
+
+
+def test_run_fundamentals_job_goes_red_when_the_data_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Healthchecks tells you the job ran, not that it worked. A run that stores
+    nothing — a renamed concept upstream, a CIK that stopped resolving — pings
+    success exactly like a healthy one. The freshness assertion is what turns
+    that silent failure into a red check."""
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url, d)))
+    monkeypatch.setattr(worker_config, "EDGAR_USER_AGENT", "Test (t@example.invalid)")
+    from worker import fundamentals
+
+    monkeypatch.setattr(
+        fundamentals, "ingest_fundamentals",
+        lambda engine, client, symbols, **k: {"stored": 0, "skipped": []},
+    )
+    monkeypatch.setattr(scheduler, "_edgar_client", lambda: object())
+    monkeypatch.setattr(scheduler, "_fundamentals_symbols", lambda conn: ["AAA"])
+    monkeypatch.setattr(fundamentals, "stale_symbols", lambda conn, syms, **k: ["AAA"])
+
+    out = scheduler.run_fundamentals_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/fundamentals",
+    )
+
+    assert out == "stale-1"
+    assert [p[0] for p in pings] == ["fail"]
+    assert "AAA" in pings[0][2]

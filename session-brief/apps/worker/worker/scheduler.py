@@ -615,37 +615,69 @@ def run_fundamentals_job(
     would re-download megabytes to learn nothing.
 
     EDGAR needs no API key, but it does need a contact `User-Agent`. Unset, this
-    **skips and still pings success**: a weekly fire that crash-loops would make
-    a misconfigured optional feed look identical to a dead worker on the
-    dead-man's switch, and would take the briefs down with it. The briefs do not
-    depend on this job — stale fundamentals degrade two flags, they do not stop
-    a send.
+    **skips without crashing but fails its check**. Both halves matter: a
+    crash-looping fire in a blocking scheduler would take the briefs down with
+    it, and a success ping would make a forgotten secret undetectable. The
+    briefs themselves do not depend on this job — stale fundamentals degrade two
+    flags, they do not stop a send.
+
+    A successful run is not the same as a useful one, so the job also asserts
+    **freshness**. A renamed upstream concept or a CIK that stopped resolving
+    stores zero rows and would otherwise ping success exactly like a healthy
+    week.
     """
     from worker import fundamentals
 
     hc = config.HEALTHCHECKS_FUNDAMENTALS_URL if healthcheck_url is None else healthcheck_url
+    today = calendar.today_et(now_utc)
     try:
         if not config.EDGAR_USER_AGENT:
-            print("scheduler: EDGAR_USER_AGENT unset; skipping the fundamentals refresh")
-            ping_success(hc)
+            message = (
+                "EDGAR_USER_AGENT is not set, so the weekly fundamentals refresh is "
+                "skipping. The SEC requires a User-Agent naming a real contact; set it "
+                "with `fly secrets set EDGAR_USER_AGENT=...`."
+            )
+            print(f"scheduler: {message}")
+            ping_fail(hc, message)
             return "skipped-no-user-agent"
 
         client = _edgar_client()
         with engine.begin() as conn:
             symbols = _fundamentals_symbols(conn)
-            if not symbols:
-                ping_success(hc)
-                return "skipped-empty-book"
-            result = fundamentals.ingest_fundamentals(
-                conn, client, symbols, as_of=calendar.today_et(now_utc)
-            )
+        if not symbols:
+            ping_success(hc)
+            return "skipped-empty-book"
+
+        # Engine, not connection: ingest owns a transaction per symbol so no
+        # HTTP fetch ever happens inside one.
+        result = fundamentals.ingest_fundamentals(engine, client, symbols, as_of=today)
         if result["skipped"]:
             print(f"scheduler: fundamentals — no CIK at EDGAR for {result['skipped']}")
+
+        with engine.begin() as conn:
+            stale = fundamentals.stale_symbols(conn, symbols, as_of=today)
+        if stale:
+            message = (
+                f"fundamentals are stale for {', '.join(stale)} — newest filing older "
+                f"than {config_stale_days()} days. The refresh ran and stored "
+                f"{result['stored']} rows, so this is a pipeline problem, not a quiet "
+                "quarter."
+            )
+            print(f"scheduler: {message}")
+            ping_fail(hc, message)
+            return f"stale-{len(stale)}"
+
         ping_success(hc)
         return f"ingested-{result['stored']}"
     except Exception as exc:
-        ping_fail(hc, f"fundamentals {calendar.today_et(now_utc)}: {exc!r}")
+        ping_fail(hc, f"fundamentals {today}: {exc!r}")
         raise
+
+
+def config_stale_days() -> int:
+    from worker.constants import STALE_FUNDAMENTALS_DAYS
+
+    return STALE_FUNDAMENTALS_DAYS
 
 
 # --- The blocking loop ------------------------------------------------------

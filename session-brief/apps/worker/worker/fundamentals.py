@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
+
+from worker.constants import STALE_FUNDAMENTALS_DAYS
 
 
 class EdgarProvider(Protocol):
@@ -250,36 +252,108 @@ _UPSERT = text("""
 """)
 
 
-def ingest_fundamentals(
+@dataclass(frozen=True)
+class Fetched:
+    """One symbol's network result, held outside any transaction."""
+
+    payload: dict[str, Any]
+    domicile: str | None
+
+
+def fetch_company_facts(client: EdgarProvider, symbol: str) -> Fetched | None:
+    """Network only — no database. None when EDGAR doesn't know the ticker: a
+    guessed CIK silently ingests another company's filings, which is a far
+    worse failure than a missing row."""
+    cik = client.cik_for(symbol)
+    if cik is None:
+        return None
+    return Fetched(payload=client.company_facts(cik), domicile=client.domicile(cik))
+
+
+def store_company_facts(
     conn: Connection,
+    symbol: str,
+    payload: dict[str, Any],
+    *,
+    domicile: str | None,
+    as_of: date,
+) -> int:
+    """Database only — no network. Writes the verbatim body and the typed
+    replay in one transaction, which the caller owns."""
+    conn.execute(_INSERT_PAYLOAD, {
+        "symbol": symbol, "as_of": as_of,
+        "body": json.dumps(payload, default=str),
+    })
+    return _store(conn, symbol, payload, domicile=domicile)
+
+
+def ingest_fundamentals(
+    engine: Engine,
     client: EdgarProvider,
     symbols: list[str],
     *,
     as_of: date,
 ) -> dict[str, Any]:
-    """Fetch, store verbatim, and replay into `fundamentals`.
+    """Fetch and store every symbol, **one transaction per symbol, and never a
+    network call inside one**.
 
-    A symbol EDGAR doesn't know is **skipped and reported**, never guessed into
-    a CIK — a wrong CIK silently ingests another company's filings, which is a
-    far worse failure than a missing row.
+    Takes an engine rather than a connection precisely so it can own that
+    boundary. Wrapping the whole run in a single transaction — as this first
+    did — holds a Postgres connection open across every multi-MB HTTP fetch:
+    invisible at two symbols, a pooler-exhausting idle-in-transaction at fifty.
+
+    Per-symbol transactions also mean a failure midway keeps what already
+    landed, rather than rolling back the whole refresh.
     """
     stored = 0
     skipped: list[str] = []
 
     for symbol in symbols:
-        cik = client.cik_for(symbol)
-        if cik is None:
+        fetched = fetch_company_facts(client, symbol)   # outside any transaction
+        if fetched is None:
             skipped.append(symbol)
             continue
-
-        payload = client.company_facts(cik)
-        conn.execute(_INSERT_PAYLOAD, {
-            "symbol": symbol, "as_of": as_of,
-            "body": json.dumps(payload, default=str),
-        })
-        stored += _store(conn, symbol, payload, domicile=client.domicile(cik))
+        with engine.begin() as conn:                    # short, and network-free
+            stored += store_company_facts(
+                conn, symbol, fetched.payload,
+                domicile=fetched.domicile, as_of=as_of,
+            )
 
     return {"stored": stored, "skipped": skipped}
+
+
+_READ_NEWEST = text("""
+    SELECT symbol, max(as_of) AS newest
+      FROM fundamentals
+     WHERE symbol = ANY(:symbols)
+     GROUP BY symbol
+""")
+
+
+def stale_symbols(
+    conn: Connection,
+    symbols: list[str],
+    *,
+    as_of: date,
+    max_age_days: int = STALE_FUNDAMENTALS_DAYS,
+) -> list[str]:
+    """Symbols whose newest filing is older than `max_age_days`, or absent.
+
+    This is what turns a silent failure into a red dead-man's switch. A
+    Healthchecks ping proves the job *ran*; it says nothing about whether it
+    produced anything, so a renamed upstream concept or a CIK that stopped
+    resolving would look exactly like a healthy week. An active registrant
+    files quarterly, so past a quarter plus filing lag the likely explanation
+    is our pipeline, not their silence.
+    """
+    if not symbols:
+        return []
+    newest = {
+        r["symbol"]: r["newest"]
+        for r in conn.execute(_READ_NEWEST, {"symbols": symbols}).mappings()
+    }
+    cutoff = as_of - timedelta(days=max_age_days)
+    return sorted(s for s in symbols if newest.get(s) is None or newest[s] < cutoff)
 
 
 def replay_fundamentals(conn: Connection, symbols: list[str]) -> int:
