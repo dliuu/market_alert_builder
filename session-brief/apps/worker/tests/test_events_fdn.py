@@ -86,6 +86,22 @@ def test_a_failed_calendar_endpoint_degrades_to_what_fetched() -> None:
     assert all(e.event_type != "macro" for e in events)
 
 
+def test_a_malformed_earnings_body_degrades_like_a_failed_endpoint() -> None:
+    """`FdnClient.fetch` raises `ValueError` on a non-list body, and a record
+    that isn't a dict raises `AttributeError` from `r.get(...)` — both must
+    degrade the earnings calendar exactly like a 500, not escape and kill the
+    08:15 job (M16 review, finding 1)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        endpoint = request.url.path.rsplit("/", 1)[-1]
+        if endpoint == "earnings-calendar":
+            return httpx.Response(200, text='["not-a-dict"]')
+        return httpx.Response(200, text="[]")
+
+    client = FdnClient("k", transport=httpx.MockTransport(handler))
+    events = fetch_calendar_events(client, session_date=_SESSION, symbols={"ZHELD"})
+    assert all(e.event_type != "earnings" for e in events)
+
+
 def test_a_failed_earnings_endpoint_still_lets_macro_contribute_rows() -> None:
     """The converse direction: a 500 on earnings-calendar must not suppress a
     non-empty economic-calendar. Each helper (_earnings/_ex_dividends/_macro)

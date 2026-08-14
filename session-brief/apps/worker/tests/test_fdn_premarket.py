@@ -54,6 +54,15 @@ def test_latest_prices_survives_a_vendor_500_by_omitting() -> None:
     assert p.get_latest_prices(["ASTS"]) == []
 
 
+def test_latest_prices_survives_a_malformed_minute_by_omitting() -> None:
+    """A minute record missing the shape `_parse_fdn_time` expects (`r["time"]`
+    on something that isn't a dict) must omit the name, not raise out of the
+    job (M16 review, finding 1) — the same degradation a 500 gets above."""
+    body = "[" + '"not-a-dict"' + "]"
+    p = _provider(lambda _r: httpx.Response(200, text=body), {"ASTS": Decimal("74.31")})
+    assert p.get_latest_prices(["ASTS"]) == []
+
+
 def test_index_quotes_derive_prev_close_from_price_minus_change() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/index-quotes"

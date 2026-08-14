@@ -12,9 +12,7 @@ from __future__ import annotations
 
 from datetime import date
 
-import httpx
-
-from worker.providers.fdn import FdnClient
+from worker.providers.fdn import FEED_ERRORS, FdnClient
 
 _PAGES = 3
 _PER_SYMBOL_CAP = 3
@@ -29,15 +27,18 @@ def fetch_held_news(
             records = client.fetch(
                 "latest-news", date=session_date.isoformat(), offset=str(page * 10)
             )
-        except httpx.HTTPError:
+            if not records:
+                break
+            for record in records:
+                headline = str(record.get("article_headline") or "").strip()
+                if not headline:
+                    continue
+                for symbol in record.get("trading_symbols") or []:
+                    if (
+                        str(symbol) in held
+                        and len(out.setdefault(str(symbol), [])) < _PER_SYMBOL_CAP
+                    ):
+                        out[str(symbol)].append(headline)
+        except FEED_ERRORS:
             break
-        if not records:
-            break
-        for record in records:
-            headline = str(record.get("article_headline") or "").strip()
-            if not headline:
-                continue
-            for symbol in record.get("trading_symbols") or []:
-                if str(symbol) in held and len(out.setdefault(str(symbol), [])) < _PER_SYMBOL_CAP:
-                    out[str(symbol)].append(headline)
     return out

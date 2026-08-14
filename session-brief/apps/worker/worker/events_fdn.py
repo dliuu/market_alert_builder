@@ -12,13 +12,12 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-import httpx
 from sqlalchemy.engine import Engine
 
 from worker.assemble_open import _CALENDAR_WINDOW_DAYS
 from worker.constants import DEV_USER_ID
 from worker.events_seed import _UPSERT, CalendarEvent
-from worker.providers.fdn import FdnClient
+from worker.providers.fdn import FEED_ERRORS, FdnClient
 
 
 def fetch_calendar_events(
@@ -43,49 +42,49 @@ def fetch_calendar_events(
 def _earnings(client: FdnClient, d: date, symbols: set[str]) -> list[CalendarEvent]:
     try:
         records = client.fetch("earnings-calendar", date=d.isoformat())
-    except httpx.HTTPError:
+        return [
+            CalendarEvent(
+                sym, "earnings",
+                date.fromisoformat(str(r["earnings_announcement_date"])),
+                f"{sym} {r.get('fiscal_period') or ''} earnings".replace("  ", " "),
+            )
+            for r in records
+            if (sym := str(r.get("trading_symbol"))) in symbols
+            and r.get("earnings_announcement_date")
+        ]
+    except FEED_ERRORS:
         return []
-    return [
-        CalendarEvent(
-            sym, "earnings",
-            date.fromisoformat(str(r["earnings_announcement_date"])),
-            f"{sym} {r.get('fiscal_period') or ''} earnings".replace("  ", " "),
-        )
-        for r in records
-        if (sym := str(r.get("trading_symbol"))) in symbols
-        and r.get("earnings_announcement_date")
-    ]
 
 
 def _ex_dividends(client: FdnClient, d: date, symbols: set[str]) -> list[CalendarEvent]:
     try:
         records = client.fetch("dividends-calendar", date=d.isoformat())
-    except httpx.HTTPError:
+        return [
+            CalendarEvent(
+                sym, "ex_div", date.fromisoformat(str(r["ex_dividend_date"])),
+                f"{sym} ex-dividend",
+            )
+            for r in records
+            if (sym := str(r.get("trading_symbol"))) in symbols and r.get("ex_dividend_date")
+        ]
+    except FEED_ERRORS:
         return []
-    return [
-        CalendarEvent(
-            sym, "ex_div", date.fromisoformat(str(r["ex_dividend_date"])),
-            f"{sym} ex-dividend",
-        )
-        for r in records
-        if (sym := str(r.get("trading_symbol"))) in symbols and r.get("ex_dividend_date")
-    ]
 
 
 def _macro(client: FdnClient, d: date) -> list[CalendarEvent]:
     try:
         records = client.fetch("economic-calendar", date=d.isoformat())
-    except httpx.HTTPError:
+        return [
+            CalendarEvent(
+                None, "macro", date.fromisoformat(str(r["release_date"])),
+                str(r["indicator_name"]),
+            )
+            for r in records
+            if str(r.get("country_code")) == "US"
+            and r.get("release_date") and r.get("indicator_name")
+        ]
+    except FEED_ERRORS:
         return []
-    return [
-        CalendarEvent(
-            None, "macro", date.fromisoformat(str(r["release_date"])),
-            str(r["indicator_name"]),
-        )
-        for r in records
-        if str(r.get("country_code")) == "US"
-        and r.get("release_date") and r.get("indicator_name")
-    ]
 
 
 def ingest_events_for_session(

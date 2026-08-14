@@ -26,6 +26,16 @@ from worker.constants import FDN_TAPE_IDENTIFIERS
 
 _FDN_BASE_URL = "https://financialdata.net/api/v1"
 
+# Everything a bad vendor response can raise. HTTP failures, a body that isn't
+# the list we expect (`FdnClient.fetch`'s own `ValueError`), malformed JSON
+# (`json.JSONDecodeError` subclasses `ValueError`), or an element that isn't a
+# dict (`AttributeError`/`TypeError`/`KeyError` from treating it like one) —
+# all of them degrade the section, never kill the job (the 08:15 run must
+# survive a vendor having a bad morning). Every live-fetch catch site in the
+# fdn feeds (`news_fdn`, `events_fdn`, `FdnPremarketProvider`) catches this
+# tuple, not a narrower one.
+FEED_ERRORS = (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError)
+
 _PREMARKET_OPEN_ET = clock_time(4, 0)  # extended-hours open; window end is capture_stamp
 
 
@@ -126,21 +136,21 @@ class FdnPremarketProvider:
                 continue
             try:
                 records = self._client.fetch("latest-prices", identifier=symbol)
-            except httpx.HTTPError:
+                window = [
+                    r for r in records
+                    if self._window_start <= _parse_fdn_time(str(r["time"])) <= self._window_end
+                ]
+                if not window:
+                    continue
+                window.sort(key=lambda r: str(r["time"]))
+                out.append({
+                    "symbol": symbol,
+                    "extended_last": Decimal(str(window[-1]["close"])),
+                    "extended_v": int(sum(Decimal(str(r.get("volume") or 0)) for r in window)),
+                    "prev_close": prev,
+                })
+            except FEED_ERRORS:
                 continue
-            window = [
-                r for r in records
-                if self._window_start <= _parse_fdn_time(str(r["time"])) <= self._window_end
-            ]
-            if not window:
-                continue
-            window.sort(key=lambda r: str(r["time"]))
-            out.append({
-                "symbol": symbol,
-                "extended_last": Decimal(str(window[-1]["close"])),
-                "extended_v": int(sum(Decimal(str(r.get("volume") or 0)) for r in window)),
-                "prev_close": prev,
-            })
         return out
 
     def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
@@ -182,16 +192,16 @@ class FdnPremarketProvider:
         for symbol, identifier in pairs:
             try:
                 bars = self._client.fetch("futures-prices", identifier=identifier)
-            except httpx.HTTPError:
+                bars.sort(key=lambda r: str(r["date"]), reverse=True)
+                if len(bars) < 2 or str(bars[0]["date"]) != self._session.isoformat():
+                    continue
+                out.append({
+                    "symbol": symbol,
+                    "last": Decimal(str(bars[0]["close"])),
+                    "prev_close": Decimal(str(bars[1]["close"])),
+                })
+            except FEED_ERRORS:
                 continue
-            bars.sort(key=lambda r: str(r["date"]), reverse=True)
-            if len(bars) < 2 or str(bars[0]["date"]) != self._session.isoformat():
-                continue
-            out.append({
-                "symbol": symbol,
-                "last": Decimal(str(bars[0]["close"])),
-                "prev_close": Decimal(str(bars[1]["close"])),
-            })
         return out
 
     def _quote_rows(self, endpoint: str, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -200,20 +210,20 @@ class FdnPremarketProvider:
             records = self._client.fetch(
                 endpoint, identifiers=",".join(identifier for _, identifier in pairs)
             )
-        except httpx.HTTPError:
+            out: list[dict[str, Any]] = []
+            for record in records:
+                symbol = back.get(str(record.get("trading_symbol")))
+                if symbol is None or record.get("price") is None or record.get("change") is None:
+                    continue
+                last = Decimal(str(record["price"]))
+                out.append({
+                    "symbol": symbol,
+                    "last": last,
+                    "prev_close": last - Decimal(str(record["change"])),
+                })
+            return out
+        except FEED_ERRORS:
             return []
-        out: list[dict[str, Any]] = []
-        for record in records:
-            symbol = back.get(str(record.get("trading_symbol")))
-            if symbol is None or record.get("price") is None or record.get("change") is None:
-                continue
-            last = Decimal(str(record["price"]))
-            out.append({
-                "symbol": symbol,
-                "last": last,
-                "prev_close": last - Decimal(str(record["change"])),
-            })
-        return out
 
 
 class FdnProvider:
