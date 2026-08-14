@@ -82,8 +82,8 @@ FDN_TAPE_IDENTIFIERS: dict[str, tuple[str, str]] = {
 # These are plausible index/yield/price levels, not live data — nothing here is
 # redistributed, and `ingest_premarket_for_session` treats this as the
 # lowest-priority source, so a real prior capture (once one exists) always
-# wins. This dict disappears the day a licensed pre-market/futures feed lands
-# and `prior_closes`/`_prior_tape_levels` have real data to return.
+# wins. Consulted only while `FDN_API_KEY` is unset (M16): the live branch
+# derives tape bases from the vendor and never reads this dict.
 TAPE_SEED_LEVELS: dict[str, Decimal] = {
     "ES=F": Decimal("5620.00"),   # E-mini S&P 500 futures, nominal index level
     "NQ=F": Decimal("19800.00"),  # E-mini Nasdaq-100 futures

@@ -18,6 +18,8 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from worker import config
 from worker.constants import FDN_TAPE_IDENTIFIERS
@@ -70,6 +72,27 @@ class FdnClient:
         symbol = params.get("identifier") or params.get("identifiers") or "*"
         self.captured.append((endpoint, symbol, response.text))
         return data
+
+
+_INSERT_RAW = text("""
+    INSERT INTO raw_payloads (source, endpoint, symbol, as_of, body)
+    VALUES ('fdn', :endpoint, :symbol, :as_of, CAST(:body AS jsonb))
+    ON CONFLICT (source, endpoint, symbol, as_of) DO NOTHING
+""")
+
+
+def store_captured_payloads(conn: Connection, client: FdnClient, *, as_of: date) -> int:
+    """Invariant 5 for the fdn feeds: every captured response, verbatim.
+    Batch endpoints store under the joined identifiers string; symbol-less
+    endpoints (calendars, news) under '*'. Returns new rows written."""
+    written = 0
+    for endpoint, symbol, body in client.captured:
+        result = conn.execute(
+            _INSERT_RAW,
+            {"endpoint": endpoint, "symbol": symbol, "as_of": as_of, "body": body},
+        )
+        written += result.rowcount
+    return written
 
 
 class FdnPremarketProvider:

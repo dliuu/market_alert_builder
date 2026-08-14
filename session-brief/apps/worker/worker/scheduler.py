@@ -27,6 +27,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from datetime import time as clock_time  # `time` is already the stdlib module here
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -36,6 +37,9 @@ from sqlalchemy.engine import Connection, Engine
 from worker import calendar, config
 from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, DEV_USER_ID
 from worker.providers.base import MarketDataProvider, PremarketProvider
+
+if TYPE_CHECKING:
+    from worker.providers.fdn import FdnClient
 
 UTC = ZoneInfo("UTC")
 ET = calendar.ET  # America/New_York — the tz all wall-clock scheduling uses
@@ -344,13 +348,15 @@ def ingest_premarket_for_session(
     prior_session: date,
     user_id: str = DEV_USER_ID,
     provider: PremarketProvider | None = None,
+    client: FdnClient | None = None,
 ) -> int:
     """The 08:00 stage (docs/02): capture the morning's pre-market prints and the
     overnight macro tape into `quotes`.
 
-    The provider defaults to the synthetic feed. That is not a test seam — it is
-    the shipping configuration until the premium pre-market licence lands (D8),
-    and swapping it is a one-line change here (see
+    Live when a `client` is passed or `config.FDN_API_KEY` is set (M16);
+    synthetic otherwise. That flip is not a test seam — it is the shipping
+    configuration until the premium pre-market licence lands (D8), and
+    swapping it is a one-line change here (see
     `config.premarket_feed_is_synthetic()`, the one flag that flips alongside
     it).
 
@@ -397,8 +403,18 @@ def ingest_premarket_for_session(
         # freshest real base once the tape has run at least once before.
         tape_closes |= _prior_tape_levels(conn, tape_symbols, prior_session)
 
-    held_provider = provider or SyntheticPremarketProvider(held_closes, session_date)
-    tape_provider = provider or SyntheticPremarketProvider(tape_closes, session_date)
+    from worker.providers.fdn import FdnClient, FdnPremarketProvider, store_captured_payloads
+
+    live_client = client or (FdnClient() if config.FDN_API_KEY else None)
+    if live_client is not None:
+        # Live (M16): held prev_closes still come from bars_daily — the one
+        # authoritative base — while tape rows derive theirs from the vendor,
+        # so TAPE_SEED_LEVELS is never consulted on this branch.
+        held_provider = provider or FdnPremarketProvider(live_client, held_closes, session_date)
+        tape_provider = provider or FdnPremarketProvider(live_client, {}, session_date)
+    else:
+        held_provider = provider or SyntheticPremarketProvider(held_closes, session_date)
+        tape_provider = provider or SyntheticPremarketProvider(tape_closes, session_date)
     with engine.begin() as conn:
         stamp = capture_stamp(session_date)
         written = ingest_premarket(
@@ -413,6 +429,8 @@ def ingest_premarket_for_session(
             session_date=session_date,
             captured_at=stamp,
         )
+        if live_client is not None:
+            store_captured_payloads(conn, live_client, as_of=session_date)
         return written
 
 
