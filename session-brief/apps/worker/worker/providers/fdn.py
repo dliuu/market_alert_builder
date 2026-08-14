@@ -135,9 +135,12 @@ class FdnPremarketProvider:
         """Route each internal symbol through FDN_TAPE_IDENTIFIERS. Quote
         endpoints are batched (identifiers=a,b); futures are one call per
         identifier with daily bars, where the session-dated bar against the
-        prior settle is the overnight read — no session-dated bar, no row."""
+        prior settle is the overnight read — no session-dated bar, no row.
+        Deduped up front (order-preserving) so a repeated symbol costs one
+        vendor call and yields one row, never two."""
+        unique_symbols = list(dict.fromkeys(symbols))
         routed: dict[str, list[tuple[str, str]]] = {}
-        for symbol in symbols:
+        for symbol in unique_symbols:
             route = FDN_TAPE_IDENTIFIERS.get(symbol)
             if route is not None:
                 routed.setdefault(route[0], []).append((symbol, route[1]))
@@ -149,7 +152,7 @@ class FdnPremarketProvider:
             else:
                 out.extend(self._quote_rows(endpoint, pairs))
         by_symbol = {row["symbol"]: row for row in out}
-        return [by_symbol[s] for s in symbols if s in by_symbol]
+        return [by_symbol[s] for s in unique_symbols if s in by_symbol]
 
     def _futures_rows(self, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

@@ -115,3 +115,21 @@ def test_an_unmapped_tape_symbol_is_omitted_without_a_fetch() -> None:
 def test_a_tape_endpoint_500_yields_an_empty_feed() -> None:
     got = _provider(lambda _r: httpx.Response(500), {}).get_index_quotes(["^TNX"])
     assert got == []
+
+
+def test_a_duplicated_futures_symbol_yields_one_row_and_one_fetch() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, text=(
+            '[{"trading_symbol": "ES", "date": "2026-08-13", "close": 5600.00},'
+            ' {"trading_symbol": "ES", "date": "2026-08-14", "close": 5620.00}]'
+        ))
+
+    got = _provider(handler, {}).get_futures_prices(["ES=F", "ES=F"])
+    assert got == [
+        {"symbol": "ES=F", "last": Decimal("5620.00"), "prev_close": Decimal("5600.00")}
+    ]
+    assert calls == 1
