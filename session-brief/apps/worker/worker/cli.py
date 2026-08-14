@@ -6,6 +6,7 @@ import argparse
 from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -338,6 +339,23 @@ def _fdn_probe_cmd(symbols_arg: str | None) -> None:
     _fdn_probe(client, symbols=symbols)
 
 
+def _safe_error(exc: Exception) -> str:
+    """Renders a caught FEED_ERRORS exception for a human to read, without
+    ever leaking the vendor key: FdnClient authenticates via a `key` query
+    parameter (never a header — see its docstring's "never log request URLs"),
+    and httpx's own __str__ for HTTPStatusError and most other HTTPError
+    subclasses embeds the full request URL, key included. This diagnostic's
+    entire purpose is to be pasted and screenshotted by a human, so the raw
+    exception text must never reach `print`. Non-httpx members of FEED_ERRORS
+    (ValueError, TypeError, AttributeError, KeyError, ArithmeticError) are our
+    own messages, not the vendor's, and are safe to show as-is."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+    if isinstance(exc, httpx.HTTPError):
+        return type(exc).__name__
+    return str(exc)
+
+
 def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
     """Day-one verification (M16 Task 8): the handful of vendor assumptions
     that could not be checked offline. Read-only — no database writes, no
@@ -357,7 +375,7 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
             first_symbol = records[0].get("trading_symbol") if records else "n/a"
             print(f"✓ {label}: {len(records)} record(s), first trading_symbol={first_symbol!r}")
         except FEED_ERRORS as exc:
-            print(f"✗ {label}: {exc}")
+            print(f"✗ {label}: {_safe_error(exc)}")
 
     # 2. latest-prices for one held symbol: the two most recent `time` values
     # next to datetime.now(UTC) — confirms the UTC assumption in
@@ -370,7 +388,7 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
             times = sorted(str(r.get("time")) for r in records)[-2:]
             print(f"✓ {label}: latest times={times}  now(UTC)={datetime.now(UTC).isoformat()}")
         except FEED_ERRORS as exc:
-            print(f"✗ {label}: {exc}")
+            print(f"✗ {label}: {_safe_error(exc)}")
     else:
         print("✗ latest-prices: no held symbols to probe")
 
@@ -383,7 +401,7 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
         latest_date = bars[0].get("date") if bars else "n/a"
         print(f"✓ {label}: latest bar date={latest_date}  today={date.today().isoformat()}")
     except FEED_ERRORS as exc:
-        print(f"✗ {label}: {exc}")
+        print(f"✗ {label}: {_safe_error(exc)}")
 
     # 4. stock-quotes for one proxy ETF: raw record keys — verifies the
     # price/change field assumption.
@@ -393,7 +411,7 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
         keys = sorted(records[0].keys()) if records else []
         print(f"✓ {label}: keys={keys}")
     except FEED_ERRORS as exc:
-        print(f"✗ {label}: {exc}")
+        print(f"✗ {label}: {_safe_error(exc)}")
 
     # 5. Each calendar + latest-news for today: record counts (also proves
     # the key's tier covers Premium).
@@ -404,14 +422,14 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
             records = client.fetch(endpoint, date=today)
             print(f"✓ {label}: {len(records)} record(s)")
         except FEED_ERRORS as exc:
-            print(f"✗ {label}: {exc}")
+            print(f"✗ {label}: {_safe_error(exc)}")
 
     label = f"latest-news {today}"
     try:
         records = client.fetch("latest-news", date=today)
         print(f"✓ {label}: {len(records)} record(s)")
     except FEED_ERRORS as exc:
-        print(f"✗ {label}: {exc}")
+        print(f"✗ {label}: {_safe_error(exc)}")
 
     # 6. latest-news page size (Task 7 review finding): news_fdn.py hardcodes
     # offset=page*10, assuming 10 records per page. Confirm live, and confirm
@@ -424,7 +442,7 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
             f"date param accepted (200 for date={today})"
         )
     except FEED_ERRORS as exc:
-        print(f"✗ {label}: {exc}")
+        print(f"✗ {label}: {_safe_error(exc)}")
 
 
 def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
