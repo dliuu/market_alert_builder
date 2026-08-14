@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from worker import config
+from worker.constants import FDN_TAPE_IDENTIFIERS
 
 _FDN_BASE_URL = "https://financialdata.net/api/v1"
 
@@ -120,13 +121,73 @@ class FdnPremarketProvider:
         return out
 
     def get_futures_prices(self, symbols: list[str]) -> list[dict[str, Any]]:
-        return []  # Task 4
+        return self._tape(symbols)
 
     def get_index_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
-        return []  # Task 4
+        return self._tape(symbols)
 
     def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
-        return []  # Task 4
+        return self._tape(symbols)
+
+    # --- internals ---------------------------------------------------------
+
+    def _tape(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Route each internal symbol through FDN_TAPE_IDENTIFIERS. Quote
+        endpoints are batched (identifiers=a,b); futures are one call per
+        identifier with daily bars, where the session-dated bar against the
+        prior settle is the overnight read — no session-dated bar, no row."""
+        routed: dict[str, list[tuple[str, str]]] = {}
+        for symbol in symbols:
+            route = FDN_TAPE_IDENTIFIERS.get(symbol)
+            if route is not None:
+                routed.setdefault(route[0], []).append((symbol, route[1]))
+
+        out: list[dict[str, Any]] = []
+        for endpoint, pairs in routed.items():
+            if endpoint == "futures-prices":
+                out.extend(self._futures_rows(pairs))
+            else:
+                out.extend(self._quote_rows(endpoint, pairs))
+        by_symbol = {row["symbol"]: row for row in out}
+        return [by_symbol[s] for s in symbols if s in by_symbol]
+
+    def _futures_rows(self, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for symbol, identifier in pairs:
+            try:
+                bars = self._client.fetch("futures-prices", identifier=identifier)
+            except httpx.HTTPError:
+                continue
+            bars.sort(key=lambda r: str(r["date"]), reverse=True)
+            if len(bars) < 2 or str(bars[0]["date"]) != self._session.isoformat():
+                continue
+            out.append({
+                "symbol": symbol,
+                "last": Decimal(str(bars[0]["close"])),
+                "prev_close": Decimal(str(bars[1]["close"])),
+            })
+        return out
+
+    def _quote_rows(self, endpoint: str, pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        back = {identifier: symbol for symbol, identifier in pairs}
+        try:
+            records = self._client.fetch(
+                endpoint, identifiers=",".join(identifier for _, identifier in pairs)
+            )
+        except httpx.HTTPError:
+            return []
+        out: list[dict[str, Any]] = []
+        for record in records:
+            symbol = back.get(str(record.get("trading_symbol")))
+            if symbol is None or record.get("price") is None or record.get("change") is None:
+                continue
+            last = Decimal(str(record["price"]))
+            out.append({
+                "symbol": symbol,
+                "last": last,
+                "prev_close": last - Decimal(str(record["change"])),
+            })
+        return out
 
 
 class FdnProvider:

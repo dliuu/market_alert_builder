@@ -52,3 +52,66 @@ def test_latest_prices_omits_a_name_with_no_window_prints() -> None:
 def test_latest_prices_survives_a_vendor_500_by_omitting() -> None:
     p = _provider(lambda _r: httpx.Response(500), {"ASTS": Decimal("74.31")})
     assert p.get_latest_prices(["ASTS"]) == []
+
+
+def test_index_quotes_derive_prev_close_from_price_minus_change() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/index-quotes"
+        assert request.url.params["identifiers"] == "^TNX,^VIX"
+        return httpx.Response(200, text=(
+            '[{"trading_symbol": "^TNX", "price": 4.25, "change": 0.03},'
+            ' {"trading_symbol": "^VIX", "price": 15.50, "change": -0.75}]'
+        ))
+
+    got = _provider(handler, {}).get_index_quotes(["^TNX", "^VIX"])
+    assert got == [
+        {"symbol": "^TNX", "last": Decimal("4.25"), "prev_close": Decimal("4.22")},
+        {"symbol": "^VIX", "last": Decimal("15.50"), "prev_close": Decimal("16.25")},
+    ]
+
+
+def test_forex_route_maps_dxy_to_the_index_endpoint_and_back() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/index-quotes"
+        assert request.url.params["identifiers"] == "^DXY"
+        return httpx.Response(
+            200, text='[{"trading_symbol": "^DXY", "price": 103.40, "change": 0.20}]'
+        )
+
+    got = _provider(handler, {}).get_forex_quotes(["DXY"])
+    assert got == [
+        {"symbol": "DXY", "last": Decimal("103.40"), "prev_close": Decimal("103.20")}
+    ]
+
+
+def test_futures_use_the_session_dated_bar_over_the_prior_settle() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/futures-prices"
+        assert request.url.params["identifier"] == "ES"
+        return httpx.Response(200, text=(
+            '[{"trading_symbol": "ES", "date": "2026-08-13", "close": 5600.00},'
+            ' {"trading_symbol": "ES", "date": "2026-08-14", "close": 5620.00}]'
+        ))
+
+    got = _provider(handler, {}).get_futures_prices(["ES=F"])
+    assert got == [
+        {"symbol": "ES=F", "last": Decimal("5620.00"), "prev_close": Decimal("5600.00")}
+    ]
+
+
+def test_futures_with_no_session_dated_bar_are_omitted() -> None:
+    body = '[{"trading_symbol": "ES", "date": "2026-08-13", "close": 5600.00}]'
+    got = _provider(lambda _r: httpx.Response(200, text=body), {}).get_futures_prices(["ES=F"])
+    assert got == []
+
+
+def test_an_unmapped_tape_symbol_is_omitted_without_a_fetch() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not fetch for an unmapped symbol")
+
+    assert _provider(handler, {}).get_index_quotes(["^UNMAPPED"]) == []
+
+
+def test_a_tape_endpoint_500_yields_an_empty_feed() -> None:
+    got = _provider(lambda _r: httpx.Response(500), {}).get_index_quotes(["^TNX"])
+    assert got == []
