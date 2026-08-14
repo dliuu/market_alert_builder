@@ -52,6 +52,19 @@ def next_session(d: date) -> date:
     return nxt
 
 
+def sessions_between(start: date, end: date) -> int:
+    """Trading sessions in ``(start, end]`` — start excluded, end included.
+
+    "Within 5 trading days" is a distance the catalyst detectors (M17) measure
+    constantly, and calendar arithmetic is the wrong answer to it: a Thursday
+    and the following Tuesday are five calendar days apart but three sessions.
+    Zero when ``end`` is on or before ``start``."""
+    if end <= start:
+        return 0
+    sessions = _calendar().sessions_in_range(start.isoformat(), end.isoformat())
+    return len(sessions) - (1 if is_session(start) else 0)
+
+
 def previous_session(d: date) -> date:
     """The last trading session strictly before ``d``. ``d`` need not itself be a
     session: the open brief reads it with a session ``D`` (at 08:15 every figure

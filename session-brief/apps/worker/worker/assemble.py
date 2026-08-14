@@ -31,6 +31,8 @@ from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
 from worker.assemble_shared import claim_dict, resolved_dict, round_bps, session_label
 from worker.attribution import material_residual, read_attribution_decomp
+from worker.catalysts import CatalystItem, mark_reported, read_catalysts
+from worker.catalysts_section import catalysts_section
 from worker.claims import (
     Claim,
     ResolvedClaim,
@@ -39,7 +41,7 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
-from worker.constants import ATTRIBUTION_MODEL_VERSION
+from worker.constants import ATTRIBUTION_MODEL_VERSION, CATALYST_MODEL_VERSION
 from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
 
@@ -51,8 +53,9 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 # |resid_z| salience on the close brief's attribution rows).
 # D22 said M13 and M15 both bump and landing order assigns the number. M13
 # landed first and took v4, so M15 is v5: the §2/§3 row fields and the
-# horizon-0 morning claim.
-SCHEMA_VERSION = 5
+# horizon-0 morning claim. v6 = M17: the close brief's catalysts section
+# (insider flow and Form 144 supply signals) and its row fields.
+SCHEMA_VERSION = 6
 
 _BPS_PER_UNIT = 10_000
 
@@ -80,6 +83,7 @@ def assemble(
     missing: list[str] | None = None,
     stale: list[str] | None = None,
     decomp: dict[str, dict[str, object]] | None = None,
+    catalysts: list[CatalystItem] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -106,6 +110,18 @@ def assemble(
     decomp = decomp or {}
     shown, suppressed = _tier_positions(result, tape, decomp)
 
+    sections: list[dict[str, object]] = [
+        _attribution(shown, closes, decomp),
+        _tape_quality(shown, tape),
+    ]
+    # Catalysts is post-close data — Form 4s and 144s land after the bell — so
+    # it belongs to the close brief only. The open brief is assembled elsewhere
+    # (assemble_open.py) and never carries it.
+    if kind == "close":
+        sections.append(
+            catalysts_section(catalysts or [], held=[p.symbol for p in result.positions])
+        )
+
     payload = {
         "schema_version": SCHEMA_VERSION,
         "brief_id": f"{user_id}-{session_date.isoformat()}-{kind}",
@@ -116,7 +132,7 @@ def assemble(
         "subject": _subject(kind, session_date, book),
         "one_thing": None,  # narration, M8
         "book": _book(book),
-        "sections": [_attribution(shown, closes, decomp), _tape_quality(shown, tape)],
+        "sections": sections,
         "flags": list(flags or []),
         "claims": [claim_dict(c, user_id, session_date, kind) for c in claims or []],
         "resolved_claims": [resolved_dict(r) for r in resolved or []],
@@ -318,6 +334,12 @@ def assemble_and_store(
     # surfaced flags, the 08:15 fire would spend the budget and the 16:45 one
     # would silently render nothing. D18 only put them here because the open
     # brief didn't exist yet. `flags[]` stays in the shape, empty.
+    catalysts = (
+        read_catalysts(conn, user_id, symbols, session_date,
+                       model_version=CATALYST_MODEL_VERSION)
+        if kind == "close" else []
+    )
+
     obj = assemble(
         result,
         closes,
@@ -329,15 +351,20 @@ def assemble_and_store(
         claims=emitted,
         resolved=resolved,
         decomp=decomp,
+        catalysts=catalysts,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above) but emits none.
+        # Catalysts are deliberately *not* marked reported here: a brief that
+        # never sends must not consume anyone's report-once budget, or the
+        # signal would arrive already-condensed on the next session that does.
         return None
     # Stage ⑤: prose is added only to briefs that actually send, and never at
     # the cost of the send — a failed Claude call returns the object unchanged.
     obj = narrate_and_apply(obj, narrator)
     _store_brief(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
+    mark_reported(conn, user_id, catalysts, now=datetime.now(UTC))
     return obj
 
 

@@ -32,6 +32,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const brief = row.body as unknown as BriefObject;
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
+  const catalysts = brief.sections.find((s) => s.id === "catalysts");
   const overnightTape = brief.sections.find((s) => s.id === "overnight_tape");
   // Same key as the email template: `assemble_open` appends this exact string
   // to `data_quality.stale` while `constants.PREMARKET_FEED_IS_SYNTHETIC` is
@@ -326,6 +327,53 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         <p style={S.muted}>{brief.suppressed.join(", ")} — unchanged.</p>
       )}
 
+      {/* Catalysts (M17) — one row per signal, already ordered by severity and
+          already decayed by assembly. The archive shows the ref date and the
+          tier, which the email condenses away. */}
+      {catalysts && catalysts.rows.length > 0 && (
+        <section style={S.card}>
+          <h2 style={S.h2}>Catalysts</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Symbol</th>
+                <th style={S.th}>Source</th>
+                <th style={S.th}>Signal</th>
+                <th style={S.th}>Date</th>
+                <th style={S.th}>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {catalysts.rows.map((r: Row, i: number) => (
+                <tr key={`${r.symbol}-${r.kind}-${r.ref_date}-${i}`}>
+                  <td style={S.td}>
+                    {r.tier === "full" && <span style={{ color: "#8b2d2d" }}>⚠ </span>}
+                    {r.symbol}
+                  </td>
+                  <td style={S.td}>{r.source}</td>
+                  <td style={S.td}>{r.kind}</td>
+                  <td style={S.td}>{r.ref_date ?? "—"}</td>
+                  <td style={S.td}>
+                    {catalystDetail(r)}
+                    {r.ambiguous_code && (
+                      <span
+                        style={S.provMarker}
+                        title="vendor transaction type unrecognised; tax withholding and option
+                               exercises could not be filtered (open question 2)"
+                      >
+                        {" "}
+                        ?
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {catalysts.note && <p style={S.muted}>{catalysts.note}</p>}
+        </section>
+      )}
+
       {/* How they traded — tape quality for the movers */}
       {tape && tape.rows.length > 0 && (
         <section style={S.card}>
@@ -424,6 +472,22 @@ function pct(fraction: number): string {
   const sign = fraction >= 0 ? "+" : "−";
   return `${sign}${Math.abs(fraction * 100).toFixed(2)}%`;
 }
+// The figures for one catalyst row. Every number comes from the object; a null
+// renders as "size unknown" rather than dropping the row, because an unknown
+// size is information and a missing row is not (open question 4).
+function catalystDetail(r: Row): string {
+  const parts: string[] = [];
+  if (r.insider_count != null) parts.push(`${r.insider_count} insiders`);
+  if (r.value_cents != null) parts.push(signedDollars(r.value_cents).replace("+", ""));
+  if (r.pct_of_holding != null) parts.push(`${(r.pct_of_holding * 100).toFixed(1)}% of holding`);
+  if (r.shares != null) parts.push(`${Math.round(r.shares).toLocaleString()} shares`);
+  if (r.pct_of_float != null) parts.push(`${(r.pct_of_float * 100).toFixed(2)}% of float`);
+  else if (r.source === "proposed") parts.push("size unknown");
+  if (r.days_to_event != null) parts.push(`${r.days_to_event} sessions pre-earnings`);
+  if (r.days_outstanding != null) parts.push(`${r.days_outstanding} days outstanding`);
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : pct(fraction);
 }

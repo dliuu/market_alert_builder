@@ -9,6 +9,7 @@ arrive with later milestones but are declared now to keep the seam stable.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any, Protocol
 
 
@@ -49,6 +50,35 @@ class MarketDataProvider(Protocol):
         ...
 
     def dividends(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        ...
+
+
+class CatalystProvider(Protocol):
+    """Insider filings, Form 144s, and the reference data the catalyst
+    detectors need (M17).
+
+    A third protocol rather than more methods on ``MarketDataProvider``, for the
+    reason M15 found the hard way (D28): protocols are structural, so widening
+    the shared one makes ``TiingoProvider`` stop conforming to a contract it can
+    never satisfy — there is no EOD-vendor call that returns a Form 4.
+
+    ``offset`` exists because these endpoints take no date range and return
+    newest-first, so bounded recency means walking pages from ``offset=0`` while
+    records stay newer than the watermark. Never drain full history.
+    """
+
+    def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        """Form 4 transactions, newest first. Page size 50."""
+        ...
+
+    def proposed_sales(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        """Form 144 proposed sales, newest first. Page size 100."""
+        ...
+
+    def public_float(self, symbol: str) -> Decimal | None:
+        """Shares in the public float, or None when the vendor doesn't say —
+        which renders as "size unknown" rather than dropping the row
+        (open question 4)."""
         ...
 
 

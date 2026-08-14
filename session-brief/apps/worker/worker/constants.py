@@ -97,3 +97,44 @@ TAPE_SEED_LEVELS: dict[str, Decimal] = {
     "EUFN": Decimal("26.00"),     # Europe (financials) proxy
     "EWG": Decimal("34.00"),      # Germany (industrials) proxy
 }
+
+
+# --- Catalysts (M17/M18) ----------------------------------------------------
+#
+# Severity is 1-5 and stays internal to worker/catalysts.py: assembly maps it to
+# the BriefObject's `tier`, because assembly decides suppression and the
+# renderer never does (D16). Thresholds live here rather than in a YAML config
+# layer this repo doesn't have — the M15 TAPE_SYMBOLS precedent (D30). Expect
+# them to move: cross-source calibration needs weeks of live tuning.
+
+# §5.1 insider (Form 4)
+CLEVEL_BUY_SEVERITY = 5
+CLUSTER_SEVERITY = 4
+CLUSTER_MIN_INSIDERS = 3
+CLUSTER_SESSIONS = 5          # trading days, never calendar days (invariant 7)
+PRE_EARNINGS_SEVERITY = 4
+PRE_EARNINGS_SESSIONS = 5
+OUTSIZED_SALE_SEVERITY = 3
+OUTSIZED_SALE_PCT = Decimal("0.40")
+CADENCE_BREAK_SEVERITY = 3
+CADENCE_MIN_PRIOR = 4
+CADENCE_SIZE_MULTIPLE = Decimal("2")
+
+# §5.2 proposed sales (Form 144). `large_144` and `standard_144` are a magnitude
+# ladder on one event and are exclusive; `unconverted_144` is independent and
+# can accompany either. The 45 days are calendar days — Rule 144's own window is
+# calendar-based, so a trading-day count would be measuring the wrong thing.
+LARGE_144_SEVERITY = 4
+LARGE_144_PCT = Decimal("0.005")
+STANDARD_144_SEVERITY = 2
+UNCONVERTED_144_SEVERITY = 3
+UNCONVERTED_144_DAYS = 45
+
+# How far back a session's brief looks for signals. A Form 4 filed three weeks
+# ago is still the reason a name is moving today; report-once decay, not this
+# window, is what stops it being repeated.
+CATALYST_LOOKBACK_DAYS = 30
+
+# Stamped on every signal so a rule change produces a new version alongside the
+# old rather than mutating history — the ATTRIBUTION_MODEL_VERSION pattern (D21).
+CATALYST_MODEL_VERSION = "1"

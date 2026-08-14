@@ -11,6 +11,7 @@ const WIDTH = 600;
 export function CloseBrief({ brief }: { brief: BriefObject }) {
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
+  const catalysts = brief.sections.find((s) => s.id === "catalysts");
   const dateLong = formatDate(brief.session_date);
   const preheader = brief.one_thing ?? brief.subject;
 
@@ -79,6 +80,20 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
               <Tape rows={tape.rows} />
             </Section>
           )}
+
+          {/* catalysts (M17) — the supply-side events the price series can't
+              explain. Rows arrive one per signal, already ordered by severity
+              and already decayed; the template groups by symbol and never
+              re-ranks or re-suppresses (D16). */}
+          {catalysts && catalysts.rows.length > 0 && (
+            <Section style={sec}>
+              <SectionHead title="Catalysts" note="insider flow and proposed supply" />
+              <Catalysts rows={catalysts.rows} />
+            </Section>
+          )}
+
+          {/* explicit absence is information, and it's cheap */}
+          {catalysts?.note && <p style={note}>{catalysts.note}.</p>}
 
           {/* No exposure check here since M14: §6 is the open brief's section
               (docs/05), and the weekly flag cap is one clock that cannot serve
@@ -278,6 +293,102 @@ function Tape({ rows }: { rows: Row[] }) {
   );
 }
 
+// Catalysts, grouped by symbol. A `full`-tier signal gets its figures; a
+// `brief`-tier one (second sighting, or an inherently minor signal) is
+// condensed to a single line. Assembly decided which is which — the tier is
+// read here, never computed.
+function Catalysts({ rows }: { rows: Row[] }) {
+  const symbols: string[] = [];
+  for (const r of rows) {
+    const s = r.symbol ?? "—";
+    if (!symbols.includes(s)) symbols.push(s);
+  }
+
+  return (
+    <>
+      {symbols.map((symbol) => {
+        const mine = rows.filter((r) => (r.symbol ?? "—") === symbol);
+        const lead = mine.some((r) => r.tier === "full");
+        return (
+          <table
+            key={symbol}
+            role="presentation"
+            width="100%"
+            cellPadding={0}
+            cellSpacing={0}
+            style={dataTable}
+          >
+            <tbody>
+              <tr>
+                <td style={tdL}>
+                  <span style={sym}>
+                    {lead && <span style={{ color: palette.ox }}>⚠ </span>}
+                    {symbol}
+                  </span>
+                  {mine.map((r, i) => (
+                    <span key={`${r.kind}-${r.ref_date}-${i}`} style={why}>
+                      {catalystLine(r)}
+                      {r.why && ` — ${r.why}`}
+                    </span>
+                  ))}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        );
+      })}
+    </>
+  );
+}
+
+// One line of prose-free fact per signal. Every figure comes from the object;
+// nothing here is computed and nothing is inferred from a missing value — an
+// unknown size renders as "size unknown", which is information (open q. 4).
+function catalystLine(r: Row): string {
+  const on = r.ref_date ? shortDate(r.ref_date) : "";
+  const suffix = r.ambiguous_code ? " [type unclassified]" : "";
+
+  switch (r.kind) {
+    case "clevel_buy":
+      return `Officer purchase — ${dollars(r.value_cents ?? 0)}, ${on}${suffix}`;
+    case "cluster":
+      return `Insider cluster — ${r.insider_count ?? 0} insiders, ${dollars(
+        r.value_cents ?? 0,
+      )}, ${on}${suffix}`;
+    case "pre_earnings":
+      return `Sale ${r.days_to_event ?? 0} sessions pre-earnings — ${dollars(
+        r.value_cents ?? 0,
+      )}${suffix}`;
+    case "outsized_sale":
+      return `Sold ${proportion(r.pct_of_holding)} of holding, ${on}${suffix}`;
+    case "cadence_break":
+      return `Off usual cadence — ${dollars(r.value_cents ?? 0)}, ${on}${suffix}`;
+    case "large_144":
+    case "standard_144":
+      return `Form 144 — ${shares(r.shares)} proposed (${
+        r.pct_of_float != null ? `${proportion(r.pct_of_float)} of float` : "size unknown"
+      }), ${on}`;
+    case "unconverted_144":
+      return `Form 144 unexecuted after ${r.days_outstanding ?? 0} days — ${shares(
+        r.shares,
+      )}, ${on}`;
+    default:
+      return `${r.kind ?? "signal"} ${on}`;
+  }
+}
+
+function shares(v: number | null | undefined): string {
+  if (v == null) return "—";
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M shares`;
+  if (v >= 1_000) return `${Math.round(v / 1_000)}K shares`;
+  return `${Math.round(v)} shares`;
+}
+
+function shortDate(iso: string): string {
+  const [, m, d] = iso.split("-");
+  return `${m}/${d}`;
+}
+
 // Range bar as a two-cell table (email-safe): a proportional fill, pine when the
 // close sits in the top half of the day's range, oxblood when in the bottom.
 function RangeBar({ position }: { position: number | null | undefined }) {
@@ -373,6 +484,12 @@ function signedPct(pct: number): string {
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
+}
+
+// A proportion, not a change: "45% of holding" takes no sign. Signing it would
+// read as a move of +45%, which is a different and much more alarming claim.
+function proportion(fraction: number | null | undefined): string {
+  return fraction == null ? "—" : `${(fraction * 100).toFixed(fraction < 0.01 ? 2 : 1)}%`;
 }
 
 // ─── styles ───

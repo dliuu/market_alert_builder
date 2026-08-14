@@ -352,3 +352,134 @@ the live/synthetic mode.
 *Reverses if:* fdnpy ships a `parse_float` hook or a Decimal mode, making the
 hand-rolled transport redundant; or fdn adds header auth, removing the query-
 parameter exception.
+
+---
+
+**D30 — M17/M18 catalysts: one signal table, a third provider protocol, and reporting state keyed on natural identity**
+The catalysts module (insider flow, Form 144, index and ETF membership, lockups,
+index eligibility) arrives as an external spec written against a generic repo.
+Seven of its structural choices are reconciled here; the detector rules,
+thresholds and severity semantics are adopted unchanged. Full design:
+`docs/superpowers/specs/2026-08-14-m17-catalysts-design.md`.
+
+**One `catalyst_signals` table, not six `sig_*` tables and a `UNION ALL` view.**
+The source spec gives each source its own Tier-2 table and then normalizes all
+six into a `catalyst_feed` view with a single shape —
+`(source, source_id, ticker, ref_date, severity, kind, detail jsonb)` — before
+anything reads them. That view is the evidence the single table is the right
+shape: six tables plus a six-arm view, each arm needing its own
+`model_version` filter, is three schema objects' worth of ceremony for a row
+shape the design itself flattens. `flags` is the standing precedent (one table,
+a `flag_type` CHECK, a `payload jsonb`, nine heterogeneous types), and
+`attribution` is the same. Raw tables stay separate — genuinely different
+natural keys and columns — and the detectors stay separate modules; only the
+signal row unifies, one layer earlier than the source put it. `catalyst_feed`
+becomes a query in `worker/catalysts.py`, not a database object.
+
+**Shared tables, except reporting state.** Insider filings and index membership
+are facts about a symbol, not a book, so the raw and signal tables follow the
+market-data carve-out (docs/03, D21): no `user_id`, keyed by symbol, ingested
+once per symbol regardless of user count. `catalyst_reporting_state` is the
+exception and **does** carry `user_id`: report-once decay is a property of a
+reader's attention, and sharing one curve would open user #2's first brief at
+"condensed" because user #1 had already read it.
+
+**Reporting state keys on natural identity, not the signal's surrogate id.**
+The source keys it `(source, source_id)` — but its own rebuild story reassigns
+`source_id`, so a rebuild would orphan every row and resurface every stale
+cluster at full volume. It keys on `(user_id, source, symbol, kind, ref_date)`
+instead, which survives a rebuild by construction. The load-bearing rule is
+carried over verbatim: **reporting state is never dropped when signals are
+rebuilt**, and a regression test asserts it.
+
+**A third protocol, `CatalystProvider`.** Widening `MarketDataProvider` with the
+premium catalyst endpoints would break `mypy --strict` exactly as it did in M15
+(D28) — protocols are structural and `TiingoProvider` cannot serve them. One
+protocol per capability. `FdnProvider` implements it, `SyntheticCatalystProvider`
+mirrors `SyntheticPremarketProvider`'s determinism contract (a pure function of
+`(symbol, date)` by hash, never `random`).
+
+**The source spec's `fdnpy` wrapper is dropped; M16's `FdnClient` is extended
+instead.** The source builds a hardened wrapper around four real `fdnpy` 0.5.0
+defects. M16 had already bypassed the SDK for a better reason — fdnpy parses
+prices as float and the money invariant wants `parse_float=Decimal` on every
+byte, the same reasoning `TiingoProvider` follows — so there is no fdnpy in the
+request path to harden. Of the four defects, the timeout is already handled and
+the other three describe code that never executes. What survives is what
+`FdnClient` genuinely lacks and catalysts needs: capped retry with jittered
+backoff, a token-bucket rate limiter (the order-300-call ETF pass is the first
+workload here big enough to hit a tier ceiling), and bounded pagination. The
+pagination requirement is a property of the *API*, not the SDK — no endpoint
+takes a date range and records return newest-first, so without a
+watermark-bounded `fetch_until` the only way to ask for recent filings is to
+read every filing an issuer has ever made. This makes M16 a hard prerequisite:
+it supplies `FDN_API_KEY` and the client, and all three additions land in its
+file.
+
+**Raw payloads route through `raw_payloads`; the typed tables' `payload jsonb`
+column is dropped.** Invariant 5 and D13 already put verbatim payloads in one
+place, per fetch. The source's per-record `payload` duplicates it and is
+strictly weaker — a vendor field outside the mapped records is lost. For the
+snapshot endpoints `raw_payloads.symbol` is the index or ETF symbol and `as_of`
+is the snapshot date, so the existing `UNIQUE (source, endpoint, symbol, as_of)`
+gives fetch idempotency for free. This makes the source's headline guarantee
+stronger: it asks that signals rebuild with zero API calls, and here the raw
+tables rebuild too.
+
+**Thresholds live in `worker/constants.py`, not `config/severity.yaml`.** There
+is no YAML config layer in this repo; M15 put `TAPE_SYMBOLS` / `LEVEL_QUOTED` /
+`FOREIGN_PROXIES` in `constants.py` and that is the precedent. Severity 1–5 stays
+internal and never reaches the BriefObject as a number — D16 is explicit that
+assembly, not the renderer, decides suppression, so severity maps to `tier`
+(5,4 → `full`; 3,2 → `brief`; 1 → `suppressed`) and report-once decay demotes
+the tier without mutating the stored severity.
+
+**The section reaches readers through the BriefObject, which the source spec
+omits entirely.** Its §7 renders text from a database view; nothing here reaches
+a reader that way (D1). A `catalysts` section id, `schema_version` 5 → 6, old
+renderers kept, `pnpm contracts:gen` regenerating both bindings, per-item `why`
+under D19's digit guard, and both the React Email close template and the web
+archive.
+
+**`index_events` gets curated as a side effect, and that is the quiet win.** The
+table exists since `0010_attribution_econometrics` and is already read by
+`exclusions.contaminated_days()` (M12's fit mask) and `concordance.py` (D26),
+both documenting it as "empty until curated." M18's index differ curates it for
+one additive `ON CONFLICT DO NOTHING` insert per signal: reconstitution days
+become real fit-exclusions, so a reconstitution-driven move stops contaminating
+β, and the concordance check gains event mass beyond earnings alone.
+
+**Two reserved claim types finally get a source.** `catalyst_pending` and
+`supply_overhang` have been in the `claims` CHECK since `0006`, deferred in D17
+for data that "lands at M7." This is that data. Both grade under D24 — against
+the realized residual, not raw relative return. Per D28's lesson, the contract
+enum and the database CHECK are verified separately before either is assumed.
+
+**No partitioning.** The source asks for monthly partitions on the two snapshot
+tables (~3.8M rows/year). The retention job it also specifies — prune dailies
+past 90 days, keep month-ends — is a `DELETE`; partitioning is a schema regime
+with standing operational cost this repo carries nowhere else. Ship the
+retention job, revisit past ~10M rows.
+
+*Rules out:* a `catalysts` Postgres schema or any DDL outside Alembic; six
+per-source signal tables and a union view; a `catalyst_feed` database object;
+reporting state on the signal row, or keyed on a surrogate id, or dropped by a
+rebuild; user-keyed raw or signal tables; a fourth verbatim payload store; a
+YAML config layer; severity integers in the BriefObject; a standalone text
+renderer bypassing the object; `MarketDataProvider` widened a second time;
+reintroducing `fdnpy` as a dependency, or any unbounded fetch that walks an
+issuer's full filing history; naive
+`timedelta` arithmetic where trading days are meant; partitioned snapshot tables
+in M18.
+
+*Reverses if:* a signal source appears whose row genuinely cannot be expressed in
+the common `detail jsonb` shape, or a typed column needs querying at a volume
+where a jsonb expression index is measurably too slow (split that source back
+out — the raw tables and detectors are already separate); threshold tuning needs
+to happen between deploys (the constants module is a single import site, so a
+YAML file with a Pydantic schema is a contained change); a snapshot table passes
+~10M rows (partition then); `index-constituents` turns out to be
+effective-membership only (open question 1 — the index signal becomes lagging,
+not leading, and needs a news-based supplement to keep its stated purpose); or
+FTSE Russell constituent data proves unavailable on any tier (open question 7),
+which removes three of the six tracked indices.

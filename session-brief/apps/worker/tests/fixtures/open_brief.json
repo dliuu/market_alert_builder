@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-13-open",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-13",
@@ -47,7 +47,18 @@
           "overnight_abs": -23.0,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         },
         {
           "symbol": "^TNX",
@@ -82,7 +93,18 @@
           "overnight_abs": 0.03,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         }
       ]
     },
@@ -124,7 +146,18 @@
           "overnight_abs": null,
           "pre_pct": 0.040997464074387154,
           "gap_cents": 194,
-          "premarket_vol_mult": 2.0
+          "premarket_vol_mult": 2.0,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         }
       ]
     },
@@ -166,7 +199,18 @@
           "overnight_abs": null,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         },
         {
           "symbol": null,
@@ -201,7 +245,18 @@
           "overnight_abs": null,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         },
         {
           "symbol": "ASTS",
@@ -236,7 +291,18 @@
           "overnight_abs": null,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         }
       ]
     },
@@ -278,7 +344,18 @@
           "overnight_abs": null,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         },
         {
           "symbol": null,
@@ -313,7 +390,18 @@
           "overnight_abs": null,
           "pre_pct": null,
           "gap_cents": null,
-          "premarket_vol_mult": null
+          "premarket_vol_mult": null,
+          "source": null,
+          "kind": null,
+          "ref_date": null,
+          "insider_count": null,
+          "value_cents": null,
+          "pct_of_holding": null,
+          "shares": null,
+          "pct_of_float": null,
+          "days_to_event": null,
+          "days_outstanding": null,
+          "ambiguous_code": null
         }
       ]
     },
