@@ -335,7 +335,19 @@ def _seed_premarket(date_arg: str | None) -> None:
 def _fdn_probe_cmd(symbols_arg: str | None) -> None:
     engine = get_engine()
     symbols = _resolve_symbols(symbols_arg, engine)
-    client = FdnClient()  # raises a clear message if FDN_API_KEY is unset
+    # fdn-probe is the day-one diagnostic — often the first thing run, quite
+    # possibly before the key arrives — so a missing FDN_API_KEY is guidance,
+    # not a crash; the raw RuntimeError from FdnClient() would print a
+    # traceback for what is really a usage error.
+    try:
+        client = FdnClient()
+    except RuntimeError:
+        raise SystemExit(
+            "FDN_API_KEY is not set. For local runs, add it to the repo-root "
+            ".env; for the deployed worker, `fly secrets set FDN_API_KEY=...`. "
+            "Without it, the open brief runs on the synthetic feed — a valid "
+            "state, not an error."
+        ) from None
     _fdn_probe(client, symbols=symbols)
 
 

@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from worker import scheduler
+from worker import config, scheduler
 
 UTC = ZoneInfo("UTC")
 _DELAY = timedelta(minutes=45)
@@ -176,7 +176,7 @@ def test_the_open_job_captures_premarket_before_assembling(
     keyless path is an assertion (`client is None`), not an accident of a blank
     `.env`. The keyed path gets its own test below.
     """
-    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "")
+    monkeypatch.setattr(config, "FDN_API_KEY", "")
     calls: list[str] = []
     seen_clients: list[Any] = []
 
@@ -214,7 +214,7 @@ def test_the_open_job_wires_the_live_client_when_a_key_is_set(
     hermetic while still proving the calendar/news wiring actually runs and
     that the fetched headlines reach `assemble_open_and_store` as `news`.
     """
-    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "test-key")
+    monkeypatch.setattr(config, "FDN_API_KEY", "test-key")
     monkeypatch.setattr(scheduler, "book_symbols", lambda *_a, **_kw: ["ZHELD"])
 
     calls: list[str] = []

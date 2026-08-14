@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from worker import cli, config
 from worker.cli import _fdn_probe
 from worker.providers.fdn import FdnClient
 
@@ -45,3 +46,26 @@ def test_probe_never_prints_the_api_key_on_a_failing_endpoint(
     out = capsys.readouterr().out
     assert "SUPERSECRET" not in out
     assert "500" in out
+
+
+def test_probe_cmd_gives_guidance_instead_of_a_traceback_when_keyless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fdn-probe is the day-one diagnostic — often run before the key even
+    arrives — so a bare `RuntimeError` from `FdnClient()` reading as "the tool
+    is broken" is worse than the missing key itself. `FDN_API_KEY` is forced
+    empty rather than trusted to the ambient .env, and `get_engine` is stubbed
+    so this stays about the keyless path, not a live DB connection (a real
+    engine is never touched because `symbols_arg` is non-empty, short-circuiting
+    `_resolve_symbols` before it would use the engine)."""
+    monkeypatch.setattr(config, "FDN_API_KEY", "")
+    monkeypatch.setattr(cli, "get_engine", lambda: object())
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._fdn_probe_cmd(symbols_arg="ASTS")
+
+    message = str(exc_info.value)
+    assert "FDN_API_KEY" in message
+    assert ".env" in message
+    assert "fly secrets set" in message
+    assert "synthetic feed" in message
