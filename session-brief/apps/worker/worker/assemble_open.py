@@ -42,10 +42,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from contracts.brief import BriefObject
+from worker import config
 from worker.assemble import SCHEMA_VERSION
 from worker.assemble_shared import claim_dict, session_label
 from worker.claims import Claim, emit_premarket_gap, store_emitted_claims
-from worker.constants import PREMARKET_FEED_IS_SYNTHETIC
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
 from worker.premarket import (
@@ -138,12 +138,13 @@ def assemble_open(
     premarket_section, skipped = _premarket(premarket or [])
     tape_section = _overnight_tape(tape)
 
-    # §2 carries invented levels while `PREMARKET_FEED_IS_SYNTHETIC` is True
-    # (final-pass review, M15) — flag it in `data_quality.stale` rather than
-    # silently rendering a made-up ES print next to real ones. Only when §2
-    # actually has rows: an empty/suppressed section has nothing to mark stale.
+    # §2 carries invented levels while `config.premarket_feed_is_synthetic()` is
+    # True (final-pass review, M15; derived from `FDN_API_KEY`, M16) — flag it
+    # in `data_quality.stale` rather than silently rendering a made-up ES print
+    # next to real ones. Only when §2 actually has rows: an empty/suppressed
+    # section has nothing to mark stale.
     stale_list = list(stale or [])
-    if tape_section["rows"] and PREMARKET_FEED_IS_SYNTHETIC:
+    if tape_section["rows"] and config.premarket_feed_is_synthetic():
         stale_list.append(STALE_OVERNIGHT_TAPE_SYNTHETIC)
 
     payload = {

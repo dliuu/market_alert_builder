@@ -351,7 +351,7 @@ def ingest_premarket_for_session(
     The provider defaults to the synthetic feed. That is not a test seam — it is
     the shipping configuration until the premium pre-market licence lands (D8),
     and swapping it is a one-line change here (see
-    `constants.PREMARKET_FEED_IS_SYNTHETIC`, the one flag that flips alongside
+    `config.premarket_feed_is_synthetic()`, the one flag that flips alongside
     it).
 
     Held names and the tape are ingested in two calls with two disjoint closes
