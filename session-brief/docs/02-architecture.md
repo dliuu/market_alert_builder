@@ -127,8 +127,8 @@ This matters more than any technical decision here. Tiingo's free tier is licens
 | Need | Source | Cost |
 |---|---|---|
 | Daily OHLCV (EOD), adjusted close | Tiingo | Free, personal/non-commercial. `close` + `adjClose` map to `bars_daily.c` / `adj_c` |
-| Earnings calendar, ex-div, macro releases | FinancialData.net (`fdnpy`) — **not wired** | `get_earnings_calendar` / `get_dividends_calendar` / `get_economic_calendar`. **Premium, $69/mo, personal use only**; redistribution needs Enterprise ($299/mo). The open brief's §4 seeds these synthetically instead (M14) and swaps behind the `MarketDataProvider` seam once licensed. Lockup expiries are not covered by any tier |
-| Company news | FinancialData.net `get_latest_news` — **not wired** | Premium, same licensing gate. Narration ships without it (M8) |
+| Earnings calendar, ex-div, macro releases | FinancialData.net — wired behind `FDN_API_KEY` (M16); synthetic fallback when unset | `earnings-calendar` / `dividends-calendar` / `economic-calendar`, spoken directly over httpx (`FdnClient`, D29 — not the `fdnpy` SDK). **Premium, $69/mo, personal use only**; redistribution needs Enterprise ($299/mo). With no key, §4 still seeds synthetically (M14). Lockup expiries are not covered by any tier, live or synthetic |
+| Company news | FinancialData.net — wired behind `FDN_API_KEY` (M16); synthetic fallback when unset | `latest-news`, same Premium licensing gate. Turns on §3's `has_news` gate and feeds narration headlines when the key is set; narration ships without it otherwise (M8) |
 | Cash, burn, shares outstanding | SEC EDGAR `companyfacts` | Free, authoritative XBRL, no key. Set a real User-Agent |
 | Benchmark ETFs | Tiingo | Free, same EOD path as equities |
 | Minute bars (deferred) | Massive (ex-Polygon.io) Starter | ~$29/mo — only for gap-fill and VWAP |
@@ -136,7 +136,7 @@ This matters more than any technical decision here. Tiingo's free tier is licens
 
 Finnhub's free tier moved historical daily candles behind premium (403 on free keys), so it can't supply bars — Tiingo replaces it there. Polygon.io rebranded to Massive in late 2025 — same API and keys, new billing. Alpha Vantage's free tier is now 25 requests/day, which is unusable here.
 
-The two former source gaps (earnings calendar, company news) now have a named provider, so they are a **pricing** question rather than an open search: FinancialData.net covers calendars, economic releases and news, all at Premium. Nothing is wired to it — M14's §4 runs on a synthetic seeder behind the provider seam, which is the same shape M15 uses for pre-market data. Finnhub's free tier remains a candidate if the licensing terms suit better.
+The two former source gaps (earnings calendar, company news) now have a named provider, so they are a **pricing** question rather than an open search: FinancialData.net covers calendars, economic releases and news, all at Premium. It is wired behind `FDN_API_KEY` (M16) — unset, §4 still runs on the M14 synthetic seeder behind the provider seam, which is the same shape M15 uses for pre-market data. Finnhub's free tier remains a candidate if the licensing terms suit better.
 
 Put every vendor behind a `MarketDataProvider` protocol (`daily_bars`, `quote`, `earnings_calendar`, `news`) from the first commit. You will switch, probably twice.
 

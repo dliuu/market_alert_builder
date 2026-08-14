@@ -101,3 +101,159 @@ worker/cli.py               fdn-probe
 ```
 
 Plan: `docs/superpowers/plans/2026-08-14-m16-fdn-live-feed.md`.
+
+## Manual verification runbook
+
+Everything below is copy-pasteable. Run worker commands from `apps/worker/`
+(`uv run …`); the SQL block runs against `DATABASE_URL` with any client
+(`psql "$DATABASE_URL"` or Supabase's SQL editor).
+
+### Synthetic mode (no key — verifiable today, before the Premium key exists)
+
+```bash
+uv run pytest
+```
+Expect: full suite green, including the M16 files (`test_config_fdn.py`,
+`test_fdn.py`, `test_fdn_premarket.py`, `test_scheduler_fdn.py`,
+`test_events_fdn.py`, `test_news_fdn.py`, `test_cli_fdn_probe.py`) and the M16
+additions to `test_assemble_open.py`, `test_narrate.py`, `test_scheduler_open.py`.
+DB-integration tests skip cleanly (not fail) when `DATABASE_URL` is unset
+(`tests/conftest.py`) — a local run with no `.env` still exercises everything
+except the Postgres round-trips.
+
+```bash
+uv run ruff check .
+```
+Expect: `All checks passed!`
+
+```bash
+uv run mypy
+```
+Expect (per the M16 DoD): clean. **As of this writing it is not** — `uv run
+mypy` reports two pre-existing `attr-defined` errors in
+`tests/test_scheduler_open.py` (`Module "worker.scheduler" does not explicitly
+export attribute "config"`), introduced in `fix(m16): widen fdn feed error
+handling; harden scheduler wiring tests` (Task 7 territory, already merged).
+This is a real gap the offline DoD line doesn't yet meet — flag it rather than
+paper over it; Task 9 is docs-only and does not touch code, so the fix (an
+explicit re-export or `from worker.scheduler import config as scheduler_config`
+in the two test call sites) is follow-up work, not done here.
+
+```bash
+uv run -m worker.cli fdn-probe
+```
+Expect (per the design intent): a clear error naming `FDN_API_KEY`, not a
+traceback. **As currently implemented, this is not what happens**: `FdnClient.__init__`
+raises a bare `RuntimeError("FDN_API_KEY is not set (see repo-root .env)")`
+with nothing catching it in `_fdn_probe_cmd`/`main`, so the command exits with
+a full Python traceback — the last line (`RuntimeError: FDN_API_KEY is not
+set (see repo-root .env)`) does name the variable, but it is not the "clean
+error" the tool's own docstring promises. Worth a one-line `try/except
+RuntimeError` → `raise SystemExit(str(exc))` in `_fdn_probe_cmd` as follow-up;
+out of scope for this docs-only task.
+
+```bash
+uv run -m worker.cli seed-premarket --date 2026-08-13
+uv run -m worker.cli brief --kind open --date 2026-08-13 --dry-run
+```
+(Pick any date with `bars_daily` rows — `--date` defaults to the latest bar on
+both commands if omitted.) `seed-premarket` first, because the synthetic
+marker only fires when §2 actually has rows for the session
+(`assemble_open.py`: `if tape_section["rows"] and
+config.premarket_feed_is_synthetic(): …` — an empty §2 has nothing to mark
+stale). Verified live against this repo's dev DB: a bare `brief --kind open
+--dry-run` with no prior `seed-premarket` for that date printed
+`"data_quality": {"missing": [], "stale": []}` — no marker, because §2 was
+empty. Expect, after seeding: a printed BriefObject with `data_quality.stale`
+containing `"overnight_tape.synthetic"`, and no `briefs` row written
+(`--dry-run` rolls back the transaction). The web/email renderers key their
+"synthetic feed · not live prices" banner off that same `data_quality.stale`
+entry.
+
+```bash
+uv run -m worker.cli schedule --once --dry-run --kind open
+```
+This exact three-flag combination is accepted by `worker/cli.py`'s argparse
+(`--once`, `--dry-run`, and `--kind {open,close}` are all real flags on the
+`schedule` subcommand) — but check `_schedule`'s body before trusting the
+combination does what it looks like: **`--dry-run` short-circuits before
+`--once`/`--kind` are read at all.** It prints the next eight scheduler fires
+(interleaving both `open` and `close` kinds) and returns; `--once` and
+`--kind open` are silently ignored whenever `--dry-run` is also passed.
+Verified live:
+```
+schedule: now 2026-08-14T17:45:34+00:00  (close = session close +45min, open = 08:15 ET fixed)
+  close  2026-08-14T20:45:00+00:00   Fri 2026-08-14 16:45 ET   (session)
+  close  2026-08-15T20:45:00+00:00   Sat 2026-08-15 16:45 ET   (non-session)
+  close  2026-08-16T20:45:00+00:00   Sun 2026-08-16 16:45 ET   (non-session)
+  open   2026-08-17T12:15:00+00:00   Mon 2026-08-17 08:15 ET   (session)
+  close  2026-08-17T20:45:00+00:00   Mon 2026-08-17 16:45 ET   (session)
+  ...
+```
+Eight lines total, alternating `open`/`close`, nothing sent, nothing written —
+the safe smoke check per D20. Dropping `--dry-run` is **not** safe in the same
+way: `run_open_session_job` (like `run_session_job`) calls `deliver_brief`
+internally, so `uv run -m worker.cli schedule --once --kind open` is a **live
+run that will actually send** if `RESEND_API_KEY`/`BRIEF_FROM`/recipient are
+configured — the same "`--once` sends" warning D20 already gives for the close
+job, now true of the open one too. Use `--dry-run` for the smoke check; only
+drop it when you intend to send.
+
+### Live mode (once the Premium key is set)
+
+```bash
+fly secrets set FDN_API_KEY=...   # run from apps/worker/, per fly.toml's app name
+uv run -m worker.cli fdn-probe
+```
+Expect: one line per check — `FDN_TAPE_IDENTIFIERS` entries (futures/index/
+forex/stock-quotes identifier guesses), a held-name `latest-prices` UTC-
+timestamp check, an ES `futures-prices` session-dated-bar check, a
+`stock-quotes` field-name dump, the three calendar endpoints, and `latest-news`
+(twice — once for reachability, once for the page-size assumption). Every
+check prints `✓ …` or `✗ …`; the command always exits 0 (`_fdn_probe`'s own
+docstring: "read-only … a human reads the ✓/✗ lines"). The key itself never
+appears in any line (`_safe_error` strips it out of httpx exception text).
+
+**On a ✗ against a tape identifier** (e.g. `^DXY` or `^TNX` turns out wrong):
+edit the mapping in `worker/constants.py`'s `FDN_TAPE_IDENTIFIERS` — it's a
+`dict[str, tuple[str, str]]` of internal symbol → `(fdn endpoint, fdn
+identifier)` — then re-run `fdn-probe`. No other code changes; a symbol left
+unmapped is simply omitted from §2, never invented (docs/07 D28).
+
+**Confirming the switch actually flipped**, once the next open brief has sent:
+- The email/web brief must **not** carry the `"synthetic feed · not live
+  prices"` marker (`apps/web/emails/open-brief.tsx`,
+  `apps/web/app/briefs/[slug]/page.tsx` both key it off
+  `data_quality.stale.includes("overnight_tape.synthetic")`).
+- Pull the stored object and check directly:
+  ```bash
+  uv run -m worker.cli brief --kind open --date <today> --dry-run
+  ```
+  Expect: `data_quality.stale` does **not** contain `"overnight_tape.synthetic"`,
+  and §2/§3 rows carry real, non-round-number levels (not the invented
+  `TAPE_SEED_LEVELS` nominal figures like `5620.00`/`103.00`/`15.00`).
+
+**Confirming live rows actually landed**, against `DATABASE_URL`:
+```sql
+SELECT endpoint, symbol, as_of, fetched_at
+FROM raw_payloads
+WHERE source = 'fdn'
+ORDER BY fetched_at DESC
+LIMIT 20;
+```
+Expect: rows across the endpoints the morning job touches — `futures-prices`,
+`index-quotes`, `stock-quotes`, `latest-prices`, `earnings-calendar`,
+`dividends-calendar`, `economic-calendar`, `latest-news` — each `as_of` the
+session date, `fetched_at` around the 08:00 ET ingest fire.
+
+```sql
+SELECT symbol, session_date, captured_at, last, prev_close, extended_last, extended_v
+FROM quotes
+WHERE session_date = '<today's session date>'
+ORDER BY symbol;
+```
+Expect: rows for the tape symbols (`ES=F`, `NQ=F`, `CL=F`, `^TNX`, `^VIX`,
+`DXY`, and the foreign-proxy ETFs) and for held names that moved pre-market,
+with `extended_last`/`extended_v` populated for the held-name rows and `last`/
+`prev_close` populated for the tape rows — no more `bars_daily`-shaped
+recursion back to `TAPE_SEED_LEVELS`.
