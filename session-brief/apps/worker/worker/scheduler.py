@@ -14,7 +14,9 @@ skipped" (docs/08 M10):
 - **Every run pings the dead-man's switch.** Success (including a correct holiday
   skip) pings Healthchecks; an uncaught failure pings ``/fail`` and re-raises. A
   worker that dies simply stops pinging, and the check goes red — which is how
-  you learn about Thursday's failure on Thursday, not Monday (docs/02).
+  you learn about Thursday's failure on Thursday, not Monday (docs/02). A close
+  whose bars aren't published yet is a third state: it pings ``/log``, keeps the
+  status where it is, and re-fires until its same-day deadline (D20, amended).
 
 The pure parts (``fire_time``/``next_fire``) and the job body (``run_session_job``,
 which takes an injected ``now``) are unit-tested without a clock or a network.
@@ -66,6 +68,24 @@ def ping_fail(url: str, detail: str) -> None:
         return
     try:
         httpx.post(f"{url}/fail", content=detail.encode("utf-8"), timeout=10.0)
+    except httpx.HTTPError:
+        pass
+
+
+def ping_log(url: str, detail: str) -> None:
+    """Record an event **without moving the check's status.**
+
+    The third state the switch needs: a deferral is neither a success (nothing
+    was sent) nor a failure (a retry is pending and the vendor is merely late).
+    Pinging ``/fail`` for it would train you to ignore a red check on the one
+    signal that should always mean "look now". The run's own grace period still
+    catches a deferral chain that never resolves, because a deferral never pings
+    success — so silence still goes red on schedule.
+    """
+    if not url:
+        return
+    try:
+        httpx.post(f"{url}/log", content=detail.encode("utf-8"), timeout=10.0)
     except httpx.HTTPError:
         pass
 
@@ -139,6 +159,52 @@ def open_fire_time(d: date) -> datetime | None:
         return None
     et_time = clock_time(config.OPEN_SEND_ET_HOUR, config.OPEN_SEND_ET_MINUTE)
     return datetime.combine(d, et_time, tzinfo=ET).astimezone(UTC)
+
+
+def retry_deadline(session_date: date) -> datetime:
+    """The last instant a close retry for ``session_date`` may fire (ET → UTC)."""
+    cutoff = clock_time(config.BAR_RETRY_UNTIL_ET_HOUR, config.BAR_RETRY_UNTIL_ET_MINUTE)
+    return _et_fire(session_date, cutoff)
+
+
+def retry_fire_time(
+    now_utc: datetime,
+    session_date: date,
+    interval: timedelta | None = None,
+) -> datetime | None:
+    """When to re-attempt ``session_date``'s close, or ``None`` to give up.
+
+    Bounded by ``retry_deadline`` so the chain always terminates on the session's
+    own ET date — see the invariant in ``config.BAR_RETRY_UNTIL_ET_HOUR``. A
+    candidate landing past the deadline yields ``None`` rather than being clamped
+    *to* the deadline, which would otherwise busy-retry against the cutoff.
+    """
+    step = interval or timedelta(minutes=config.BAR_RETRY_INTERVAL_MINUTES)
+    candidate = now_utc + step
+    return candidate if candidate <= retry_deadline(session_date) else None
+
+
+def next_after_outcome(
+    now_utc: datetime,
+    outcome: str,
+    session_date: date,
+    delay: timedelta,
+) -> tuple[datetime, str]:
+    """Where the self-rescheduling one-shot points after a run of ``outcome``.
+
+    Every outcome but a deferral resumes the ordinary open/close rotation. A
+    deferral inserts one close retry ahead of it — but never *past* the next
+    scheduled fire: the scheduler keeps a single ``brief`` job id (D20), so a
+    retry placed after the next open would silently replace it and cost a
+    morning brief. Deferring a close must never cost a different send.
+    """
+    if outcome == "deferred-no-bars":
+        retry_at = retry_fire_time(now_utc, session_date)
+        regular = next_kind_fire(now_utc, delay)
+        if retry_at is not None and retry_at < regular[0]:
+            return retry_at, "close"
+        return regular
+    return next_kind_fire(now_utc, delay)
 
 
 def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
@@ -247,8 +313,9 @@ def run_session_job(
     poll: bool = True,
 ) -> str:
     """One day's go/no-go run. Returns an outcome tag: ``skipped-holiday``,
-    ``skipped-quiet`` (nothing moved >1%), or ``sent``. Pings the dead-man's
-    switch on the way out; a crash pings ``/fail`` and re-raises."""
+    ``skipped-quiet`` (nothing moved >1%), ``deferred-no-bars``, ``failed-no-bars``,
+    or ``sent``. Pings the dead-man's switch on the way out; a crash pings
+    ``/fail`` and re-raises."""
     from worker.assemble import assemble_and_store
     from worker.deliver import deliver_brief
     from worker.narrate import default_narrator
@@ -274,7 +341,30 @@ def run_session_job(
                 interval_s=config.BAR_POLL_INTERVAL_S,
             )
             if missing:
-                print(f"scheduler {session_date}: bars still missing after poll: {sorted(missing)}")
+                # The vendor hasn't published yet. Compute would raise "no bars
+                # for … run backfill" here — advice that is both misleading (the
+                # poll *is* the backfill, and it just ran) and useless (a manual
+                # backfill this instant fetches the same absent data). Defer to a
+                # later fire instead of converting a known wait into a crash.
+                names = ", ".join(sorted(missing))
+                retry_at = retry_fire_time(now_utc, session_date)
+                if retry_at is None:
+                    detail = (
+                        f"{session_date}: no bars for {names} and the retry deadline "
+                        f"({retry_deadline(session_date).astimezone(ET):%H:%M %Z}) has passed"
+                    )
+                    print(f"scheduler {detail}")
+                    ping_fail(hc, detail)
+                    return "failed-no-bars"
+                print(
+                    f"scheduler {session_date}: bars still missing after poll ({names}); "
+                    f"deferring to {retry_at.astimezone(ET):%H:%M %Z}"
+                )
+                ping_log(
+                    hc,
+                    f"{session_date}: waiting on bars for {names}; retry at {retry_at:%H:%M}Z",
+                )
+                return "deferred-no-bars"
 
         # Assemble in its own transaction so the briefs row is committed before
         # delivery reads it back (deliver renders from the persisted body).
@@ -661,12 +751,14 @@ def run_reconcile_job(
 def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live, not in unit tests
     """Start the self-rescheduling loop. The brief job is a **single** one-shot
     rather than a cron or two competing triggers (D20's shape): each tick runs
-    whichever kind is due (open or close), then asks ``next_kind_fire`` for the
-    next one of either kind — keeping the half-day behaviour automatic for the
-    close, the wall-clock behaviour exact for the open, and the ordering between
-    them explicit. Alongside it, the M13 attribution fires each self-reschedule
-    on their own one-shot and ping their own Healthchecks check: a weekly weekend
-    refit, a PM synthetic score, and an AM reconcile."""
+    whichever kind is due (open or close), then asks ``next_after_outcome`` for
+    the next one of either kind — keeping the half-day behaviour automatic for
+    the close, the wall-clock behaviour exact for the open, and the ordering
+    between them explicit. A close that deferred on missing bars re-fires ahead
+    of the rotation until its same-day deadline. Alongside it, the M13
+    attribution fires each self-reschedule on their own one-shot and ping their
+    own Healthchecks check: a weekly weekend refit, a PM synthetic score, and an
+    AM reconcile."""
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.date import DateTrigger
 
@@ -674,16 +766,18 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
     sched = BlockingScheduler(timezone="UTC")
 
     def tick(kind: str) -> None:
+        outcome = "failed"
         try:
             now = datetime.now(UTC)
             if kind == "open":
                 run_open_session_job(engine, now_utc=now)
             else:
-                run_session_job(engine, now_utc=now)
+                outcome = run_session_job(engine, now_utc=now)
         except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
             print(f"scheduler: {kind} run failed: {exc!r}")
         finally:
-            nxt, nxt_kind = next_kind_fire(datetime.now(UTC) + timedelta(seconds=1), delay)
+            after = datetime.now(UTC) + timedelta(seconds=1)
+            nxt, nxt_kind = next_after_outcome(after, outcome, calendar.today_et(after), delay)
             sched.add_job(
                 tick,
                 DateTrigger(run_date=nxt),
