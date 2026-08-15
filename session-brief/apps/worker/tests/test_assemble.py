@@ -80,7 +80,10 @@ def test_both_movers_are_full_none_suppressed() -> None:
 
 
 def _mixed() -> BriefObject:
-    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "5", "100")]
+    # C is deliberately a *small* position (~4.6%): since the weight floor, only a
+    # name under _ALWAYS_SHOW_WEIGHT can be suppressed at all, so a fat quiet name
+    # would no longer exercise the roll-up line this fixture exists to cover.
+    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "1", "100")]
     prices = {
         "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10.0% → full
         "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),  # -0.5%  → brief
@@ -206,6 +209,26 @@ def test_tier_unchanged_when_residual_immaterial() -> None:
     from worker.assemble import _tier
 
     assert _tier(Fraction(1, 1000), None, resid_z=0.5) == "suppressed"
+
+
+def test_tier_brief_on_large_weight_despite_flat_move() -> None:
+    from worker.assemble import _tier
+
+    # A position you can't afford to not see: flat move, but >15% of the book.
+    assert _tier(Fraction(1, 1000), None, weight=Fraction(20, 100)) == "brief"
+
+
+def test_tier_weight_floor_is_strict_above_15_percent() -> None:
+    from worker.assemble import _tier
+
+    assert _tier(Fraction(1, 1000), None, weight=Fraction(15, 100)) == "suppressed"
+
+
+def test_tier_large_weight_does_not_downgrade_a_mover() -> None:
+    from worker.assemble import _tier
+
+    # The floor only rescues from suppression; it never pulls a name down.
+    assert _tier(Fraction(5, 100), None, weight=Fraction(40, 100)) == "full"
 
 
 def _ranked() -> BriefObject:

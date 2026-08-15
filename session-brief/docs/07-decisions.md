@@ -483,3 +483,47 @@ effective-membership only (open question 1 — the index signal becomes lagging,
 not leading, and needs a news-based supplement to keep its stated purpose); or
 FTSE Russell constituent data proves unavailable on any tier (open question 7),
 which removes three of the six tracked indices.
+
+---
+
+**D31 — A weight floor on suppression: >15% of book is never folded into the roll-up**
+D16 tiered names purely on how far they moved (plus the RVOL spike, and since M13
+a material residual). That reads a book as if every position mattered equally,
+which is exactly wrong at the top of a concentrated one: a 39% holding that sat
+still disappears into "unchanged", while a 2% holding that twitched 0.4% earns a
+row. At that weight, *flat is information* — it's the position whose quiet you
+most need to have registered, and the one whose absence from the table you're
+least likely to notice.
+
+The floor is a fourth input to `_tier` (`weight`, from the `PositionMetrics` the
+compute stage already produces — no new data, no schema change) applied **last**,
+so it can only ever rescue a name from `suppressed`; it never pulls a mover down.
+It grants a **bare row, not a full one**. Promoting a flat day to `full` would
+have three side effects that a flat day hasn't earned: a `tape_quality` row, claim
+eligibility (`emit_claims` is full-tier only, D17), and — worst — defeating the
+quiet-session skip, since `close_brief_should_skip` fires only when no row is
+full. A book with any position over 15% would then send a brief every single
+session, silently retiring M5's whole-brief suppression.
+
+15% is deliberately *below* the correlation flag's 20% single-name threshold
+(docs/05): the level at which a position is worth always seeing sits under the
+level at which it's worth warning about. The two are independent — the flag is
+rate-limited to once a week via `flags.last_seen` (D18) and lives on the open
+brief since D23, so keying visibility off the flag would have made a name's
+appearance depend on when its warning last fired.
+
+The frozen close-brief fixture changed with this: its quiet name was 19.3% of the
+book, so under the floor it could no longer be suppressed at all. It's now a
+genuinely small position (~4.6%), which keeps the fixture exercising the roll-up
+line it exists to cover.
+
+*Rules out:* a per-symbol pin or `holdings.always_show` column (new state and a
+migration to express what weight already says); keying the floor off the
+concentration flag (couples visibility to a weekly rate limit); lowering
+`_BRIEF_MOVE` to catch large names (global, and shows every small name too).
+
+*Reverses if:* 15% proves too low on a diversified book — every name clears it and
+the roll-up line empties out, at which point the floor should scale with position
+count rather than being a constant; or the bare row proves too weak and a quiet
+mega-position needs a `why` line, which means a fourth tier rather than promotion
+to `full`.
