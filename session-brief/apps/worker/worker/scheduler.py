@@ -140,9 +140,9 @@ def next_weekly_fire(now_utc: datetime, weekday: int, at_et: clock_time) -> date
     raise RuntimeError(f"no weekly fire within 8 days of {now_utc}")  # pragma: no cover
 
 
-def open_fire_time(d: date) -> datetime | None:
-    """When the open brief for session ``d`` fires: a **fixed 08:15 ET**, or
-    ``None`` if ``d`` isn't a trading session.
+def open_fire_time(d: date) -> datetime:
+    """When the open brief's fire for date ``d`` lands: a **fixed 08:15 ET**,
+    every calendar day.
 
     This is deliberately *not* the close fire's construction. The close is
     anchored on the real session close plus a delay, which is what makes a
@@ -151,12 +151,17 @@ def open_fire_time(d: date) -> datetime | None:
     morning — so it is a wall-clock time converted through ``America/New_York``
     (invariant 8, so DST doesn't shift it twice a year).
 
-    Unlike the close fire it also does not run on non-sessions. The close fire
-    keeps firing daily because it carries the dead-man's-switch heartbeat; the
-    open brief has its own check and nothing to say on a holiday.
+    It fires on non-sessions too, matching ``close_or_standard``'s nominal-bell
+    pattern — this used to return ``None`` on a non-session day, so
+    ``next_kind_fire`` never produced an "open" candidate at all on a weekend
+    or holiday. ``run_open_session_job`` already checks ``is_session`` itself
+    and pings success before doing any other work, so the only thing missing
+    was ever *reaching* that check: with no candidate, the job was simply never
+    invoked, and ``HEALTHCHECKS_OPEN_URL`` went dark for the entire weekend —
+    every weekend — with no failure and no fire to explain it. Exactly the
+    "weekday-only cron reads a holiday as a failed check-in" anti-pattern D20
+    built the close job to avoid, just not applied here until now.
     """
-    if not calendar.is_session(d):
-        return None
     et_time = clock_time(config.OPEN_SEND_ET_HOUR, config.OPEN_SEND_ET_MINUTE)
     return datetime.combine(d, et_time, tzinfo=ET).astimezone(UTC)
 
@@ -217,11 +222,10 @@ def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
     """
     d = calendar.today_et(now_utc)
     for _ in range(8):
-        candidates: list[tuple[datetime, str]] = [(fire_time(d, delay), "close")]
-        open_at = open_fire_time(d)
-        if open_at is not None:
-            candidates.append((open_at, "open"))
-
+        candidates: list[tuple[datetime, str]] = [
+            (fire_time(d, delay), "close"),
+            (open_fire_time(d), "open"),
+        ]
         future = sorted(c for c in candidates if c[0] > now_utc)
         if future:
             return future[0]

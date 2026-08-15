@@ -372,7 +372,8 @@ def test_run_session_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _stub_poll(monkeypatch: pytest.MonkeyPatch, missing: set[str]) -> None:
     """Drive run_session_job to the poll's verdict without a DB or a network."""
-    monkeypatch.setattr(scheduler, "book_symbols", lambda conn, user_id: ["SPY", "ASTS"])
+    monkeypatch.setattr(scheduler, "ingest_symbols", lambda conn, user_id: ["SPY", "ASTS"])
+    monkeypatch.setattr(scheduler, "required_symbols", lambda conn, user_id: ["SPY", "ASTS"])
     monkeypatch.setattr(scheduler, "_default_provider", lambda: object())
     monkeypatch.setattr(scheduler, "ensure_todays_bars", lambda *a, **k: missing)
 
