@@ -55,7 +55,8 @@ export interface Section {
     | "tape_quality"
     | "sector_rotation"
     | "after_hours"
-    | "accountability";
+    | "accountability"
+    | "catalysts";
   tier: "full" | "brief" | "suppressed";
   note?: string | null;
   rows: Row[];
@@ -166,6 +167,50 @@ export interface Row {
    * Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15).
    */
   premarket_vol_mult?: number | null;
+  /**
+   * Close brief catalysts: which feed produced the signal (M17). One row per signal, not per symbol — the renderer groups by symbol.
+   */
+  source?: ("insider" | "proposed" | "index" | "etf" | "lockup" | "eligibility") | null;
+  /**
+   * Close brief catalysts: the signal type within its source, e.g. `cluster`, `clevel_buy`, `large_144` (M17).
+   */
+  kind?: string | null;
+  /**
+   * Close brief catalysts: the date the signal is about — a transaction date, a filing date, a lockup expiry (M17).
+   */
+  ref_date?: string | null;
+  /**
+   * Close brief catalysts: distinct insiders in a cluster (M17).
+   */
+  insider_count?: number | null;
+  /**
+   * Close brief catalysts: transaction value in integer cents. Never float (M17).
+   */
+  value_cents?: number | null;
+  /**
+   * Close brief catalysts: shares sold as a fraction of the insider's pre-transaction holding. Null when `shares_after` is unknown — the rule never assumes a denominator (M17).
+   */
+  pct_of_holding?: number | null;
+  /**
+   * Close brief catalysts: share count on a Form 144 proposal (M17).
+   */
+  shares?: number | null;
+  /**
+   * Close brief catalysts: proposed shares as a fraction of public float. Null renders as "size unknown" rather than the row being dropped — an unknown size is information (M17, open question 4).
+   */
+  pct_of_float?: number | null;
+  /**
+   * Close brief catalysts: trading days from an insider sale to the next known earnings date (M17).
+   */
+  days_to_event?: number | null;
+  /**
+   * Close brief catalysts: calendar days a Form 144 has gone unconverted (M17).
+   */
+  days_outstanding?: number | null;
+  /**
+   * Close brief catalysts: the vendor's transaction type did not map to a known Form 4 code, so tax withholding and option exercises could not be filtered. Severity is reduced by one and the row is annotated rather than silently included or dropped (M17, open question 2).
+   */
+  ambiguous_code?: boolean | null;
 }
 export interface Flag {
   type: "concentration" | "correlation" | "runway" | "dilution" | "earnings_soon" | "supply_event" | "short_interest";

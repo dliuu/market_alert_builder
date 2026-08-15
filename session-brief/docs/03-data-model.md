@@ -19,8 +19,8 @@ Use `lots`, not an average cost on `holdings`. Positions get added to, and migra
 ## Market data
 
 ```sql
-raw_payloads (id, source, endpoint, symbol, as_of, body jsonb, fetched_at)
-             -- UNIQUE (source, endpoint, symbol, as_of)
+raw_payloads (id, source, endpoint, symbol, covers_from, as_of, body jsonb, fetched_at)
+             -- UNIQUE (source, endpoint, symbol, covers_from, as_of)
 bars_daily   (symbol, session_date, o, h, l, c, v, adj_c)   -- PK (symbol, session_date)
 quotes       (symbol, session_date, captured_at, last, prev_close, extended_last, extended_v)
              -- PK (symbol, session_date); one pre-open capture per symbol per session (M15)
@@ -33,7 +33,59 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 
 `attribution (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, resid_z, provisional, …)` (M11/M12) is the same shape: shared, no `user_id`, keyed by `(symbol, trade_date, model_version)`. Assembly (M13) reads it filtered to held names for the session — one query, no per-user compute.
 
+### Catalysts (M17/M18)
+
+```sql
+catalyst_insider_tx        (id, symbol, insider_name, insider_title, transaction_date,
+                            filing_date, transaction_type, shares, price_cents,
+                            value_cents, shares_after, natural_key UNIQUE, ingested_at)
+catalyst_proposed_sales    (id, symbol, insider_name, filing_date, shares_proposed,
+                            approx_sale_date, broker, natural_key UNIQUE, ingested_at)
+catalyst_index_constituents (index_symbol, snapshot_date, symbol, weight, ingested_at)
+                            -- PK (index_symbol, snapshot_date, symbol)
+catalyst_etf_holdings      (etf_symbol, snapshot_date, symbol, weight, shares, ingested_at)
+                            -- PK (etf_symbol, snapshot_date, symbol); INDEX (symbol, snapshot_date DESC)
+catalyst_ipos              (symbol PK, listing_date, ingested_at)
+catalyst_watermarks        (source, symbol, last_success_at, last_seen_date, seen_keys,
+                            last_error, consecutive_fails)   -- PK (source, symbol)
+catalyst_signals           (id, source, symbol, kind, ref_date, severity, detail jsonb,
+                            member_ids, model_version, computed_at)
+                            -- UNIQUE (source, symbol, kind, ref_date, model_version)
+catalyst_reporting_state   (user_id, source, symbol, kind, ref_date, first_reported_at,
+                            last_reported_at, report_count, max_severity_seen)
+                            -- PK (user_id, source, symbol, kind, ref_date)
+```
+
+Same shape as the rest of this section: **shared, no `user_id`**, keyed by symbol —
+insider filings and index membership are facts about a symbol, not a book.
+
+**`catalyst_reporting_state` is the one exception and does carry `user_id`.** It
+holds the report-once decay curve (full → condensed → suppressed, re-escalating
+on a severity increase), which is a property of a *reader's* attention rather
+than of the signal — sharing one curve would open user #2's first brief at
+"condensed" because user #1 had already read it. It is keyed on the signal's
+**natural identity**, not `catalyst_signals.id`, because a rebuild reassigns that
+id; and it is never dropped when signals are rebuilt (D30). If it were, every
+stale cluster would resurface at full volume on the next brief.
+
+`catalyst_signals` is one table across all six sources — the source spec's six
+per-source tables plus a `UNION ALL` view, collapsed into the single row shape
+that view produced anyway (D30). The typed per-source fields live in `detail`,
+exactly as `flags` carries nine heterogeneous types in one `payload jsonb`.
+`member_ids` points back to the raw rows that produced a signal: the audit trail
+for drill-down and for debugging false positives.
+
+Detectors read only these tables — a signal rebuild costs **zero API calls**,
+and the raw tables themselves replay from `raw_payloads`.
+
+`index_events` (from `0010`, read by `exclusions.py` and `concordance.py` and
+empty until now) is **populated by M18's index differ** rather than curated by
+hand. Reconstitution days become real contaminated-day fit exclusions for
+attribution.
+
 **Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
+
+A payload is identified by **both ends of the window it covers**, not just where it ends. Keying on `as_of` alone (the response's newest session) made a wider re-fetch look like a duplicate of a narrower one ending the same day, so `ON CONFLICT DO NOTHING` silently discarded the deeper history and a symbol's window could never be extended — which is how SPY sat at 65 sessions while the attribution fit wanted 120 (migration `0014_raw_payload_covers_from`). The dedup still holds for a genuinely repeated window, which the close job's 90-second bar poll depends on. A vendor *revision* inside an identical window still no-ops; closing that needs a content hash, and Postgres will not index one because `body::text` is STABLE rather than IMMUTABLE.
 
 `quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
 

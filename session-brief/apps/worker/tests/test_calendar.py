@@ -86,3 +86,18 @@ def test_previous_session_is_strictly_before_a_session_date() -> None:
     d = date(2026, 9, 9)
     assert calendar.is_session(d) is True
     assert calendar.previous_session(d) < d
+
+
+def test_sessions_between_counts_trading_days_not_calendar_days() -> None:
+    """Thu 2026-08-13 to Tue 2026-08-18 is five calendar days but three
+    sessions — the weekend doesn't count (invariant 7)."""
+    assert calendar.sessions_between(date(2026, 8, 13), date(2026, 8, 18)) == 3
+
+
+def test_sessions_between_excludes_the_start_and_includes_the_end() -> None:
+    assert calendar.sessions_between(date(2026, 8, 13), date(2026, 8, 14)) == 1
+    assert calendar.sessions_between(date(2026, 8, 13), date(2026, 8, 13)) == 0
+
+
+def test_sessions_between_is_zero_when_the_end_precedes_the_start() -> None:
+    assert calendar.sessions_between(date(2026, 8, 18), date(2026, 8, 13)) == 0

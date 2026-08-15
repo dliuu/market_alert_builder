@@ -101,6 +101,15 @@ def test_ping_fail_hits_fail_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen["url"] == "https://hc.example/abc/fail"
 
 
+def test_ping_log_hits_log_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # /log records an event *without* moving the check's status — the right ping
+    # for "not failed, not finished either" (a deferral with a retry pending).
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(httpx, "post", lambda url, **k: seen.update(url=url))
+    scheduler.ping_log("https://hc.example/abc", "waiting on bars")
+    assert seen["url"] == "https://hc.example/abc/log"
+
+
 def test_ping_empty_url_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a: Any, **k: Any) -> None:
         raise AssertionError("must not touch the network for an empty URL")
@@ -109,6 +118,7 @@ def test_ping_empty_url_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "post", _boom)
     scheduler.ping_success("")
     scheduler.ping_fail("", "x")
+    scheduler.ping_log("", "x")
 
 
 def test_ping_swallows_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,9 +127,48 @@ def test_ping_swallows_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(httpx, "get", _down)
     monkeypatch.setattr(httpx, "post", _down)
-    # A monitoring outage must never take down the send — both return quietly.
+    # A monitoring outage must never take down the send — all three return quietly.
     scheduler.ping_success("https://hc.example/abc")
     scheduler.ping_fail("https://hc.example/abc", "x")
+    scheduler.ping_log("https://hc.example/abc", "x")
+
+
+# --- retry_fire_time (pure) --------------------------------------------------
+
+
+def test_retry_fire_time_is_now_plus_interval() -> None:
+    # Gave up at 17:05 ET (21:05 UTC) → retry 30 minutes later, same session.
+    now = datetime(2026, 9, 4, 21, 5, tzinfo=UTC)
+    nxt = scheduler.retry_fire_time(now, date(2026, 9, 4), interval=timedelta(minutes=30))
+    assert nxt == datetime(2026, 9, 4, 21, 35, tzinfo=UTC)
+
+
+def test_retry_fire_time_stops_at_the_deadline() -> None:
+    # 23:40 ET is inside the day but now+30min (00:10 ET) is past the 23:45 ET
+    # cutoff — no retry rather than one that lands tomorrow.
+    now = datetime(2026, 9, 5, 3, 40, tzinfo=UTC)  # 2026-09-04 23:40 ET
+    nxt = scheduler.retry_fire_time(now, date(2026, 9, 4), interval=timedelta(minutes=30))
+    assert nxt is None
+
+
+def test_retry_fire_time_never_crosses_midnight_et() -> None:
+    """The deadline exists to protect ``session_date``.
+
+    ``run_session_job`` derives the session from ``calendar.today_et(now)``, so a
+    retry that fired after midnight ET would silently compute the *next* day's
+    session against today's book. Every retry must land on the session date it
+    was scheduled for.
+    """
+    session = date(2026, 9, 4)
+    now = datetime(2026, 9, 4, 21, 5, tzinfo=UTC)
+    for _ in range(200):
+        nxt = scheduler.retry_fire_time(now, session, interval=timedelta(minutes=30))
+        if nxt is None:
+            break
+        assert calendar.today_et(nxt) == session
+        now = nxt
+    else:  # pragma: no cover - a runaway retry chain is the bug under test
+        raise AssertionError("retry chain never terminated")
 
 
 # --- ensure_todays_bars poll ------------------------------------------------
@@ -259,6 +308,48 @@ def test_ensure_todays_bars_defaults_required_to_everything(
         sleep=lambda _s: None,
     )
     assert missing == {"HELD"}
+# --- next_after_outcome: where the one-shot points next (pure) ---------------
+
+
+def test_next_after_outcome_schedules_a_retry_on_deferral() -> None:
+    # Friday 17:05 ET, deferred. Next fire is the retry, not Saturday's heartbeat.
+    now = datetime(2026, 9, 4, 21, 5, tzinfo=UTC)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "deferred-no-bars", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert kind == "close"
+    assert nxt == datetime(2026, 9, 4, 21, 35, tzinfo=UTC)
+
+
+def test_next_after_outcome_falls_back_to_normal_schedule_past_deadline() -> None:
+    # 23:50 ET — no retry left, so resume the ordinary rotation.
+    now = datetime(2026, 9, 5, 3, 50, tzinfo=UTC)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "failed-no-bars", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert (nxt, kind) == scheduler.next_kind_fire(now, _DELAY)
+
+
+def test_next_after_outcome_leaves_a_sent_run_on_the_normal_schedule() -> None:
+    now = datetime(2026, 9, 4, 21, 5, tzinfo=UTC)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "sent", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert (nxt, kind) == scheduler.next_kind_fire(now, _DELAY)
+
+
+def test_retry_never_displaces_the_next_open_brief() -> None:
+    """One job id means a retry scheduled past the next fire would *drop* it.
+
+    The deadline already keeps retries same-day, so this is a guard rather than a
+    live path — but the failure it prevents is losing a morning brief entirely.
+    """
+    now = datetime(2026, 9, 4, 21, 5, tzinfo=UTC)
+    nxt_regular, _ = scheduler.next_kind_fire(now, _DELAY)
+    nxt, _kind = scheduler.next_after_outcome(
+        now, "deferred-no-bars", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert nxt <= nxt_regular
 
 
 # --- run_session_job go/no-go paths -----------------------------------------
@@ -277,6 +368,96 @@ def test_run_session_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert outcome == "skipped-holiday"
     assert pings == [("ok", "https://hc.example/abc")]  # success ping, no /fail
+
+
+def _stub_poll(monkeypatch: pytest.MonkeyPatch, missing: set[str]) -> None:
+    """Drive run_session_job to the poll's verdict without a DB or a network."""
+    monkeypatch.setattr(scheduler, "book_symbols", lambda conn, user_id: ["SPY", "ASTS"])
+    monkeypatch.setattr(scheduler, "_default_provider", lambda: object())
+    monkeypatch.setattr(scheduler, "ensure_todays_bars", lambda *a, **k: missing)
+
+
+def test_run_session_job_defers_when_bars_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The regression: a late vendor must defer, not crash.
+
+    Before this, a give-up printed a warning and fell through to compute, which
+    raised ``no bars for … run backfill`` — turning a known, diagnosed "the data
+    isn't published yet" into an unhandled exception and a red check.
+    """
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(scheduler, "ping_log", lambda url, d: pings.append(("log", url)))
+    _stub_poll(monkeypatch, missing={"ASTS"})
+
+    from worker import assemble
+
+    def _must_not_assemble(*a: Any, **k: Any) -> None:
+        raise AssertionError("assemble must not run when today's bars are missing")
+
+    monkeypatch.setattr(assemble, "assemble_and_store", _must_not_assemble)
+
+    outcome = scheduler.run_session_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
+        healthcheck_url="https://hc.example/abc",
+    )
+    assert outcome == "deferred-no-bars"
+    # /log, not /fail: the day isn't over, a retry is pending.
+    assert pings == [("log", "https://hc.example/abc")]
+
+
+def test_run_session_job_deadline_exhaustion_pings_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Past the retry deadline the day has genuinely failed — go red."""
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(scheduler, "ping_log", lambda url, d: pings.append(("log", url)))
+    _stub_poll(monkeypatch, missing={"ASTS"})
+
+    outcome = scheduler.run_session_job(
+        _FakeEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 5, 3, 50, tzinfo=UTC),  # 23:50 ET — past the cutoff
+        healthcheck_url="https://hc.example/abc",
+    )
+    assert outcome == "failed-no-bars"
+    assert pings == [("fail", "https://hc.example/abc")]
+
+
+def test_run_session_job_proceeds_when_bars_are_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The happy path is untouched: an empty `missing` still runs the pipeline."""
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(scheduler, "ping_log", lambda url, d: pings.append(("log", url)))
+    _stub_poll(monkeypatch, missing=set())
+
+    from worker import assemble, narrate
+
+    monkeypatch.setattr(narrate, "default_narrator", lambda: None)
+    monkeypatch.setattr(assemble, "assemble_and_store", lambda *a, **k: None)  # quiet session
+
+    class _Tx:
+        def commit(self) -> None: ...
+        def rollback(self) -> None: ...
+
+    class _TxEngine(_FakeEngine):
+        """connect() must yield a connection whose begin() is a real transaction."""
+
+        def connect(self) -> Any:
+            class _Conn:
+                def begin(self) -> Any:
+                    return _Tx()
+
+            return contextlib.nullcontext(_Conn())
+
+    outcome = scheduler.run_session_job(
+        _TxEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
+        healthcheck_url="https://hc.example/abc",
+    )
+    assert outcome == "skipped-quiet"
+    assert pings == [("ok", "https://hc.example/abc")]
 
 
 def test_run_session_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:

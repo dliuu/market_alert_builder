@@ -47,6 +47,26 @@ FOREIGN_PROXIES: dict[str, tuple[str, str]] = {
 # §3's line: only names moving more than this pre-market get a row (docs/05).
 PREMARKET_THRESHOLD: Decimal = Decimal("0.01")
 
+# fdn identifier routing for the tape universe (M16). Internal symbol →
+# (fdn endpoint, fdn identifier). The routing table, not the seam method, picks
+# the endpoint: `tape_universe` tags the foreign-proxy ETFs "index", but on fdn
+# they are stocks, so they route to stock-quotes. A symbol absent here is
+# omitted, never invented. Futures/caret identifiers are the documented best
+# guess ("ZN"-style) — `fdn-probe` verifies each one live once the key lands.
+FDN_TAPE_IDENTIFIERS: dict[str, tuple[str, str]] = {
+    "ES=F": ("futures-prices", "ES"),
+    "NQ=F": ("futures-prices", "NQ"),
+    "CL=F": ("futures-prices", "CL"),
+    "^TNX": ("index-quotes", "^TNX"),
+    "^VIX": ("index-quotes", "^VIX"),
+    "DXY": ("index-quotes", "^DXY"),
+    "EWT": ("stock-quotes", "EWT"),
+    "EWJ": ("stock-quotes", "EWJ"),
+    "EWC": ("stock-quotes", "EWC"),
+    "EUFN": ("stock-quotes", "EUFN"),
+    "EWG": ("stock-quotes", "EWG"),
+}
+
 # Nominal seed levels for the tape universe (C2, M15 review): a base for the
 # *first* capture of each symbol, before any real prior capture exists.
 #
@@ -62,8 +82,8 @@ PREMARKET_THRESHOLD: Decimal = Decimal("0.01")
 # These are plausible index/yield/price levels, not live data — nothing here is
 # redistributed, and `ingest_premarket_for_session` treats this as the
 # lowest-priority source, so a real prior capture (once one exists) always
-# wins. This dict disappears the day a licensed pre-market/futures feed lands
-# and `prior_closes`/`_prior_tape_levels` have real data to return.
+# wins. Consulted only while `FDN_API_KEY` is unset (M16): the live branch
+# derives tape bases from the vendor and never reads this dict.
 TAPE_SEED_LEVELS: dict[str, Decimal] = {
     "ES=F": Decimal("5620.00"),   # E-mini S&P 500 futures, nominal index level
     "NQ=F": Decimal("19800.00"),  # E-mini Nasdaq-100 futures
@@ -78,14 +98,43 @@ TAPE_SEED_LEVELS: dict[str, Decimal] = {
     "EWG": Decimal("34.00"),      # Germany (industrials) proxy
 }
 
-# The one switch a licensed pre-market/futures feed flips (final-pass review,
-# M15). While this is True, §2 (overnight tape) is running on
-# `SyntheticPremarketProvider`, not live prints: `assemble_open` reads it to add
-# `"overnight_tape.synthetic"` to `data_quality.stale`, and both renderers
-# (`open-brief.tsx`, `briefs/[slug]/page.tsx`) key their "synthetic feed · not
-# live prices" header marker off that one `data_quality.stale` entry — neither
-# renderer reads this constant directly. The day `TAPE_SEED_LEVELS` above goes
-# away and `ingest_premarket_for_session` starts constructing a live provider,
-# flip this too. Nothing else needs to change: the marker comes off both
-# renderers automatically once `data_quality.stale` stops carrying the entry.
-PREMARKET_FEED_IS_SYNTHETIC: bool = True
+
+# --- Catalysts (M17/M18) ----------------------------------------------------
+#
+# Severity is 1-5 and stays internal to worker/catalysts.py: assembly maps it to
+# the BriefObject's `tier`, because assembly decides suppression and the
+# renderer never does (D16). Thresholds live here rather than in a YAML config
+# layer this repo doesn't have — the M15 TAPE_SYMBOLS precedent (D30). Expect
+# them to move: cross-source calibration needs weeks of live tuning.
+
+# §5.1 insider (Form 4)
+CLEVEL_BUY_SEVERITY = 5
+CLUSTER_SEVERITY = 4
+CLUSTER_MIN_INSIDERS = 3
+CLUSTER_SESSIONS = 5          # trading days, never calendar days (invariant 7)
+PRE_EARNINGS_SEVERITY = 4
+PRE_EARNINGS_SESSIONS = 5
+OUTSIZED_SALE_SEVERITY = 3
+OUTSIZED_SALE_PCT = Decimal("0.40")
+CADENCE_BREAK_SEVERITY = 3
+CADENCE_MIN_PRIOR = 4
+CADENCE_SIZE_MULTIPLE = Decimal("2")
+
+# §5.2 proposed sales (Form 144). `large_144` and `standard_144` are a magnitude
+# ladder on one event and are exclusive; `unconverted_144` is independent and
+# can accompany either. The 45 days are calendar days — Rule 144's own window is
+# calendar-based, so a trading-day count would be measuring the wrong thing.
+LARGE_144_SEVERITY = 4
+LARGE_144_PCT = Decimal("0.005")
+STANDARD_144_SEVERITY = 2
+UNCONVERTED_144_SEVERITY = 3
+UNCONVERTED_144_DAYS = 45
+
+# How far back a session's brief looks for signals. A Form 4 filed three weeks
+# ago is still the reason a name is moving today; report-once decay, not this
+# window, is what stops it being repeated.
+CATALYST_LOOKBACK_DAYS = 30
+
+# Stamped on every signal so a rule change produces a new version alongside the
+# old rather than mutating history — the ATTRIBUTION_MODEL_VERSION pattern (D21).
+CATALYST_MODEL_VERSION = "1"

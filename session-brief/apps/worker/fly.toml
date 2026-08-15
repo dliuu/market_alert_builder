@@ -4,7 +4,7 @@
 #   fly secrets set \                 # the worker's .env, as Fly secrets
 #       DATABASE_URL=... TIINGO_API_KEY=... ANTHROPIC_API_KEY=... \
 #       RESEND_API_KEY=... RENDER_SHARED_SECRET=... WEB_RENDER_URL=... \
-#       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=...
+#       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=... FDN_API_KEY=...
 #   fly deploy
 #
 # One always-on machine, no HTTP service — a background scheduler, not a web

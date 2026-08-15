@@ -59,7 +59,8 @@
         "id": {
           "enum": ["one_thing", "overnight_tape", "premarket", "calendar",
                    "sector_setup", "exposure_check", "scorecard", "attribution",
-                   "tape_quality", "sector_rotation", "after_hours", "accountability"]
+                   "tape_quality", "sector_rotation", "after_hours", "accountability",
+                   "catalysts"]
         },
         "tier": { "enum": ["full", "brief", "suppressed"] },
         "note": { "type": ["string", "null"] },
@@ -167,6 +168,53 @@
         "premarket_vol_mult": {
           "type": ["number", "null"],
           "description": "Open brief §3: pre-market volume against the typical pre-market volume at the same point in the morning. Deliberately NOT `rvol` — pre-market volume is too thin for a 30-day daily-volume ratio to mean anything (D3, docs/05, M15)."
+        },
+
+        "source": {
+          "description": "Close brief catalysts: which feed produced the signal (M17). One row per signal, not per symbol — the renderer groups by symbol.",
+          "anyOf": [{ "enum": ["insider", "proposed", "index", "etf", "lockup", "eligibility"] },
+                    { "type": "null" }]
+        },
+        "kind": {
+          "type": ["string", "null"],
+          "description": "Close brief catalysts: the signal type within its source, e.g. `cluster`, `clevel_buy`, `large_144` (M17)."
+        },
+        "ref_date": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Close brief catalysts: the date the signal is about — a transaction date, a filing date, a lockup expiry (M17)."
+        },
+        "insider_count": {
+          "type": ["integer", "null"],
+          "description": "Close brief catalysts: distinct insiders in a cluster (M17)."
+        },
+        "value_cents": {
+          "type": ["integer", "null"],
+          "description": "Close brief catalysts: transaction value in integer cents. Never float (M17)."
+        },
+        "pct_of_holding": {
+          "type": ["number", "null"],
+          "description": "Close brief catalysts: shares sold as a fraction of the insider's pre-transaction holding. Null when `shares_after` is unknown — the rule never assumes a denominator (M17)."
+        },
+        "shares": {
+          "type": ["number", "null"],
+          "description": "Close brief catalysts: share count on a Form 144 proposal (M17)."
+        },
+        "pct_of_float": {
+          "type": ["number", "null"],
+          "description": "Close brief catalysts: proposed shares as a fraction of public float. Null renders as \"size unknown\" rather than the row being dropped — an unknown size is information (M17, open question 4)."
+        },
+        "days_to_event": {
+          "type": ["integer", "null"],
+          "description": "Close brief catalysts: trading days from an insider sale to the next known earnings date (M17)."
+        },
+        "days_outstanding": {
+          "type": ["integer", "null"],
+          "description": "Close brief catalysts: calendar days a Form 144 has gone unconverted (M17)."
+        },
+        "ambiguous_code": {
+          "type": ["boolean", "null"],
+          "description": "Close brief catalysts: the vendor's transaction type did not map to a known Form 4 code, so tax withholding and option exercises could not be filtered. Severity is reduced by one and the row is annotated rather than silently included or dropped (M17, open question 2)."
         }
       }
     },

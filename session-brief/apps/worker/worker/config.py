@@ -48,6 +48,22 @@ SEND_DELAY_MINUTES: int = int(os.environ.get("SEND_DELAY_MINUTES", "45"))
 # alarm without letting a stale brief go out late (docs/06).
 BAR_POLL_TIMEOUT_S: int = int(os.environ.get("BAR_POLL_TIMEOUT_S", "1200"))
 BAR_POLL_INTERVAL_S: int = int(os.environ.get("BAR_POLL_INTERVAL_S", "90"))
+# When the poll gives up, the close job defers and re-fires on this interval
+# instead of crashing into compute. Tiingo's free-tier EOD bar for session D is
+# not reliably published by close+45+poll (16:45→17:05 ET): on 2026-08-14 the
+# bars for the whole book were absent at 17:05 and present by 19:05, and no
+# stored payload has ever captured session D earlier than 23:29 ET the same day.
+# A bounded in-job poll cannot span that gap; a re-fire can, without holding the
+# fire open for six hours.
+BAR_RETRY_INTERVAL_MINUTES: int = int(os.environ.get("BAR_RETRY_INTERVAL_MINUTES", "30"))
+# The last ET wall-clock time a retry may fire, on the session's own date.
+# **This must stay before midnight ET.** `run_session_job` derives its session
+# from `calendar.today_et(now)`, so a retry crossing midnight would compute the
+# next day's session against today's book — a silent wrong-day brief, which is
+# worse than the missed send it was trying to rescue. `retry_fire_time` enforces
+# it; the hour is validated as a `time()` so 24+ can't be configured at all.
+BAR_RETRY_UNTIL_ET_HOUR: int = int(os.environ.get("BAR_RETRY_UNTIL_ET_HOUR", "23"))
+BAR_RETRY_UNTIL_ET_MINUTE: int = int(os.environ.get("BAR_RETRY_UNTIL_ET_MINUTE", "45"))
 # Attribution PM/AM reconcile (M11): correct the stored return when the
 # synthetic PM day-return and the official day-return differ by more than this
 # (fraction; 0.001 = 10 bps). Silent drift would slowly corrupt every fitted β.
@@ -73,3 +89,18 @@ PREMARKET_CAPTURE_ET_MINUTE: int = int(os.environ.get("PREMARKET_CAPTURE_ET_MINU
 # regime-shifts with the news cycle, so a 30-day base would smear it.
 PREMARKET_VOL_WINDOW: int = int(os.environ.get("PREMARKET_VOL_WINDOW", "10"))
 PREMARKET_VOL_MIN_OBS: int = int(os.environ.get("PREMARKET_VOL_MIN_OBS", "5"))
+
+# FinancialData.net (M16). One key is also the live/synthetic switch: empty ⇒
+# the open brief's §2/§3/§4 run on the deterministic synthetic feed exactly as
+# M14/M15 shipped them; set ⇒ FdnClient serves live pre-market, calendar, and
+# news data. Premium tier ($69/mo, personal use) covers every endpoint we call.
+FDN_API_KEY: str = os.environ.get("FDN_API_KEY", "")
+
+
+def premarket_feed_is_synthetic() -> bool:
+    """Whether §2/§3 are running on invented levels. Derived from the key, never
+    hand-flipped — the constants.py flag this replaces (M15) rotted the moment
+    it and the provider construction could disagree. `assemble_open` reads this
+    to stamp `overnight_tape.synthetic` into `data_quality.stale`, which is the
+    single source both renderers key their banner off."""
+    return not FDN_API_KEY
