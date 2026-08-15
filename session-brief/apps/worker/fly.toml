@@ -4,8 +4,17 @@
 #   fly secrets set \                 # the worker's .env, as Fly secrets
 #       DATABASE_URL=... TIINGO_API_KEY=... ANTHROPIC_API_KEY=... \
 #       RESEND_API_KEY=... RENDER_SHARED_SECRET=... WEB_RENDER_URL=... \
+#       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=... \
+#       EDGAR_USER_AGENT="Session Brief you@example.com"
 #       BRIEF_FROM=... BRIEF_RECIPIENT=... HEALTHCHECKS_URL=... FDN_API_KEY=...
 #   fly deploy
+#
+# EDGAR_USER_AGENT is not a credential — SEC EDGAR has no API key and no
+# account. It is an identifier the SEC *requires* on every request (403
+# without one) so they can contact whoever is crawling them. It is set as a
+# secret rather than an env in this file only to keep a real email address out
+# of the repo. Unset, the weekly fundamentals fire skips and still pings its
+# check: stale fundamentals degrade two flags, they don't stop a send.
 #
 # One always-on machine, no HTTP service — a background scheduler, not a web
 # server, so Fly never auto-stops it (docs/02: no cold starts).

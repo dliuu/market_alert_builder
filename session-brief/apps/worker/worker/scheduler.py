@@ -36,6 +36,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from worker import calendar, config
 from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, DEV_USER_ID
+from worker.fundamentals import EdgarProvider
 from worker.providers.base import MarketDataProvider, PremarketProvider
 
 if TYPE_CHECKING:
@@ -655,6 +656,97 @@ def run_reconcile_job(
         raise
 
 
+def _edgar_client() -> EdgarProvider:
+    from worker.providers.edgar import EdgarClient
+
+    return EdgarClient()
+
+
+def _fundamentals_symbols(conn: Connection) -> list[str]:
+    """Every symbol in every book. Fundamentals are shared reference data
+    (docs/03), so this is per-symbol work, not per-user."""
+    rows = conn.execute(text("SELECT DISTINCT symbol FROM holdings ORDER BY symbol"))
+    return [str(s) for s in rows.scalars().all()]
+
+
+def run_fundamentals_job(
+    engine: Engine,
+    *,
+    now_utc: datetime,
+    healthcheck_url: str | None = None,
+) -> str:
+    """Weekly EDGAR refresh (M18).
+
+    Weekly, not daily: one `companyfacts` response carries a registrant's whole
+    history — several MB — and 10-Qs land four times a year, so a daily poll
+    would re-download megabytes to learn nothing.
+
+    EDGAR needs no API key, but it does need a contact `User-Agent`. Unset, this
+    **skips without crashing but fails its check**. Both halves matter: a
+    crash-looping fire in a blocking scheduler would take the briefs down with
+    it, and a success ping would make a forgotten secret undetectable. The
+    briefs themselves do not depend on this job — stale fundamentals degrade two
+    flags, they do not stop a send.
+
+    A successful run is not the same as a useful one, so the job also asserts
+    **freshness**. A renamed upstream concept or a CIK that stopped resolving
+    stores zero rows and would otherwise ping success exactly like a healthy
+    week.
+    """
+    from worker import fundamentals
+
+    hc = config.HEALTHCHECKS_FUNDAMENTALS_URL if healthcheck_url is None else healthcheck_url
+    today = calendar.today_et(now_utc)
+    try:
+        if not config.EDGAR_USER_AGENT:
+            message = (
+                "EDGAR_USER_AGENT is not set, so the weekly fundamentals refresh is "
+                "skipping. The SEC requires a User-Agent naming a real contact; set it "
+                "with `fly secrets set EDGAR_USER_AGENT=...`."
+            )
+            print(f"scheduler: {message}")
+            ping_fail(hc, message)
+            return "skipped-no-user-agent"
+
+        client = _edgar_client()
+        with engine.begin() as conn:
+            symbols = _fundamentals_symbols(conn)
+        if not symbols:
+            ping_success(hc)
+            return "skipped-empty-book"
+
+        # Engine, not connection: ingest owns a transaction per symbol so no
+        # HTTP fetch ever happens inside one.
+        result = fundamentals.ingest_fundamentals(engine, client, symbols, as_of=today)
+        if result["skipped"]:
+            print(f"scheduler: fundamentals — no CIK at EDGAR for {result['skipped']}")
+
+        with engine.begin() as conn:
+            stale = fundamentals.stale_symbols(conn, symbols, as_of=today)
+        if stale:
+            message = (
+                f"fundamentals are stale for {', '.join(stale)} — newest filing older "
+                f"than {config_stale_days()} days. The refresh ran and stored "
+                f"{result['stored']} rows, so this is a pipeline problem, not a quiet "
+                "quarter."
+            )
+            print(f"scheduler: {message}")
+            ping_fail(hc, message)
+            return f"stale-{len(stale)}"
+
+        ping_success(hc)
+        return f"ingested-{result['stored']}"
+    except Exception as exc:
+        ping_fail(hc, f"fundamentals {today}: {exc!r}")
+        raise
+
+
+def config_stale_days() -> int:
+    from worker.constants import STALE_FUNDAMENTALS_DAYS
+
+    return STALE_FUNDAMENTALS_DAYS
+
+
 # --- The blocking loop ------------------------------------------------------
 
 
@@ -703,6 +795,22 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
             sched.add_job(tick_refit, DateTrigger(run_date=nxt), id="refit", replace_existing=True)
             print(f"scheduler: next refit fire at {nxt.isoformat()}")
 
+    def tick_fundamentals() -> None:
+        try:
+            run_fundamentals_job(engine, now_utc=datetime.now(UTC))
+        except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad fire
+            print(f"scheduler: fundamentals failed: {exc!r}")
+        finally:
+            # Sunday 07:00 ET — off the weekend refit's slot and well clear of
+            # any weekday send. Filings land on business days; nothing is lost
+            # by refreshing on the quiet day.
+            nxt = next_weekly_fire(datetime.now(UTC) + timedelta(seconds=1), 6, clock_time(7, 0))
+            sched.add_job(
+                tick_fundamentals, DateTrigger(run_date=nxt),
+                id="fundamentals", replace_existing=True,
+            )
+            print(f"scheduler: next fundamentals fire at {nxt.isoformat()}")
+
     def tick_pm() -> None:
         try:
             run_pm_score_job(engine, now_utc=datetime.now(UTC))
@@ -730,6 +838,10 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
     first_refit = next_weekly_fire(datetime.now(UTC), 5, clock_time(8, 0))
     sched.add_job(tick_refit, DateTrigger(run_date=first_refit), id="refit")
     print(f"scheduler: first refit fire at {first_refit.isoformat()}")
+
+    first_fundamentals = next_weekly_fire(datetime.now(UTC), 6, clock_time(7, 0))
+    sched.add_job(tick_fundamentals, DateTrigger(run_date=first_fundamentals), id="fundamentals")
+    print(f"scheduler: first fundamentals fire at {first_fundamentals.isoformat()}")
 
     first_pm = next_session_fire(datetime.now(UTC), clock_time(18, 30))
     sched.add_job(tick_pm, DateTrigger(run_date=first_pm), id="pm")

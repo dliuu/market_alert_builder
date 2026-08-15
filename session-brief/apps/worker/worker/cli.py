@@ -145,7 +145,24 @@ def main() -> None:
     )
     c_rebuild.add_argument("--date", required=True, help="session date YYYY-MM-DD")
 
+    fundamentals = sub.add_parser(
+        "fundamentals", help="SEC EDGAR companyfacts → the fundamentals table (M18)"
+    )
+    fund_sub = fundamentals.add_subparsers(dest="fund_command")
+    f_ingest = fund_sub.add_parser("ingest", help="fetch filings and store them")
+    f_ingest.add_argument("--symbols", help="comma-separated; defaults to the book")
+    f_ingest.add_argument("--date", help="capture date YYYY-MM-DD; defaults to today")
+    f_replay = fund_sub.add_parser(
+        "replay", help="rebuild typed rows from stored payloads (no network)"
+    )
+    f_replay.add_argument("--symbols", help="comma-separated; defaults to the book")
+
     args = parser.parse_args()
+
+    if args.command == "fundamentals":
+        _fundamentals(args.fund_command, symbols_arg=getattr(args, "symbols", None),
+                      date_arg=getattr(args, "date", None))
+        return
 
     if args.command == "catalysts":
         _catalysts(args.cat_command, date_arg=getattr(args, "date", None),
@@ -204,6 +221,50 @@ def main() -> None:
 
     if args.command in (None, "hello"):
         print("worker: ok")
+
+
+def _fundamentals(
+    fund_command: str | None, *, symbols_arg: str | None, date_arg: str | None
+) -> None:
+    """M18 stages. `ingest` is the only one that touches the network; `replay`
+    rebuilds from stored payloads, which is what makes a concept-mapping fix
+    cost nothing."""
+    from worker.fundamentals import (
+        ingest_fundamentals,
+        replay_fundamentals,
+        stale_symbols,
+    )
+    from worker.providers.edgar import EdgarClient
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        symbols = (
+            [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+            if symbols_arg else _book_symbols(conn, DEV_USER_ID)
+        )
+    if not symbols:
+        raise SystemExit("no symbols: pass --symbols or add holdings to the book")
+
+    if fund_command == "ingest":
+        as_of = date.fromisoformat(date_arg) if date_arg else date.today()
+        # Engine, not connection: ingest opens a transaction per symbol so no
+        # multi-MB fetch ever happens inside one.
+        result = ingest_fundamentals(engine, EdgarClient(), symbols, as_of=as_of)
+        print(f"fundamentals ingest {as_of}: {result['stored']} rows")
+        if result["skipped"]:
+            print(f"  skipped (no CIK at EDGAR): {', '.join(result['skipped'])}")
+        with engine.begin() as conn:
+            stale = stale_symbols(conn, symbols, as_of=as_of)
+        if stale:
+            print(f"  STALE (newest filing too old): {', '.join(stale)}")
+        return
+
+    if fund_command == "replay":
+        with engine.begin() as conn:
+            print(f"fundamentals replay: {replay_fundamentals(conn, symbols)} rows")
+        return
+
+    raise SystemExit("usage: fundamentals {ingest|replay} [--symbols A,B]")
 
 
 def _catalysts(

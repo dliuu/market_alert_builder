@@ -24,7 +24,22 @@ raw_payloads (id, source, endpoint, symbol, as_of, body jsonb, fetched_at)
 bars_daily   (symbol, session_date, o, h, l, c, v, adj_c)   -- PK (symbol, session_date)
 quotes       (symbol, session_date, captured_at, last, prev_close, extended_last, extended_v)
              -- PK (symbol, session_date); one pre-open capture per symbol per session (M15)
-fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date)
+fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date,
+              period_end, fiscal_period, net_income_cents, public_float_cents,
+              domicile, cik, source)
+             -- PK (symbol, as_of, period_end). `as_of` is the SEC *filing* date,
+             -- never the period end (M18/D31): a Q2 fact isn't knowable until
+             -- the 10-Q is filed, and keying on period end would inject
+             -- look-ahead into every consumer. `period_end` is in the key
+             -- because one filing date can carry restated facts for two
+             -- periods (live: AAPL 2010-01-25). A restatement lands as a new
+             -- row; readers wanting the current view of a period take the
+             -- latest as_of for it.
+             -- `quarterly_burn_cents` is *negated* operating cash flow: the
+             -- column is a burn, and runway_quarters divides by it.
+             -- `shares_out` is NULL for multi-class registrants — companyfacts
+             -- drops dimensional facts, and a weighted-average count is a
+             -- different measure, not substituted.
 events       (id, symbol, event_type, occurs_at, payload jsonb)  -- earnings | lockup | macro
 news_items   (id, symbol, headline, url, published_at, source)
 ```
@@ -33,7 +48,7 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 
 `attribution (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, resid_z, provisional, …)` (M11/M12) is the same shape: shared, no `user_id`, keyed by `(symbol, trade_date, model_version)`. Assembly (M13) reads it filtered to held names for the session — one query, no per-user compute.
 
-### Catalysts (M17/M18)
+### Catalysts (M17/M19)
 
 ```sql
 catalyst_insider_tx        (id, symbol, insider_name, insider_title, transaction_date,
@@ -79,7 +94,7 @@ Detectors read only these tables — a signal rebuild costs **zero API calls**,
 and the raw tables themselves replay from `raw_payloads`.
 
 `index_events` (from `0010`, read by `exclusions.py` and `concordance.py` and
-empty until now) is **populated by M18's index differ** rather than curated by
+empty until now) is **populated by M19's index differ** rather than curated by
 hand. Reconstitution days become real contaminated-day fit exclusions for
 attribution.
 

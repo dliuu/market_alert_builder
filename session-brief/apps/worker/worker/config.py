@@ -74,6 +74,14 @@ PREMARKET_CAPTURE_ET_MINUTE: int = int(os.environ.get("PREMARKET_CAPTURE_ET_MINU
 PREMARKET_VOL_WINDOW: int = int(os.environ.get("PREMARKET_VOL_WINDOW", "10"))
 PREMARKET_VOL_MIN_OBS: int = int(os.environ.get("PREMARKET_VOL_MIN_OBS", "5"))
 
+# SEC EDGAR fundamentals (M18). No API key exists and none is needed — but the
+# SEC requires every request to carry a User-Agent naming a real contact, and
+# returns 403 without one. Format: "Company or project (you@example.com)".
+# Empty ⇒ EdgarClient refuses at construction rather than 403-ing mid-run.
+EDGAR_USER_AGENT: str = os.environ.get("EDGAR_USER_AGENT", "")
+# The weekly fundamentals fire pings its own check, like every other scheduled
+# run (docs/02). Empty ⇒ no ping.
+HEALTHCHECKS_FUNDAMENTALS_URL: str = os.environ.get("HEALTHCHECKS_FUNDAMENTALS_URL", "")
 # FinancialData.net (M16). One key is also the live/synthetic switch: empty ⇒
 # the open brief's §2/§3/§4 run on the deterministic synthetic feed exactly as
 # M14/M15 shipped them; set ⇒ FdnClient serves live pre-market, calendar, and
