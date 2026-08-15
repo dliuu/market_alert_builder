@@ -37,6 +37,21 @@ def session_label(session_date: date) -> str:
     return f"{session_date:%a} {session_date:%b} {session_date.day}"
 
 
+_CURRENCY_SYMBOLS = {"USD": "$", "CNY": "¥"}
+
+
+def signed_money(minor_units: int, currency: str = "USD") -> str:
+    """Signed, thousands-separated money for a subject line — generalizes
+    ``assemble._signed_dollars`` across currencies. ``minor_units`` is cents;
+    reproduces ``_signed_dollars``'s sign/formatting digit-for-digit for USD."""
+    symbol = _CURRENCY_SYMBOLS.get(currency)
+    if symbol is None:
+        raise ValueError(f"unknown currency: {currency}")
+    amount = minor_units / 100
+    sign = "+" if amount >= 0 else "-"
+    return f"{sign}{symbol}{abs(amount):,.2f}"
+
+
 def claim_dict(claim: Claim, user_id: str, session_date: date, kind: str) -> dict[str, object]:
     # Emitted claims have no DB id yet; a deterministic slug identifies them.
     return {
