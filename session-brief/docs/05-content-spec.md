@@ -47,10 +47,12 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 
 **Suppression** — three tiers:
 - *full* (row + `why` line): moved >1%, or RVOL >1.5×, or carries news
-- *brief* (bare row): moved 0.3–1%
+- *brief* (bare row): moved 0.3–1%, **or is >15% of book value**
 - *suppressed*: folded into one line — "SERV, MU, TSLA unchanged"
 
 Named exception: anything with earnings inside 5 sessions always gets *full* regardless of movement.
+
+**Weight floor** — a position over 15% of book value is never suppressed, however quiet. At that size "it didn't move" is itself worth seeing, and a name folded into the roll-up line is one you can't reconsider. It earns a *bare row only*: promoting a flat day to *full* would hand it a tape row, make it claim-eligible, and defeat the quiet-session skip below.
 
 Whole-brief version: the close brief is skipped entirely when nothing moved >1%. **The open brief always sends** — "nothing happened overnight" is information you need before the bell.
 
