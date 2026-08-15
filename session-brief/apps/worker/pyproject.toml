@@ -48,7 +48,7 @@ known-third-party = ["alembic"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["worker", "tests"]
+files = ["worker", "worker_cn", "tests"]
 
 # Generated bindings are not hand-maintained; don't hold them to strict typing.
 [[tool.mypy.overrides]]
