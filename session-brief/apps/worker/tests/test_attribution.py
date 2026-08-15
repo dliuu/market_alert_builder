@@ -188,6 +188,77 @@ def test_score_writes_resid_z_and_additive_rows(db_conn: Connection) -> None:
     assert got == pytest.approx(float(row["total_bps"]), abs=1e-6)
 
 
+def test_refit_skips_a_symbol_whose_basket_is_empty_on_every_day(db_conn: Connection) -> None:
+    """One unfittable symbol must not abort the whole refit.
+
+    The regression (2026-08-14): the guard checked ``common`` -- the *candidate*
+    days -- but the loop below it drops any day whose leave-one-out basket
+    screens out entirely, so ``r_x`` can be shorter. When a theme's only liquid
+    member is the symbol being fitted, every day drops, ``r_x`` is empty, and
+    ``fit_two_stage`` raised "need at least 2 observations to fit" -- killing the
+    batch and every healthy symbol in it. That is exactly what happened when the
+    seeded theme members had never been ingested: the refit died outright.
+
+    ``common`` stays populated because the *full* basket includes the symbol
+    itself; only the LOO basket, which excludes it, is empty.
+    """
+    syms = ["SPY", "LONE", "DEAD", "OKAY", "PEER"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_all_days_empty", ["LONE", "DEAD"])
+    _seed_theme(db_conn, "m12_healthy_theme", ["OKAY", "PEER"])
+    _hold(db_conn, "LONE")
+    _hold(db_conn, "OKAY")
+
+    # DEAD is illiquid on every session, so LONE's LOO basket is always empty.
+    db_conn.execute(_text("UPDATE bars_daily SET v = 0 WHERE symbol = 'DEAD'"))
+
+    from worker.attribution import refit
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    res = refit(db_conn, date(2020, 6, 25), now_utc=now, model_version=2)
+
+    assert "LONE" in res.skipped        # skipped, not raised
+    assert "OKAY" in res.symbols        # the healthy symbol still got fitted
+    assert db_conn.execute(_text(
+        "SELECT count(*) FROM attribution_fits WHERE symbol='LONE' AND model_version=2"
+    ), ).scalar_one() == 0
+
+
+def test_refit_window_bounds_reflect_the_days_actually_fitted(db_conn: Connection) -> None:
+    """window_start/window_end must describe the fit, not the candidate window.
+
+    Same root cause as the guard above: the recorded bounds came from ``common``
+    while the regression ran on the filtered days, so a fit that skipped its
+    earliest day still claimed to start there.
+    """
+    syms = ["SPY", "AAA", "BBB", "CCC"]
+    seed_bars_for(db_conn, syms, sessions=160, end=date(2020, 6, 30))
+    _seed_theme(db_conn, "m12_window_bounds", ["AAA", "BBB", "CCC"])
+    _hold(db_conn, "AAA")
+
+    from worker.attribution import refit
+    now = datetime(2020, 6, 30, tzinfo=UTC)
+    fit_date = date(2020, 6, 25)
+    baseline = db_conn.execute(_text(
+        "SELECT window_start FROM attribution_fits WHERE symbol='AAA' AND model_version=2"
+    )).first()
+    assert baseline is None
+
+    # Kill the basket on what would be the window's first day only.
+    refit(db_conn, fit_date, now_utc=now, model_version=2)
+    first_day = db_conn.execute(_text(
+        "SELECT window_start FROM attribution_fits WHERE symbol='AAA' AND model_version=2"
+    )).scalar_one()
+    db_conn.execute(_text(
+        "UPDATE bars_daily SET v = 0 WHERE symbol IN ('BBB','CCC') AND session_date = :d"
+    ), {"d": first_day})
+
+    refit(db_conn, fit_date, now_utc=now, model_version=2)
+    moved = db_conn.execute(_text(
+        "SELECT window_start FROM attribution_fits WHERE symbol='AAA' AND model_version=2"
+    )).scalar_one()
+    assert moved > first_day  # the dropped day is no longer claimed as the start
+
+
 def test_refit_and_score_skip_empty_loo_basket_without_raising(db_conn: Connection) -> None:
     """AAA is the only liquid theme member on two days (BBB/CCC/DDD's dollar
     volume is zeroed there): AAA's own LOO basket -- which excludes AAA --

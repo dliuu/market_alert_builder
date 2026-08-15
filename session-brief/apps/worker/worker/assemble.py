@@ -79,6 +79,12 @@ _KIND_LABELS = {"open": "Open", "close": "Close", "open_cn": "CN Open", "close_c
 _FULL_MOVE = Fraction(1, 100)  # > 1%
 _BRIEF_MOVE = Fraction(3, 1000)  # >= 0.3%
 _RVOL_SPIKE = Fraction(3, 2)  # > 1.5x
+# A position this large is never folded into the roll-up line, however quiet it
+# was: at this weight "it didn't move" is itself the thing you need to see, and
+# a name you can't see is one you can't reconsider. It earns a bare row only —
+# promoting it to `full` would hand it a tape row, make it claim-eligible, and
+# defeat the quiet-session skip, none of which a flat day has earned.
+_ALWAYS_SHOW_WEIGHT = Fraction(15, 100)  # > 15% of book value
 
 
 def assemble(
@@ -171,7 +177,7 @@ def _tier_positions(
     for p in result.positions:
         rvol = tape[p.symbol].rvol if p.symbol in tape else None
         resid_z = cast("float | None", decomp.get(p.symbol, {}).get("resid_z"))
-        tier = _tier(p.day_return, rvol, resid_z)
+        tier = _tier(p.day_return, rvol, resid_z, p.weight)
         if tier == "suppressed":
             suppressed.append(p.symbol)
         else:
@@ -179,16 +185,24 @@ def _tier_positions(
     return shown, suppressed
 
 
-def _tier(day_return: Fraction | None, rvol: Fraction | None, resid_z: float | None = None) -> str:
+def _tier(
+    day_return: Fraction | None,
+    rvol: Fraction | None,
+    resid_z: float | None = None,
+    weight: Fraction | None = None,
+) -> str:
     """Classify a name into full / brief / suppressed (docs/05). A residual-
     material move (M13 §2) is always full, even on a flat raw move or no RVOL
-    spike."""
+    spike. A position over ``_ALWAYS_SHOW_WEIGHT`` is never suppressed."""
     if material_residual(resid_z):
         return "full"
     moved = abs(day_return) if day_return is not None else Fraction(0)
     if moved > _FULL_MOVE or (rvol is not None and rvol > _RVOL_SPIKE):
         return "full"
     if moved >= _BRIEF_MOVE:
+        return "brief"
+    # A weight floor, applied last so it only ever rescues from suppression.
+    if weight is not None and weight > _ALWAYS_SHOW_WEIGHT:
         return "brief"
     return "suppressed"
 
@@ -246,15 +260,34 @@ def _attribution(
         }
         for p, tier in shown
     ]
-    rows.sort(key=_resid_z_sort_key, reverse=True)
+    rows.sort(key=_salience_sort_key, reverse=True)
     return {"id": "attribution", "tier": "full", "note": None, "rows": rows}
 
 
-def _resid_z_sort_key(row: dict[str, object]) -> tuple[bool, float]:
-    """Rank attribution rows by |resid_z| descending; a row with no resid_z
-    (no attribution decomposition available) sorts last."""
+def _salience_sort_key(row: dict[str, object]) -> tuple[bool, float, float]:
+    """Rank attribution rows: residual-material names first by |resid_z|, then
+    everything else by |contribution_bps|.
+
+    The earlier key was ``(resid_z is not None, |resid_z|)``, which made *any*
+    decomposed row outrank *every* undecomposed one — so a name with a trivial
+    |resid_z| led over a name that actually moved the book but had no fit. Being
+    undecomposed is a recurring state, not an edge case: a position opened before
+    the weekly refit, a recent IPO, a name in no theme. Sorting those last hides
+    exactly the row the reader needs, and does it silently.
+
+    Materiality is the existing ``material_residual`` threshold rather than a
+    fresh one, and the two scales are never compared — a z-score orders only
+    against other z-scores, bps only against bps. When idiosyncrasy is unknown or
+    immaterial, the honest fallback is "the largest contributor leads".
+    """
     resid_z = cast("float | None", row.get("resid_z"))
-    return (resid_z is not None, abs(resid_z) if resid_z is not None else 0.0)
+    contribution = cast("int | None", row.get("contribution_bps"))
+    material = material_residual(resid_z)
+    return (
+        material,
+        abs(resid_z) if material and resid_z is not None else 0.0,
+        abs(contribution) if contribution is not None else 0.0,
+    )
 
 
 def _tape_quality(
