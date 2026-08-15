@@ -213,8 +213,12 @@ def test_ensure_todays_bars_gates_on_required_not_everything_ingested(
     from worker import ingest, normalize
 
     ingested: list[list[str]] = []
-    monkeypatch.setattr(ingest, "ingest_daily_bars",
-                        lambda conn, prov, syms, *a, **k: ingested.append(list(syms)) or 0)
+
+    def _record_ingest(conn: Any, prov: Any, syms: list[str], *a: Any, **k: Any) -> int:
+        ingested.append(list(syms))
+        return 0
+
+    monkeypatch.setattr(ingest, "ingest_daily_bars", _record_ingest)
     monkeypatch.setattr(normalize, "normalize_bars", lambda *a, **k: 0)
     # ZPEER never lands; SPY and the held name do.
     monkeypatch.setattr(scheduler, "_bars_present", lambda *a, **k: {"SPY", "HELD"})
