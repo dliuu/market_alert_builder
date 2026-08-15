@@ -15,8 +15,12 @@ from __future__ import annotations
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
+from typing import TYPE_CHECKING
 
 from worker.claims import Claim, ResolvedClaim
+
+if TYPE_CHECKING:
+    from contracts.brief import BriefObject
 
 
 def round_bps(value: Fraction | None) -> int | None:
@@ -50,6 +54,22 @@ def signed_money(minor_units: int, currency: str = "USD") -> str:
     amount = minor_units / 100
     sign = "+" if amount >= 0 else "-"
     return f"{sign}{symbol}{abs(amount):,.2f}"
+
+
+def to_contract_json(obj: BriefObject) -> dict[str, object]:
+    """The contract-compliant JSON dict for a ``BriefObject`` — what actually
+    gets stored, and what ``test_contract_schema.py`` validates.
+
+    Codegen types the optional, non-nullable ``currency`` as ``Currency | None
+    = None`` (docs/04's documented Pydantic-vs-schema gap: a non-required
+    schema property still gets a ``None`` default), so a plain ``model_dump``
+    emits an explicit ``"currency": null`` the schema's own enum rejects.
+    Strip it when unset — the contract's rule is "absent means USD," not
+    "null means USD" (v7, CN-M1)."""
+    body = obj.model_dump(mode="json")
+    if body.get("currency") is None:
+        body.pop("currency", None)
+    return body
 
 
 def claim_dict(claim: Claim, user_id: str, session_date: date, kind: str) -> dict[str, object]:

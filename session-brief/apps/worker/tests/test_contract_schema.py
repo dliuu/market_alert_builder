@@ -34,7 +34,14 @@ def validator() -> Draft202012Validator:
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["close_brief.json", "close_brief_v2.json", "open_brief.json", "open_brief_v3.json"],
+    [
+        "close_brief.json",
+        "close_brief_v2.json",
+        "close_brief_v6.json",
+        "open_brief.json",
+        "open_brief_v3.json",
+        "open_brief_v6.json",
+    ],
 )
 def test_fixture_validates_against_the_canonical_schema(
     validator: Draft202012Validator, fixture_name: str
@@ -54,3 +61,36 @@ def test_an_open_body_carries_no_pnl(validator: Draft202012Validator) -> None:
     body = json.loads((_FIXTURES / "open_brief.json").read_text())
     assert body.get("book") is None
     assert body["kind"] == "open"
+
+
+def test_close_cn_with_currency_validates(validator: Draft202012Validator) -> None:
+    """v7 (CN-M1, D31): the two new kinds and the optional, non-USD `currency`
+    (docs/04) — a minimal object, not a frozen fixture, since CN production is
+    Task 7's job."""
+    body = {
+        "schema_version": 7,
+        "brief_id": "u_01-2026-08-15-close_cn",
+        "user_id": "u_01",
+        "session_date": "2026-08-15",
+        "kind": "close_cn",
+        "currency": "CNY",
+        "generated_at": "2026-08-15T07:20:00Z",
+        "subject": "CN Close · Fri Aug 15 — book +0.5% (+¥1,234.00)",
+        "one_thing": None,
+        "book": {
+            "value_cents": 1_000_000,
+            "day_pnl_cents": 5_000,
+            "day_bps": 50,
+            "total_pnl_cents": 20_000,
+        },
+        "sections": [],
+        "flags": [],
+        "claims": [],
+        "resolved_claims": [],
+        "suppressed": [],
+        "data_quality": {"missing": [], "stale": []},
+    }
+    errors = [
+        f"{'/'.join(str(p) for p in e.path)}: {e.message}" for e in validator.iter_errors(body)
+    ]
+    assert not errors, "\n".join(errors)

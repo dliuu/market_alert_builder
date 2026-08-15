@@ -10,8 +10,11 @@ from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
+import pytest
+
 from contracts.brief import BriefObject, Row
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
+from worker.assemble_shared import to_contract_json
 from worker.catalysts import CatalystItem
 from worker.compute import Lot, Price, compute
 from worker.tape import TapeMetrics
@@ -139,7 +142,7 @@ def test_mixed_session_sends() -> None:
 
 
 def test_matches_frozen_fixture() -> None:
-    got = _mixed().model_dump(mode="json")
+    got = to_contract_json(_mixed())
     expected = json.loads(_FIXTURE.read_text())
     assert got == expected
 
@@ -180,10 +183,11 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_six() -> None:
+def test_schema_version_is_seven() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
-    # horizon-0 morning claim; v6 = M17's catalysts section (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 6
+    # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
+    # `open_cn`/`close_cn` kinds and optional `currency` (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 7
 
 
 def test_material_residual_predicate() -> None:
@@ -258,3 +262,82 @@ def test_row_without_decomposition_still_valid() -> None:
     from contracts.brief import Row
     r = Row.model_validate({"symbol": "MU", "tier": "brief"})  # v2-era row
     assert r.symbol == "MU"
+
+
+# --- CN-M1 (v7): open_cn/close_cn kinds, optional currency ----------------
+
+
+def test_cn_kinds_accepted_and_labelled() -> None:
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}  # +10% -> full
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    for kind, label in (("open_cn", "CN Open"), ("close_cn", "CN Close")):
+        obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                       kind=kind, generated_at=_GENERATED_AT, currency="CNY")
+        assert obj.kind.value == kind
+        assert obj.subject.startswith(f"{label} · ")
+
+
+def test_unknown_kind_still_rejected() -> None:
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    with pytest.raises(ValueError, match="unknown brief kind"):
+        assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                kind="bogus", generated_at=_GENERATED_AT)
+
+
+def test_currency_omitted_from_payload_for_usd() -> None:
+    # `currency` is unset (None) on a USD object, but codegen types it as
+    # `Currency | None = None` (docs/04's Pydantic-vs-schema gap), so a plain
+    # `model_dump` would emit `"currency": null` — a shape the schema's own
+    # enum rejects. `to_contract_json` is the boundary that strips it; that's
+    # what actually gets stored (`_store_brief`), so it's what this asserts.
+    assert "currency" not in to_contract_json(_two())
+
+
+def test_currency_emitted_for_non_usd() -> None:
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                   kind="close_cn", generated_at=_GENERATED_AT, currency="CNY")
+    assert to_contract_json(obj)["currency"] == "CNY"
+
+
+def test_cn_subject_uses_signed_money_for_cny() -> None:
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                   kind="close_cn", generated_at=_GENERATED_AT, currency="CNY")
+    assert "¥" in obj.subject
+
+
+def test_close_cn_shares_the_close_skip_gate() -> None:
+    # Same quiet-session setup as `test_quiet_session_is_skipped`, but close_cn.
+    lots = [_lot("B", "20", "40"), _lot("C", "5", "100")]
+    prices = {
+        "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),
+        "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),
+    }
+    closes = {"B": Decimal("49.75"), "C": Decimal("100.1")}
+    tape = {"B": _tape("B", "1.2", "0.5"), "C": _tape("C", "1", "0.5")}
+    result = compute(_SESSION, lots, prices)
+    obj = assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
+                   kind="close_cn", generated_at=_GENERATED_AT, currency="CNY")
+    assert close_brief_should_skip(obj) is True
+
+
+def test_open_cn_is_not_gated_by_the_close_skip_check() -> None:
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                   kind="open_cn", generated_at=_GENERATED_AT, currency="CNY")
+    assert close_brief_should_skip(obj) is False

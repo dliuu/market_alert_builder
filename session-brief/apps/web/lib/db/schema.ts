@@ -119,7 +119,7 @@ export const briefs = pgTable("briefs", {
 		}).onDelete("cascade"),
 	unique("briefs_user_id_session_date_kind_key").on(table.userId, table.sessionDate, table.kind),
 	pgPolicy("briefs_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
-	check("briefs_kind_check", sql`kind = ANY (ARRAY['open'::text, 'close'::text])`),
+	check("briefs_kind_check", sql`kind = ANY (ARRAY['open'::text, 'close'::text, 'open_cn'::text, 'close_cn'::text])`),
 ]);
 
 export const metrics = pgTable("metrics", {

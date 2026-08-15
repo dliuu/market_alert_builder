@@ -8,7 +8,7 @@ import { notFound } from "next/navigation";
 export const dynamic = "force-dynamic";
 
 // Slug is "<YYYY-MM-DD>-<kind>", e.g. 2026-08-11-close.
-const SLUG = /^(\d{4}-\d{2}-\d{2})-(open|close)$/;
+const SLUG = /^(\d{4}-\d{2}-\d{2})-(open|close|open_cn|close_cn)$/;
 
 export default async function BriefPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -30,6 +30,9 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
 
   if (!row) notFound();
   const brief = row.body as unknown as BriefObject;
+  // Absent `currency` means USD (docs/04) — map to the display symbol once,
+  // here, rather than re-deriving it at every money call site.
+  const currencySymbol = brief.currency === "CNY" ? "¥" : "$";
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
@@ -69,15 +72,15 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         <section style={S.card}>
           <h2 style={S.h2}>Session scorecard</h2>
           <div style={S.grid}>
-            <Stat label="Book value" value={dollars(brief.book.value_cents)} />
+            <Stat label="Book value" value={dollars(brief.book.value_cents, currencySymbol)} />
             <Stat
               label="Day P&L"
-              value={`${signedDollars(brief.book.day_pnl_cents)} · ${bps(brief.book.day_bps)}`}
+              value={`${signedDollars(brief.book.day_pnl_cents, currencySymbol)} · ${bps(brief.book.day_bps)}`}
               positive={brief.book.day_pnl_cents >= 0}
             />
             <Stat
               label="Total P&L"
-              value={`${signedDollars(brief.book.total_pnl_cents)}${
+              value={`${signedDollars(brief.book.total_pnl_cents, currencySymbol)}${
                 brief.book.total_pct != null ? ` · ${pct(brief.book.total_pct)}` : ""
               }`}
               positive={brief.book.total_pnl_cents >= 0}
@@ -121,12 +124,14 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                       </sup>
                     )}
                   </td>
-                  <td style={S.tdR}>{r.close != null ? `$${r.close.toFixed(2)}` : "—"}</td>
+                  <td style={S.tdR}>
+                    {r.close != null ? `${currencySymbol}${r.close.toFixed(2)}` : "—"}
+                  </td>
                   <td style={{ ...S.tdR, ...signColor(r.day_return) }}>
                     {pctOrDash(r.day_return)}
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.day_pnl_cents) }}>
-                    {r.day_pnl_cents != null ? signedDollars(r.day_pnl_cents) : "—"}
+                    {r.day_pnl_cents != null ? signedDollars(r.day_pnl_cents, currencySymbol) : "—"}
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.contribution_bps) }}>
                     {r.contribution_bps != null ? bps(r.contribution_bps) : "—"}
@@ -135,7 +140,9 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                     {r.resid_bps != null ? bps(r.resid_bps) : "—"}
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.total_pnl_cents) }}>
-                    {r.total_pnl_cents != null ? signedDollars(r.total_pnl_cents) : "—"}
+                    {r.total_pnl_cents != null
+                      ? signedDollars(r.total_pnl_cents, currencySymbol)
+                      : "—"}
                   </td>
                   <td style={S.tdR}>{pctOrDash(r.total_pct)}</td>
                 </tr>
@@ -149,14 +156,14 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                     {pct(brief.book.day_bps / 10000)}
                   </td>
                   <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_pnl_cents) }}>
-                    {signedDollars(brief.book.day_pnl_cents)}
+                    {signedDollars(brief.book.day_pnl_cents, currencySymbol)}
                   </td>
                   <td style={{ ...S.tdRTotal, ...signColor(brief.book.day_bps) }}>
                     {bps(brief.book.day_bps)}
                   </td>
                   <td style={S.tdRTotal}>—</td>
                   <td style={{ ...S.tdRTotal, ...signColor(brief.book.total_pnl_cents) }}>
-                    {signedDollars(brief.book.total_pnl_cents)}
+                    {signedDollars(brief.book.total_pnl_cents, currencySymbol)}
                   </td>
                   <td style={S.tdRTotal}>
                     {brief.book.total_pct != null ? pct(brief.book.total_pct) : "—"}
@@ -225,7 +232,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   </td>
                   <td style={{ ...S.tdR, ...signColor(r.pre_pct) }}>{pctOrDash(r.pre_pct)}</td>
                   <td style={{ ...S.tdR, ...signColor(r.gap_cents) }}>
-                    {dollarsOrDash(r.gap_cents)}
+                    {dollarsOrDash(r.gap_cents, currencySymbol)}
                   </td>
                   <td style={S.tdR}>{multOrDash(r.premarket_vol_mult)}</td>
                 </tr>
@@ -354,7 +361,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   <td style={S.td}>{r.kind}</td>
                   <td style={S.td}>{r.ref_date ?? "—"}</td>
                   <td style={S.td}>
-                    {catalystDetail(r)}
+                    {catalystDetail(r, currencySymbol)}
                     {r.ambiguous_code && (
                       <span
                         style={S.provMarker}
@@ -455,12 +462,12 @@ function Stat({ label, value, positive }: { label: string; value: string; positi
 }
 
 // --- formatters ---
-function dollars(cents: number): string {
-  return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function dollars(cents: number, symbol = "$"): string {
+  return `${symbol}${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-function signedDollars(cents: number): string {
+function signedDollars(cents: number, symbol = "$"): string {
   const sign = cents >= 0 ? "+" : "-";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${sign}${symbol}${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function bps(value: number): string {
   return `${value >= 0 ? "+" : ""}${value}bps`;
@@ -475,10 +482,12 @@ function pct(fraction: number): string {
 // The figures for one catalyst row. Every number comes from the object; a null
 // renders as "size unknown" rather than dropping the row, because an unknown
 // size is information and a missing row is not (open question 4).
-function catalystDetail(r: Row): string {
+function catalystDetail(r: Row, currencySymbol: string): string {
   const parts: string[] = [];
   if (r.insider_count != null) parts.push(`${r.insider_count} insiders`);
-  if (r.value_cents != null) parts.push(signedDollars(r.value_cents).replace("+", ""));
+  if (r.value_cents != null) {
+    parts.push(signedDollars(r.value_cents, currencySymbol).replace("+", ""));
+  }
   if (r.pct_of_holding != null) parts.push(`${(r.pct_of_holding * 100).toFixed(1)}% of holding`);
   if (r.shares != null) parts.push(`${Math.round(r.shares).toLocaleString()} shares`);
   if (r.pct_of_float != null) parts.push(`${(r.pct_of_float * 100).toFixed(2)}% of float`);
@@ -504,10 +513,10 @@ function signedAbs(v: number | null | undefined): string {
 // The gap is dollars per share, not percent — that's the figure you act on
 // (docs/01). Per-share, not per-position: the open brief carries no position
 // data by design.
-function dollarsOrDash(cents: number | null | undefined): string {
+function dollarsOrDash(cents: number | null | undefined, symbol = "$"): string {
   if (cents == null) return "—";
   const sign = cents >= 0 ? "+" : "−";
-  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+  return `${sign}${symbol}${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 function multOrDash(m: number | null | undefined): string {
   return m == null ? "—" : `${m.toFixed(1)}×`;

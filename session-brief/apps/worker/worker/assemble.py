@@ -29,7 +29,14 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
-from worker.assemble_shared import claim_dict, resolved_dict, round_bps, session_label
+from worker.assemble_shared import (
+    claim_dict,
+    resolved_dict,
+    round_bps,
+    session_label,
+    signed_money,
+    to_contract_json,
+)
 from worker.attribution import material_residual, read_attribution_decomp
 from worker.catalysts import CatalystItem, mark_reported, read_catalysts
 from worker.catalysts_section import catalysts_section
@@ -54,10 +61,16 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 # D22 said M13 and M15 both bump and landing order assigns the number. M13
 # landed first and took v4, so M15 is v5: the §2/§3 row fields and the
 # horizon-0 morning claim. v6 = M17: the close brief's catalysts section
-# (insider flow and Form 144 supply signals) and its row fields.
-SCHEMA_VERSION = 6
+# (insider flow and Form 144 supply signals) and its row fields. v7 = CN-M1
+# (D31): `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD,
+# so v6 bodies keep validating).
+SCHEMA_VERSION = 7
 
 _BPS_PER_UNIT = 10_000
+
+# Subject-line prefix per kind (D31: CN kinds get a "CN " prefix rather than
+# `kind.capitalize()`, which would render "Open_cn").
+_KIND_LABELS = {"open": "Open", "close": "Close", "open_cn": "CN Open", "close_cn": "CN Close"}
 
 # Suppression thresholds (docs/05). `full` also fires on an RVOL spike; `brief`
 # is the 0.3–1% band; below that a name is suppressed. The earnings-in-5-sessions
@@ -84,6 +97,7 @@ def assemble(
     stale: list[str] | None = None,
     decomp: dict[str, dict[str, object]] | None = None,
     catalysts: list[CatalystItem] | None = None,
+    currency: str = "USD",
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -95,7 +109,7 @@ def assemble(
     (M13), read from the DB by ``assemble_and_store`` — ``assemble`` itself is
     pure and never queries it.
     """
-    if kind not in ("open", "close"):
+    if kind not in _KIND_LABELS:
         raise ValueError(f"unknown brief kind {kind!r}")
 
     book = result.book
@@ -129,7 +143,7 @@ def assemble(
         "session_date": session_date.isoformat(),
         "kind": kind,
         "generated_at": generated_at.isoformat(),
-        "subject": _subject(kind, session_date, book),
+        "subject": _subject(kind, session_date, book, currency),
         "one_thing": None,  # narration, M8
         "book": _book(book),
         "sections": sections,
@@ -139,6 +153,8 @@ def assemble(
         "suppressed": sorted(suppressed),
         "data_quality": {"missing": missing or [], "stale": stale or []},
     }
+    if currency != "USD":
+        payload["currency"] = currency
     # model_validate enforces the contract (extra='forbid', required keys, types).
     return BriefObject.model_validate(payload)
 
@@ -180,8 +196,9 @@ def _tier(day_return: Fraction | None, rvol: Fraction | None, resid_z: float | N
 def close_brief_should_skip(obj: BriefObject) -> bool:
     """A close brief is skipped entirely when nothing was a full-tier mover
     (docs/05). Brief-tier names alone don't warrant a send; the open brief
-    (not yet built) always sends regardless."""
-    if obj.kind.value != "close":
+    (not yet built) always sends regardless. Both close kinds (`close`,
+    `close_cn`) share this gate; both open kinds always send (D31)."""
+    if obj.kind.value not in ("close", "close_cn"):
         return False
     attribution = next((s for s in obj.sections if s.id is SectionId.attribution), None)
     if attribution is None:
@@ -272,17 +289,11 @@ def _row_total_pct(p: PositionMetrics) -> float | None:
     return float(Fraction(p.total_pnl_cents, p.total_cost_cents))
 
 
-def _subject(kind: str, session_date: date, book: BookMetrics) -> str:
-    label = kind.capitalize()
+def _subject(kind: str, session_date: date, book: BookMetrics, currency: str) -> str:
+    label = _KIND_LABELS[kind]
     when = session_label(session_date)
     pct = float(book.day_bps) / 100 if book.day_bps is not None else 0.0
-    dollars = book.day_pnl_cents / 100
-    return f"{label} · {when} — book {pct:+.1f}% ({_signed_dollars(dollars)})"
-
-
-def _signed_dollars(dollars: float) -> str:
-    sign = "+" if dollars >= 0 else "-"
-    return f"{sign}${abs(dollars):,.2f}"
+    return f"{label} · {when} — book {pct:+.1f}% ({signed_money(book.day_pnl_cents, currency)})"
 
 
 # --- Database layer -------------------------------------------------------
@@ -385,6 +396,6 @@ def _store_brief(conn: Connection, obj: BriefObject) -> None:
             "session_date": obj.session_date,
             "kind": obj.kind.value,
             "schema_version": obj.schema_version,
-            "body": json.dumps(obj.model_dump(mode="json")),
+            "body": json.dumps(to_contract_json(obj)),
         },
     )

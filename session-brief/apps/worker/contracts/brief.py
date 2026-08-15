@@ -20,6 +20,13 @@ from pydantic import (
 class Kind(Enum):
     open = 'open'
     close = 'close'
+    open_cn = 'open_cn'
+    close_cn = 'close_cn'
+
+
+class Currency(Enum):
+    USD = 'USD'
+    CNY = 'CNY'
 
 
 class DataQuality(BaseModel):
@@ -39,7 +46,10 @@ class Book(BaseModel):
     day_bps: int
     total_pnl_cents: int
     total_pct: float | None = None
-    vs_spy_bps: int | None = None
+    vs_spy_bps: int | None = Field(
+        None,
+        description="vs the book's benchmark (SPY for the US book, CSI 300 for the CN book).",
+    )
 
 
 class Id(Enum):
@@ -187,7 +197,7 @@ class Row(BaseModel):
     )
     gap_cents: int | None = Field(
         None,
-        description='Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).',
+        description='Open brief §3: the pre-market gap in integer minor units (cents / fen). Money, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).',
     )
     premarket_vol_mult: float | None = Field(
         None,
@@ -210,7 +220,7 @@ class Row(BaseModel):
     )
     value_cents: int | None = Field(
         None,
-        description='Close brief catalysts: transaction value in integer cents. Never float (M17).',
+        description='Close brief catalysts: transaction value in integer minor units (cents / fen). Never float (M17).',
     )
     pct_of_holding: float | None = Field(
         None,
@@ -322,6 +332,10 @@ class BriefObject(BaseModel):
     kind: Kind
     generated_at: AwareDatetime
     subject: constr(max_length=160)
+    currency: Currency | None = Field(
+        None,
+        description='Optional; absent means USD. Stored pre-v7 bodies remain valid — this optionality is deliberate, so old renderers/bodies must keep working (docs/04).',
+    )
     one_thing: str | None = None
     book: Book | None = Field(
         None,
