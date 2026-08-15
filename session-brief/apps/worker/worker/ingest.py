@@ -34,9 +34,14 @@ def ingest_daily_bars(
     symbols: list[str],
     start: date,
     end: date,
+    *,
+    source: str = SOURCE,
+    endpoint: str = ENDPOINT,
 ) -> int:
     """Fetch and store daily bars for each symbol. Returns the number of new
-    raw_payloads rows written (0 for an already-ingested window)."""
+    raw_payloads rows written (0 for an already-ingested window). ``source``/
+    ``endpoint`` default to the Tiingo constants; the CN backfill path passes
+    ``source="synthetic-cn"`` so its rows never collide with live Tiingo rows."""
     written = 0
     for symbol in symbols:
         sym = symbol.upper()
@@ -48,8 +53,8 @@ def ingest_daily_bars(
         result = conn.execute(
             _INSERT,
             {
-                "source": SOURCE,
-                "endpoint": ENDPOINT,
+                "source": source,
+                "endpoint": endpoint,
                 "symbol": sym,
                 "as_of": as_of,
                 "body": body,

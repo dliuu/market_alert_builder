@@ -34,6 +34,9 @@ def main() -> None:
         "--symbols", help="comma-separated tickers; defaults to the symbols in your book"
     )
     backfill.add_argument("--days", type=int, default=90, help="look-back window (default 90)")
+    backfill.add_argument(
+        "--market", default="us", choices=("us", "cn"), help="which side to backfill (default us)"
+    )
 
     compute = sub.add_parser("compute", help="compute returns/P&L/contribution for a session")
     compute.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest bar")
@@ -153,7 +156,7 @@ def main() -> None:
         return
 
     if args.command == "backfill":
-        _backfill(symbols_arg=args.symbols, days=args.days)
+        _backfill(symbols_arg=args.symbols, days=args.days, market=args.market)
         return
 
     if args.command == "compute":
@@ -372,7 +375,7 @@ def _attribution(
     )
 
 
-def _backfill(symbols_arg: str | None, days: int) -> None:
+def _backfill(symbols_arg: str | None, days: int, market: str) -> None:
     engine = get_engine()
     symbols = _resolve_symbols(symbols_arg, engine)
     if not symbols:
@@ -382,8 +385,22 @@ def _backfill(symbols_arg: str | None, days: int) -> None:
 
     end = date.today()
     start = end - timedelta(days=days)
-    provider = TiingoProvider()
 
+    if market == "cn":
+        # CN logic stays in worker_cn (separation rule); cli.py only routes.
+        from worker_cn.backfill import backfill_cn
+
+        try:
+            result = backfill_cn(engine, symbols, start, end)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
+        print(
+            f"backfill (cn): {len(symbols)} symbol(s) {start}..{end} — "
+            f"{result.written} new payload(s), {result.bars} bar(s) normalized"
+        )
+        return
+
+    provider = TiingoProvider()
     with engine.begin() as conn:
         written = ingest_daily_bars(conn, provider, symbols, start, end)
         bars = normalize_bars(conn, symbols)
