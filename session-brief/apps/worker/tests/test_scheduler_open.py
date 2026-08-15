@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from worker import config, scheduler
+from worker import calendar, config, scheduler
 
 UTC = ZoneInfo("UTC")
 _DELAY = timedelta(minutes=45)
@@ -53,10 +53,8 @@ def test_half_day_moves_the_close_fire_but_not_the_open() -> None:
     # Open did not move: still 08:15 ET == 13:15 UTC.
     assert open_fire == datetime(2026, 11, 27, 13, 15, tzinfo=UTC)
 
-    # And a normal session's open fires at the same wall-clock time. Both are
-    # sessions, so neither lookup returns None — assert that before comparing.
+    # And a normal session's open fires at the same wall-clock time.
     normal_open = scheduler.open_fire_time(date(2026, 11, 30))
-    assert open_fire is not None and normal_open is not None
     assert (
         open_fire.astimezone(scheduler.ET).time()
         == normal_open.astimezone(scheduler.ET).time()
@@ -80,36 +78,72 @@ def test_next_fire_returns_the_close_after_the_open_has_passed() -> None:
     assert when == datetime(2026, 9, 4, 20, 45, tzinfo=UTC)
 
 
-def test_after_fridays_close_the_next_fire_is_saturdays_heartbeat() -> None:
-    """Saturday is not a session, so no open fire — but the close fire keeps its
-    daily heartbeat so the dead-man's switch stays green over a weekend (D20)."""
+def test_after_fridays_close_the_next_fire_is_saturdays_open_heartbeat() -> None:
+    """Both fires now keep a daily heartbeat (the 2026-08-15 fix): Saturday's
+    08:15 ET open candidate lands before its 16:45 ET close candidate, so it's
+    the very next fire — not close, and not a gap until Monday.
+
+    Before this fix, ``open_fire_time`` returned ``None`` on a non-session day,
+    so ``next_kind_fire`` never produced an "open" candidate on a weekend or
+    holiday at all — ``run_open_session_job`` was simply never invoked, and its
+    own (already correct) is_session-check-and-ping-success never ran.
+    ``HEALTHCHECKS_OPEN_URL`` went dark for the entire weekend as a result:
+    observed 2026-08-15, no ping landed between Friday's real open send and the
+    following Monday. Exactly the "weekday-only cron reads a holiday as a
+    failed check-in" anti-pattern D20 built the close job to avoid — just not
+    applied symmetrically here until now.
+    """
     now = datetime(2026, 9, 4, 21, 0, tzinfo=UTC)  # after Friday's close fire
     when, kind = scheduler.next_kind_fire(now, _DELAY)
-    assert kind == "close"
-    assert when.date() == date(2026, 9, 5)  # Saturday
+    assert kind == "open"
+    assert when == datetime(2026, 9, 5, 12, 15, tzinfo=UTC)  # Sat 08:15 ET
 
 
-def test_the_next_open_after_a_holiday_weekend_is_tuesday() -> None:
-    """Labor Day Monday 2026-09-07 is a holiday, so the first open brief of the
-    week is Tuesday's — the close heartbeat fires on the holiday, the open
-    doesn't."""
+def test_an_open_heartbeat_fires_every_day_including_a_holiday() -> None:
+    """The schedule no longer skips "open" candidates on non-sessions — every
+    calendar day gets one, mirroring the close heartbeat (D20). Whether a given
+    fire actually *sends* is the job body's call (``run_open_session_job``'s own
+    is_session check), not the scheduler's."""
     now = datetime(2026, 9, 4, 21, 0, tzinfo=UTC)
     opens = []
-    for _ in range(6):
+    for _ in range(8):  # 4 days x (open, close) = 8 fires, through Tuesday's open
         when, kind = scheduler.next_kind_fire(now, _DELAY)
         if kind == "open":
             opens.append(when.date())
         now = when + timedelta(seconds=1)
 
-    assert opens[0] == date(2026, 9, 8)  # Tuesday, not Sat/Sun/Labor Day
+    assert opens == [
+        date(2026, 9, 5), date(2026, 9, 6), date(2026, 9, 7),  # Sat, Sun, Labor Day
+        date(2026, 9, 8),  # the next real session
+    ]
 
 
-def test_open_does_not_fire_on_a_holiday() -> None:
-    """The close fire keeps a daily heartbeat even on holidays (D20 — that is
-    how the dead-man's switch stays green). The open brief has no such job, so
-    it simply doesn't schedule on a non-session."""
+def test_open_fire_time_lands_on_a_holiday_too() -> None:
+    """The regression test: a nominal heartbeat time, not ``None``, on a
+    non-session day — see the docstring on ``open_fire_time`` for the full
+    story of why this matters."""
     labor_day = date(2026, 9, 7)
-    assert scheduler.open_fire_time(labor_day) is None
+    assert not calendar.is_session(labor_day)
+    assert scheduler.open_fire_time(labor_day) == datetime(2026, 9, 7, 12, 15, tzinfo=UTC)
+
+
+def test_a_holiday_open_heartbeat_reaches_the_skip_and_ping_success_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: the scheduled holiday fire actually invokes the job, and the
+    job's own is_session guard is what pings success — not a scheduler no-op."""
+    pings: list[Any] = []
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+
+    labor_day_0815_et = datetime(2026, 9, 7, 12, 15, tzinfo=UTC)
+    outcome = scheduler.run_open_session_job(
+        _engine(),  # type: ignore[arg-type]
+        now_utc=labor_day_0815_et,
+        healthcheck_url="https://hc.example/open",
+    )
+    assert outcome == "skipped-holiday"
+    assert pings == [("ok", "https://hc.example/open")]
 
 
 def test_a_session_gets_exactly_one_open_and_one_close() -> None:

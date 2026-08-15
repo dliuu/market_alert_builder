@@ -249,6 +249,65 @@ def test_ensure_todays_bars_gives_up_after_timeout(monkeypatch: pytest.MonkeyPat
     assert missing == {"ASTS"}  # returns what's still missing rather than hanging
 
 
+def test_ensure_todays_bars_gates_on_required_not_everything_ingested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late theme member must not hold up the send.
+
+    The poll ingests the whole universe — held names, benchmarks, and the
+    attribution model's theme constituents — but only the held names and SPY are
+    load-bearing for tonight's numbers. Reporting a missing theme peer as
+    "missing" would defer a brief that is fully computable.
+    """
+    from worker import ingest, normalize
+
+    ingested: list[list[str]] = []
+
+    def _record_ingest(conn: Any, prov: Any, syms: list[str], *a: Any, **k: Any) -> int:
+        ingested.append(list(syms))
+        return 0
+
+    monkeypatch.setattr(ingest, "ingest_daily_bars", _record_ingest)
+    monkeypatch.setattr(normalize, "normalize_bars", lambda *a, **k: 0)
+    # ZPEER never lands; SPY and the held name do.
+    monkeypatch.setattr(scheduler, "_bars_present", lambda *a, **k: {"SPY", "HELD"})
+
+    missing = scheduler.ensure_todays_bars(
+        _FakeEngine(),  # type: ignore[arg-type]
+        provider=object(),  # type: ignore[arg-type]
+        symbols=["SPY", "HELD", "ZPEER"],
+        session_date=date(2026, 9, 4),
+        required=["SPY", "HELD"],
+        timeout_s=0,
+        interval_s=1,
+        now_monotonic=lambda: 0.0,
+        sleep=lambda _s: None,
+    )
+    assert missing == set()                       # the send is not blocked
+    assert ingested[0] == ["SPY", "HELD", "ZPEER"]  # ...but ZPEER was still fetched
+
+
+def test_ensure_todays_bars_defaults_required_to_everything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting `required` keeps the old behaviour: gate on all of `symbols`."""
+    from worker import ingest, normalize
+
+    monkeypatch.setattr(ingest, "ingest_daily_bars", lambda *a, **k: 0)
+    monkeypatch.setattr(normalize, "normalize_bars", lambda *a, **k: 0)
+    monkeypatch.setattr(scheduler, "_bars_present", lambda *a, **k: {"SPY"})
+
+    missing = scheduler.ensure_todays_bars(
+        _FakeEngine(),  # type: ignore[arg-type]
+        provider=object(),  # type: ignore[arg-type]
+        symbols=["SPY", "HELD"],
+        session_date=date(2026, 9, 4),
+        timeout_s=0,
+        interval_s=1,
+        now_monotonic=lambda: 0.0,
+        sleep=lambda _s: None,
+    )
+    assert missing == {"HELD"}
 # --- next_after_outcome: where the one-shot points next (pure) ---------------
 
 
@@ -313,7 +372,8 @@ def test_run_session_job_skips_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _stub_poll(monkeypatch: pytest.MonkeyPatch, missing: set[str]) -> None:
     """Drive run_session_job to the poll's verdict without a DB or a network."""
-    monkeypatch.setattr(scheduler, "book_symbols", lambda conn, user_id: ["SPY", "ASTS"])
+    monkeypatch.setattr(scheduler, "ingest_symbols", lambda conn, user_id: ["SPY", "ASTS"])
+    monkeypatch.setattr(scheduler, "required_symbols", lambda conn, user_id: ["SPY", "ASTS"])
     monkeypatch.setattr(scheduler, "_default_provider", lambda: object())
     monkeypatch.setattr(scheduler, "ensure_todays_bars", lambda *a, **k: missing)
 

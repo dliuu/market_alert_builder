@@ -245,6 +245,58 @@ def test_attribution_rows_ranked_by_abs_resid_z_desc_none_last() -> None:
     assert d_row.resid_z is None
 
 
+def _salience() -> BriefObject:
+    """The 2026-08-14 shape: the name that drove the book has no decomposition,
+    and the one that does has an immaterial residual."""
+    lots = [_lot("MOVER", "100", "10"), _lot("TINY", "10", "10"), _lot("IDIO", "10", "10")]
+    prices = {
+        "MOVER": Price(c=Decimal("12"), prev_c=Decimal("10")),      # +20% → ~1667 bps
+        "TINY": Price(c=Decimal("10.5"), prev_c=Decimal("10")),     # +5%  → ~42 bps
+        "IDIO": Price(c=Decimal("10.5"), prev_c=Decimal("10")),     # +5%  → ~42 bps
+    }
+    closes = {"MOVER": Decimal("12"), "TINY": Decimal("10.5"), "IDIO": Decimal("10.5")}
+    decomp: dict[str, dict[str, object]] = {
+        # Immaterial residual: a fitted beta, but nothing idiosyncratic to say.
+        "TINY": {"market_bps": 30, "theme_bps": 10, "resid_bps": 2,
+                 "resid_z": 1.0, "provisional": False},
+        # Genuinely idiosyncratic, even though it barely moved the book.
+        "IDIO": {"market_bps": 5, "theme_bps": 2, "resid_bps": 35,
+                 "resid_z": 3.0, "provisional": False},
+        # MOVER has no fit at all (no theme / not yet refitted) → resid_z is None.
+    }
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT, decomp=decomp)
+
+
+def test_undecomposed_row_ranks_on_contribution_not_last() -> None:
+    """A name with no decomposition must not be buried behind a trivial one.
+
+    The regression (2026-08-14): the key was ``(resid_z is not None, |resid_z|)``,
+    so *any* fitted row outranked *every* unfitted one. INFQ drove +212 bps of a
+    +192 bps day but had no theme, so the brief led with ASTS at -25 bps and an
+    immaterial |resid_z| of 1.34. Undecomposed is a recurring state — a position
+    opened before the weekly refit, an IPO, a name in no theme — so the ordering
+    has to degrade to materiality rather than to last place.
+    """
+    attribution = next(s for s in _salience().sections if s.id.value == "attribution")
+    assert [r.symbol for r in attribution.rows] == ["IDIO", "MOVER", "TINY"]
+
+
+def test_material_residual_still_leads_over_a_bigger_contributor() -> None:
+    """The documented promise survives: a material |resid_z| (>= 2.0) leads even
+    on a small raw move, which is the whole point of the decomposition."""
+    attribution = next(s for s in _salience().sections if s.id.value == "attribution")
+    lead = attribution.rows[0]
+    assert lead.symbol == "IDIO"
+    assert lead.resid_z == 3.0
+    # ...and it led despite contributing far less than MOVER.
+    mover = next(r for r in attribution.rows if r.symbol == "MOVER")
+    assert mover.contribution_bps is not None
+    assert lead.contribution_bps is not None
+    assert mover.contribution_bps > lead.contribution_bps
+
+
 def test_row_accepts_decomposition_fields() -> None:
     from contracts.brief import Row
     r = Row.model_validate({

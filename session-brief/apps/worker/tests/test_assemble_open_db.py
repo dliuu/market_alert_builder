@@ -173,6 +173,40 @@ def test_book_symbols_includes_sector_benchmarks(db_conn: Connection) -> None:
     assert "SPY" in symbols  # the market benchmark is always included
 
 
+def test_ingest_universe_covers_theme_members_but_the_send_gate_does_not(
+    db_conn: Connection,
+) -> None:
+    """Attribution's own inputs must be fetched, without gating tonight's send.
+
+    Theme constituents were seeded but never ingested — `book_symbols` is
+    holdings ∪ benchmarks ∪ SPY — so the refit had no bars for 5 of 8 members and
+    died (2026-08-14). They belong in the *ingest* universe.
+
+    They must **not** join the set the close brief waits on: a delisted or
+    illiquid quantum peer has nothing to do with tonight's P&L, and gating on it
+    would defer, then fail, a brief that had every number it needed.
+    """
+    from worker.scheduler import ingest_symbols, required_symbols
+
+    _seed_book(db_conn)
+    theme_id = db_conn.execute(text(
+        "INSERT INTO themes (key, name) VALUES ('zt', 'zt') RETURNING id"
+    )).scalar_one()
+    db_conn.execute(text(
+        "INSERT INTO theme_members (theme_id, symbol, effective_from) "
+        "VALUES (:t, 'ZPEER', '2019-01-01')"
+    ), {"t": theme_id})
+
+    to_ingest = ingest_symbols(db_conn, _USER)
+    required = required_symbols(db_conn, _USER)
+
+    assert "ZPEER" in to_ingest       # the model's input is fetched
+    assert "ZPEER" not in required    # ...but never blocks the send
+    assert _BENCH in to_ingest
+    assert _BENCH not in required     # nor does a sector benchmark
+    assert {"ZHELD", "SPY"} <= set(required)  # held names and the market do
+
+
 def _seed_premarket(
     conn: Connection, symbol: str, prev_close: Decimal, extended_last: Decimal
 ) -> None:
