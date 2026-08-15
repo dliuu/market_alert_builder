@@ -213,15 +213,34 @@ def _attribution(
         }
         for p, tier in shown
     ]
-    rows.sort(key=_resid_z_sort_key, reverse=True)
+    rows.sort(key=_salience_sort_key, reverse=True)
     return {"id": "attribution", "tier": "full", "note": None, "rows": rows}
 
 
-def _resid_z_sort_key(row: dict[str, object]) -> tuple[bool, float]:
-    """Rank attribution rows by |resid_z| descending; a row with no resid_z
-    (no attribution decomposition available) sorts last."""
+def _salience_sort_key(row: dict[str, object]) -> tuple[bool, float, float]:
+    """Rank attribution rows: residual-material names first by |resid_z|, then
+    everything else by |contribution_bps|.
+
+    The earlier key was ``(resid_z is not None, |resid_z|)``, which made *any*
+    decomposed row outrank *every* undecomposed one — so a name with a trivial
+    |resid_z| led over a name that actually moved the book but had no fit. Being
+    undecomposed is a recurring state, not an edge case: a position opened before
+    the weekly refit, a recent IPO, a name in no theme. Sorting those last hides
+    exactly the row the reader needs, and does it silently.
+
+    Materiality is the existing ``material_residual`` threshold rather than a
+    fresh one, and the two scales are never compared — a z-score orders only
+    against other z-scores, bps only against bps. When idiosyncrasy is unknown or
+    immaterial, the honest fallback is "the largest contributor leads".
+    """
     resid_z = cast("float | None", row.get("resid_z"))
-    return (resid_z is not None, abs(resid_z) if resid_z is not None else 0.0)
+    contribution = cast("int | None", row.get("contribution_bps"))
+    material = material_residual(resid_z)
+    return (
+        material,
+        abs(resid_z) if material and resid_z is not None else 0.0,
+        abs(contribution) if contribution is not None else 0.0,
+    )
 
 
 def _tape_quality(

@@ -505,6 +505,7 @@ def refit(
             continue
 
         r_x, r_m, r_t = [], [], []
+        used: list[date] = []
         for day in common:
             live = members_on(members, day)
             rets = {s: returns[s][day] for s in live if day in returns.get(s, {})}
@@ -528,13 +529,23 @@ def refit(
             r_x.append(r_sym[day])
             r_m.append(market[day])
             r_t.append(loo.ret)
+            used.append(day)
             loo_rows.append({
                 "theme_id": theme_id, "excluded_symbol": symbol, "trade_date": day,
                 "model_version": model_version, "ret": loo.ret, "n_members": loo.n_members,
             })
 
+        # Guard the series we actually fit, not the candidate days. `common` is
+        # pre-filtered above, but the loop drops any day whose LOO basket screens
+        # out entirely — so a symbol that is its theme's only liquid member ends
+        # up with an empty `r_x` and `fit_two_stage` would raise, taking every
+        # other symbol in the batch down with it (2026-08-14).
+        if len(r_x) < 2:
+            skipped.append(symbol)
+            continue
+
         fit = fit_two_stage(r_x, r_m, r_t)
-        pending.append((symbol, theme_id, fit, common[0], common[-1]))
+        pending.append((symbol, theme_id, fit, used[0], used[-1]))
         if not fit.cold_start:
             noncold.setdefault(theme_id, []).append(fit.beta_theta)
 

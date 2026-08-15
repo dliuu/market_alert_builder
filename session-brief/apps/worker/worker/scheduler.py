@@ -175,19 +175,57 @@ def sector_benchmarks(conn: Connection, user_id: str) -> list[str]:
     return sorted(str(r[0]) for r in rows)
 
 
-def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
-    """The symbols to refresh: every held name, every sector benchmark, plus the
-    market benchmark. SPY is *always* needed for the vs-SPY line even when it
-    isn't in the book — the manual ``backfill`` omits it, which is a latent gap
-    the unattended run can't afford. The sector benchmarks are the same trap one
-    level down: settable in the book UI since M1, never ingested, so the open
-    brief's §5 trailing-5d line had nothing to read (M14)."""
+def theme_symbols(conn: Connection) -> list[str]:
+    """Every symbol in a theme basket. Shared reference data, so no ``user_id``
+    (D21) — the theme model is a property of the market, not of a book."""
+    rows = conn.execute(text("SELECT DISTINCT symbol FROM theme_members")).all()
+    return sorted(str(r[0]) for r in rows)
+
+
+def held_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> set[str]:
     rows = conn.execute(
         text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u"),
         {"u": user_id},
     ).all()
-    held = {str(r[0]) for r in rows}
+    return {str(r[0]) for r in rows}
+
+
+def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """The *book's* universe: every held name, every sector benchmark, plus the
+    market benchmark. SPY is *always* needed for the vs-SPY line even when it
+    isn't in the book — the manual ``backfill`` omits it, which is a latent gap
+    the unattended run can't afford. The sector benchmarks are the same trap one
+    level down: settable in the book UI since M1, never ingested, so the open
+    brief's §5 trailing-5d line had nothing to read (M14).
+
+    This is the pre-market capture's universe too, which is why theme members are
+    *not* here — nobody wants a pre-market quote for a basket constituent they
+    don't own. See ``ingest_symbols`` for the daily-bar universe."""
+    held = held_symbols(conn, user_id)
     return sorted(held | set(sector_benchmarks(conn, user_id)) | {BENCHMARK_SYMBOL})
+
+
+def ingest_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """Everything the daily-bar ingest must fetch: the book's universe plus the
+    attribution model's theme constituents.
+
+    Theme members were seeded as reference data but never ingested, so the weekly
+    refit ran against symbols with no bars at all — 5 of 8 members on 2026-08-14
+    — and its baskets could not be built. The model's own inputs have to be in
+    the refresh set or it silently re-breaks every time a theme gains a name."""
+    return sorted(set(book_symbols(conn, user_id)) | set(theme_symbols(conn)))
+
+
+def required_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """The symbols the close brief genuinely cannot go out without: the held
+    names and the market benchmark.
+
+    Deliberately narrower than ``ingest_symbols``. A theme constituent or a
+    sector benchmark that a vendor publishes late has no bearing on tonight's
+    P&L, and gating the send on it would hold back — and eventually fail — a
+    brief whose every number was already computable. Fetch broadly; block on
+    little."""
+    return sorted(held_symbols(conn, user_id) | {BENCHMARK_SYMBOL})
 
 
 def _bars_present(engine: Engine, symbols: list[str], session_date: date) -> set[str]:
@@ -208,24 +246,31 @@ def ensure_todays_bars(
     symbols: list[str],
     session_date: date,
     *,
+    required: list[str] | None = None,
     timeout_s: int,
     interval_s: int,
     now_monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> set[str]:
-    """Poll Tiingo until every symbol has a bar for ``session_date`` or the
-    timeout elapses. Ingest is idempotent (D13), so re-fetching a short window is
-    cheap. Returns the set still missing at the end — empty means all present."""
+    """Poll Tiingo until every *required* symbol has a bar for ``session_date`` or
+    the timeout elapses. Ingest is idempotent (D13), so re-fetching a short window
+    is cheap. Returns the set still missing at the end — empty means all present.
+
+    ``symbols`` is what gets fetched; ``required`` is what the caller is willing
+    to wait for, defaulting to all of ``symbols``. Keeping them separate is what
+    lets the daily ingest cover the attribution model's theme constituents
+    without letting a late basket member hold up a brief that does not read it."""
     from worker.ingest import ingest_daily_bars
     from worker.normalize import normalize_bars
 
+    gate = list(symbols) if required is None else required
     start = session_date - timedelta(days=7)  # small top-up window; history already stored
     deadline = now_monotonic() + timeout_s
     while True:
         with engine.begin() as conn:
             ingest_daily_bars(conn, provider, symbols, start, session_date)
             normalize_bars(conn, symbols)
-        missing = set(symbols) - _bars_present(engine, symbols, session_date)
+        missing = set(gate) - _bars_present(engine, gate, session_date)
         if not missing or now_monotonic() >= deadline:
             return missing
         sleep(interval_s)
@@ -258,7 +303,8 @@ def run_session_job(
             return "skipped-holiday"
 
         with engine.connect() as conn:
-            symbols = book_symbols(conn, user_id)
+            symbols = ingest_symbols(conn, user_id)
+            required = required_symbols(conn, user_id)
         if poll:
             prov = provider or _default_provider()
             missing = ensure_todays_bars(
@@ -266,6 +312,7 @@ def run_session_job(
                 prov,
                 symbols,
                 session_date,
+                required=required,
                 timeout_s=config.BAR_POLL_TIMEOUT_S,
                 interval_s=config.BAR_POLL_INTERVAL_S,
             )
