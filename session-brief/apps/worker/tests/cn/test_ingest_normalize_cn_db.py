@@ -1,7 +1,14 @@
 """Source-scoped ingest/normalize against a real database (skipped without
 DATABASE_URL): synthetic-cn payloads are namespaced by source, replay from
 raw_payloads reproduces bars_daily byte-for-byte (the D13 replay property),
-and a default (Tiingo-scoped) normalize_bars() never consumes them."""
+and a default (Tiingo-scoped) normalize_bars() never consumes them.
+
+Uses a ZZ-prefixed synthetic symbol, never a real A-share ticker: the shared
+dev DB already holds committed synthetic-cn rows for real tickers (e.g.
+600519.SS, from worker_cn's own backfill smoke test), and another session may
+run this file concurrently against the same DB, so the test must own a symbol
+no other test or run would ever write — the provider is deterministic for any
+symbol string, so this exercises identical behavior."""
 
 from __future__ import annotations
 
@@ -16,7 +23,7 @@ from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
 from worker_cn.providers import SyntheticCnBarsProvider
 
-_SYMBOL = "600519.SS"
+_SYMBOL = "ZZCNI.SS"
 _SOURCE = "synthetic-cn"
 _ENDPOINT = "daily/prices"
 

@@ -1,8 +1,15 @@
 """compute_and_store's market/benchmark params (Task 4) against a real database
 (skipped without DATABASE_URL): a mixed US+CN book filters cleanly by market,
-the CN call's vs-benchmark figure reads the CSI 300 return, and the exact
-Σ contribution_bps == book.day_bps identity (invariant 3, verify-numbers)
-holds within the CN slice."""
+the CN call's vs-benchmark figure reads the seeded benchmark's return, and the
+exact Σ contribution_bps == book.day_bps identity (invariant 3, verify-numbers)
+holds within the CN slice.
+
+Symbols are ZZ-prefixed synthetic tickers, never real A-share symbols: the
+shared dev DB may already hold committed rows for real CN tickers (e.g. from
+worker_cn's backfill smoke test), and another session may run these tests
+concurrently against the same DB, so a test must never assume a symbol is
+absent from bars_daily/holdings — it has to own rows no other test or run
+would ever write."""
 
 from __future__ import annotations
 
@@ -23,7 +30,9 @@ _PREV = date(2026, 8, 10)
 _SESSION = date(2026, 8, 11)
 _US_SECTOR = "ZZ-US-SECT"
 _CN_SECTOR = "ZZ-CN-SECT"
-_CN_BENCHMARK = "000300.SS"
+_CN_SYM_1 = "ZZCN1.SS"
+_CN_SYM_2 = "ZZCN2.SZ"
+_CN_BENCHMARK = "ZZCNBM.SS"
 
 
 def _seed_user(conn: Connection) -> None:
@@ -85,16 +94,16 @@ def _seed_mixed_book(conn: Connection) -> None:
     _seed_bar(conn, "ZZUS", _SESSION, "55")
     _seed_lot(conn, us_sector, "ZZUS", "20", 4000)  # cost 40.00/share
 
-    # CN lots: 600519.SS up, 300750.SZ down (fen cost bases).
-    _seed_bar(conn, "600519.SS", _PREV, "1800")
-    _seed_bar(conn, "600519.SS", _SESSION, "1830")
-    _seed_lot(conn, cn_sector, "600519.SS", "10", 170000)  # cost 1700.00/share
+    # CN lots: ZZCN1.SS up, ZZCN2.SZ down (fen cost bases).
+    _seed_bar(conn, _CN_SYM_1, _PREV, "1800")
+    _seed_bar(conn, _CN_SYM_1, _SESSION, "1830")
+    _seed_lot(conn, cn_sector, _CN_SYM_1, "10", 170000)  # cost 1700.00/share
 
-    _seed_bar(conn, "300750.SZ", _PREV, "200")
-    _seed_bar(conn, "300750.SZ", _SESSION, "196")
-    _seed_lot(conn, cn_sector, "300750.SZ", "50", 18000)  # cost 180.00/share
+    _seed_bar(conn, _CN_SYM_2, _PREV, "200")
+    _seed_bar(conn, _CN_SYM_2, _SESSION, "196")
+    _seed_lot(conn, cn_sector, _CN_SYM_2, "50", 18000)  # cost 180.00/share
 
-    # CSI 300 benchmark, both sessions.
+    # Synthetic benchmark stand-in, both sessions.
     _seed_bar(conn, _CN_BENCHMARK, _PREV, "4000")
     _seed_bar(conn, _CN_BENCHMARK, _SESSION, "4040")
 
@@ -107,7 +116,7 @@ def test_cn_market_filters_to_cn_symbols_only(db_conn: Connection) -> None:
     )
 
     symbols = {p.symbol for p in result.positions}
-    assert symbols == {"600519.SS", "300750.SZ"}
+    assert symbols == {_CN_SYM_1, _CN_SYM_2}
     assert "ZZUS" not in symbols
 
 
@@ -118,7 +127,7 @@ def test_cn_vs_benchmark_reads_csi_300_return(db_conn: Connection) -> None:
         db_conn, _TEST_USER_ID, _SESSION, market="CN", benchmark=_CN_BENCHMARK
     )
 
-    # CSI 300: 4000 -> 4040 is an exact +1% day.
+    # Seeded benchmark: 4000 -> 4040 is an exact +1% day.
     assert result.benchmark_return == Fraction(1, 100)
 
     day_bps = result.book.day_bps
