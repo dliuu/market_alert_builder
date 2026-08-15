@@ -22,9 +22,9 @@ SOURCE = "tiingo"
 ENDPOINT = "daily/prices"
 
 _INSERT = text("""
-    INSERT INTO raw_payloads (source, endpoint, symbol, as_of, body)
-    VALUES (:source, :endpoint, :symbol, :as_of, CAST(:body AS jsonb))
-    ON CONFLICT (source, endpoint, symbol, as_of) DO NOTHING
+    INSERT INTO raw_payloads (source, endpoint, symbol, covers_from, as_of, body)
+    VALUES (:source, :endpoint, :symbol, :covers_from, :as_of, CAST(:body AS jsonb))
+    ON CONFLICT (source, endpoint, symbol, covers_from, as_of) DO NOTHING
 """)
 
 
@@ -43,7 +43,11 @@ def ingest_daily_bars(
         records = provider.daily_bars(sym, start, end)
         if not records:
             continue
-        as_of = max(_session_date(record) for record in records)
+        # Both ends of the window the response actually covers. `covers_from` is
+        # what makes a *wider* re-fetch ending on the same day a distinct row
+        # rather than a discarded duplicate (migration 0014_raw_payload_covers_from).
+        sessions = [_session_date(record) for record in records]
+        covers_from, as_of = min(sessions), max(sessions)
         body = json.dumps(records, default=str)
         result = conn.execute(
             _INSERT,
@@ -51,6 +55,7 @@ def ingest_daily_bars(
                 "source": SOURCE,
                 "endpoint": ENDPOINT,
                 "symbol": sym,
+                "covers_from": covers_from,
                 "as_of": as_of,
                 "body": body,
             },

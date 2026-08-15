@@ -19,8 +19,8 @@ Use `lots`, not an average cost on `holdings`. Positions get added to, and migra
 ## Market data
 
 ```sql
-raw_payloads (id, source, endpoint, symbol, as_of, body jsonb, fetched_at)
-             -- UNIQUE (source, endpoint, symbol, as_of)
+raw_payloads (id, source, endpoint, symbol, covers_from, as_of, body jsonb, fetched_at)
+             -- UNIQUE (source, endpoint, symbol, covers_from, as_of)
 bars_daily   (symbol, session_date, o, h, l, c, v, adj_c)   -- PK (symbol, session_date)
 quotes       (symbol, session_date, captured_at, last, prev_close, extended_last, extended_v)
              -- PK (symbol, session_date); one pre-open capture per symbol per session (M15)
@@ -34,6 +34,8 @@ Market data tables have **no `user_id`** — they're shared across the tenant ba
 `attribution (symbol, trade_date, model_version, market_bps, theme_bps, resid_bps, total_bps, resid_z, provisional, …)` (M11/M12) is the same shape: shared, no `user_id`, keyed by `(symbol, trade_date, model_version)`. Assembly (M13) reads it filtered to held names for the session — one query, no per-user compute.
 
 **Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
+
+A payload is identified by **both ends of the window it covers**, not just where it ends. Keying on `as_of` alone (the response's newest session) made a wider re-fetch look like a duplicate of a narrower one ending the same day, so `ON CONFLICT DO NOTHING` silently discarded the deeper history and a symbol's window could never be extended — which is how SPY sat at 65 sessions while the attribution fit wanted 120 (migration `0014_raw_payload_covers_from`). The dedup still holds for a genuinely repeated window, which the close job's 90-second bar poll depends on. A vendor *revision* inside an identical window still no-ops; closing that needs a content hash, and Postgres will not index one because `body::text` is STABLE rather than IMMUTABLE.
 
 `quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
 
