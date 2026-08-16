@@ -25,19 +25,21 @@ import { font, palette, signColor } from "./theme";
 
 const WIDTH = 600;
 
-// Configured by `emails/cn/open-brief.tsx` (D31): every default here
+// Configured by `emails/cn/open-brief.tsx` (D32): every default here
 // reproduces the US template's output byte-for-byte. CN specifics (¥, "vs CSI
 // 300", the CN kind label) are set only by that wrapper — never here.
 export type OpenBriefOptions = {
   currencySymbol?: string;
   benchmarkLabel?: string;
   kindLabel?: string;
+  openLabel?: string;
 };
 
 export function OpenBrief({ brief, options }: { brief: BriefObject; options?: OpenBriefOptions }) {
   const currencySymbol = options?.currencySymbol ?? "$";
   const benchmarkLabel = options?.benchmarkLabel ?? "vs SPY";
   const kindLabel = options?.kindLabel;
+  const openLabel = options?.openLabel ?? "opens 09:30";
   const section = (id: string) => brief.sections.find((s) => s.id === id);
   const tape = section("overnight_tape");
   const pre = section("premarket");
@@ -76,7 +78,7 @@ export function OpenBrief({ brief, options }: { brief: BriefObject; options?: Op
                     {kindLabel && `${kindLabel} · `}
                     {dateLong}
                     <br />
-                    opens 09:30
+                    {openLabel}
                   </span>
                 </td>
               </tr>

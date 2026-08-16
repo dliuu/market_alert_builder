@@ -5,10 +5,10 @@ the US and CN books' §4 must never bleed into each other.
 Symbols are ZZ-prefixed synthetic tickers, never real A-share or US symbols,
 per the convention `tests/cn/test_assemble_cn_db.py` established — the shared
 dev DB already holds committed rows for real tickers (including the CN
-benchmark, 000300.SS), so a DB test must own symbols no other test or run
-would ever write. ``CN_BENCHMARK`` is deliberately never seeded here, same as
-that file: a missing benchmark degrades ``vs_spy_5d`` to ``None`` rather than
-raising."""
+benchmark, 510300.SS — the CSI 300 ETF proxy, CN-Q5), so a DB test must own
+symbols no other test or run would ever write. ``CN_BENCHMARK`` is
+deliberately never seeded here, same as that file: a missing benchmark
+degrades ``vs_spy_5d`` to ``None`` rather than raising."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def test_sector_setup_reads_real_cn_bars(db_conn: Connection) -> None:
     # Closes 100..109; five sessions back from 109 is 104 -> 109/104 - 1.
     assert row.ret_5d is not None
     assert abs(row.ret_5d - (109 / 104 - 1)) < 1e-9
-    # CN_BENCHMARK (000300.SS) is deliberately never *seeded* here (the shared
+    # CN_BENCHMARK (510300.SS) is deliberately never *seeded* here (the shared
     # dev DB may already hold real committed rows for it from an earlier
     # backfill smoke test — never assumed absent), so `vs_spy_5d` is not
     # asserted either way; only the sector's own ZZ-prefixed benchmark return

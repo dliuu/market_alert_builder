@@ -38,11 +38,11 @@ pnpm contracts:gen            # JSON Schema -> TS types + Pydantic models
 5. **Raw vendor payloads are stored verbatim** in `raw_payloads` and never mutated. Recomputation replays from them.
 6. **Sends are idempotent** on `(brief_id, recipient)`. Never bypass the unique constraint.
 7. **Trading days come from `exchange_calendars`.** Never hardcode holidays or a 16:00 close.
-8. **UTC at rest, `America/New_York` in logic.**
+8. **UTC at rest, the exchange's tz in logic** — `America/New_York` for the US book, `Asia/Shanghai` for the CN book (D32); each brief kind computes its session date in its own market's timezone.
 
 ## Conventions
 
 - Python: `ruff`, `mypy --strict`, `pytest`. TypeScript: `biome`, strict `tsconfig`.
-- Money is `Decimal` in Python and integer cents at rest. Never float.
+- Money is `Decimal` in Python and integer minor units (cents / fen) at rest. Never float. The US and CN books never blend and no FX conversion exists anywhere (D32).
 - Adding a metric: document in `docs/03-data-model.md`, compute in the worker, expose in the BriefObject, bump `schema_version`, regenerate contracts.
 - Prefer a failing test that reproduces the bug over a defensive `try/except`.

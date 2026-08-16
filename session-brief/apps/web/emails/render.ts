@@ -27,7 +27,7 @@ export async function renderCnOpen(brief: BriefObject): Promise<{ html: string; 
 // "Different jobs, different templates" (docs/01) — the one place `kind` picks
 // one, so the worker still makes a single render call (D6). Explicit four-way
 // dispatch: an unknown kind throws rather than silently falling back to the
-// close template (D31).
+// close template (D32).
 export async function renderBrief(brief: BriefObject): Promise<{ html: string; text: string }> {
   switch (brief.kind) {
     case "open":

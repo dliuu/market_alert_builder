@@ -33,6 +33,9 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   // Absent `currency` means USD (docs/04) — map to the display symbol once,
   // here, rather than re-deriving it at every money call site.
   const currencySymbol = brief.currency === "CNY" ? "¥" : "$";
+  // Mirrors the email templates' `benchmarkLabel` (docs/04): the same figure
+  // is CSI 300 on the CN book, SPY on the US one.
+  const benchmarkLabel = brief.currency === "CNY" ? "vs CSI 300" : "vs SPY";
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
@@ -87,7 +90,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
             />
             {brief.book.vs_spy_bps != null && (
               <Stat
-                label="vs SPY"
+                label={benchmarkLabel}
                 value={bps(brief.book.vs_spy_bps)}
                 positive={brief.book.vs_spy_bps >= 0}
               />
@@ -280,7 +283,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                 <th style={S.th}>Sector</th>
                 <th style={S.th}>Benchmark</th>
                 <th style={S.thR}>5d</th>
-                <th style={S.thR}>vs SPY</th>
+                <th style={S.thR}>{benchmarkLabel}</th>
                 <th style={S.thR}>Pre-market</th>
               </tr>
             </thead>

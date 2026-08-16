@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from worker_cn.providers import SyntheticCnBarsProvider
+import pytest
+
+from worker.providers.tiingo import TiingoProvider
+from worker_cn import config as cn_config
+from worker_cn.providers import SyntheticCnBarsProvider, default_cn_bars_provider
 
 _SYMBOL = "600519.SS"
 
@@ -51,3 +55,19 @@ def test_bar_sanity_ohlc_and_types() -> None:
         assert record["adjClose"] == c
         assert isinstance(record["volume"], int)
         assert record["volume"] > 0
+
+
+# --- default_cn_bars_provider (CN-M3 Task 10) -------------------------------
+
+
+def test_default_cn_bars_provider_is_synthetic_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cn_config, "CN_BARS_LIVE", False)
+    assert isinstance(default_cn_bars_provider(), SyntheticCnBarsProvider)
+
+
+def test_default_cn_bars_provider_is_tiingo_when_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cn_config, "CN_BARS_LIVE", True)
+    monkeypatch.setattr("worker.providers.tiingo.TIINGO_API_KEY", "test-key")
+    assert isinstance(default_cn_bars_provider(), TiingoProvider)

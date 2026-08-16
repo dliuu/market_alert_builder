@@ -12,6 +12,7 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
         currencySymbol: "¥",
         benchmarkLabel: "vs CSI 300",
         kindLabel: "CN Open",
+        openLabel: "opens 09:30 CST",
       }}
     />
   );

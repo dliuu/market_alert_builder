@@ -27,9 +27,10 @@ from worker_cn import config as cn_config
 from worker_cn.calendar import CN
 from worker_cn.config import cn_bars_are_synthetic
 from worker_cn.constants import CN_BENCHMARK, CN_MARKET
-from worker_cn.providers import SyntheticCnBarsProvider
+from worker_cn.providers import default_cn_bars_provider
 
-SOURCE = "synthetic-cn"  # matches worker_cn/backfill.py's namespace
+SYNTHETIC_SOURCE = "synthetic-cn"  # matches worker_cn/backfill.py's namespace
+LIVE_SOURCE = "tiingo"  # matches worker_cn/backfill.py's live namespace
 
 
 # --- Fire-time scheduling (pure) --------------------------------------------
@@ -83,11 +84,9 @@ def next_cn_close_fire(now_utc: datetime) -> datetime:
 
 
 def _default_cn_provider() -> MarketDataProvider:
-    """The provider seam CN-M3 (Task 10) swaps a live vendor into. Only the
-    synthetic branch exists today."""
-    if cn_bars_are_synthetic():
-        return SyntheticCnBarsProvider()
-    raise RuntimeError("CN live bars land in CN-M3; run tiingo-cn-probe first")
+    """The provider seam CN-M3 (Task 10) swaps a live vendor into: synthetic
+    while ``cn_bars_are_synthetic()``, else the live Tiingo provider."""
+    return default_cn_bars_provider()
 
 
 def run_cn_close_session_job(
@@ -119,17 +118,36 @@ def run_cn_close_session_job(
             symbols = core_scheduler.book_symbols(
                 conn, user_id, market=CN_MARKET, benchmark=CN_BENCHMARK
             )
+            # Narrower than `symbols`, mirroring `worker.scheduler.required_symbols`:
+            # held names + the market benchmark only. A late CN sector benchmark
+            # has no bearing on tonight's P&L and must not hold back — or fail —
+            # a brief whose every number is already computable.
+            held = core_scheduler.held_symbols(conn, user_id, market=CN_MARKET)
+            required = sorted(held | {CN_BENCHMARK})
 
         prov = provider or _default_cn_provider()
-        core_scheduler.ensure_todays_bars(
+        # Source-scope the poll to match what `prov` actually returns — a live
+        # Tiingo bar mislabeled "synthetic-cn" (or the reverse) would corrupt
+        # raw_payloads' source namespace (worker_cn/backfill.py mirrors this).
+        bars_source = SYNTHETIC_SOURCE if cn_bars_are_synthetic() else LIVE_SOURCE
+        missing = core_scheduler.ensure_todays_bars(
             engine,
             prov,
             symbols,
             session_date,
+            required=required,
             timeout_s=cn_config.CN_BAR_POLL_TIMEOUT_S,
             interval_s=cn_config.CN_BAR_POLL_INTERVAL_S,
-            source=SOURCE,
+            source=bars_source,
         )
+        if missing:
+            # A late held-name or benchmark bar (e.g. 510300.SS) must never
+            # send a brief silently missing its vs-benchmark line and
+            # disclosure — fail loudly instead. The enclosing try/except pings
+            # /fail and re-raises. A late *sector* benchmark bar is not in
+            # `required` and so never reaches here.
+            names = ", ".join(sorted(missing))
+            raise RuntimeError(f"{session_date}: no bars for {names}")
 
         # assemble_cn_close_and_store computes the book (compute_and_store,
         # market="CN") internally, same as the US path's assemble_and_store.

@@ -128,8 +128,9 @@ def assemble_cn_open(
     exposure_check, no claims): §2 overnight tape is the **US** session's
     day-over-day closes (SPY + the US book's sector benchmarks), §4 calendar
     is seeded events already scoped to the CN book, §5 sector setup is the CN
-    sectors' own trailing return vs 000300.SS. Always sends — no skip gate,
-    matching the US open brief (docs/05)."""
+    sectors' own trailing return vs 510300.SS (the CSI 300 ETF proxy —
+    CN_BENCHMARK, CN-Q5). Always sends — no skip gate, matching the US open
+    brief (docs/05)."""
     stale = [STALE_CN_BARS_SYNTHETIC] if cn_bars_are_synthetic() else []
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -184,9 +185,10 @@ def _read_cn_sectors(
     conn: Connection, user_id: str, prior_session: date
 ) -> list[SectorSetup]:
     """§5's rows: the CN sectors' own benchmark, 5-session trailing return, and
-    the relative return vs 000300.SS (``CN_BENCHMARK``) — the CN-book mirror of
-    ``worker.assemble_open._read_sectors``, scoped to ``market = 'CN'`` and
-    measured against the CN benchmark rather than SPY."""
+    the relative return vs 510300.SS (``CN_BENCHMARK`` — the CSI 300 ETF proxy,
+    CN-Q5) — the CN-book mirror of ``worker.assemble_open._read_sectors``,
+    scoped to ``market = 'CN'`` and measured against the CN benchmark rather
+    than SPY."""
     cn_bench_5d = trailing_return(
         _read_trailing_closes(conn, CN_BENCHMARK, prior_session), _SECTOR_WINDOW
     )
