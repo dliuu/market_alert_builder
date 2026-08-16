@@ -61,7 +61,7 @@ uv run alembic current             # prints 0001_initial (head)
 proves the database is genuinely connected. That's the last item in M0's
 definition of done — tick the box in `docs/08-milestones.md` once it passes.
 
-## Multiple worktrees, one database (D32)
+## Multiple worktrees, one database (D33)
 
 Every worktree's `.env` points at the same Supabase project by default, but
 only one branch's migration history should ever be *applied* to it: treat the
