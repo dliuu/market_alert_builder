@@ -13,6 +13,10 @@ the decision log.
 contract, guard it, and add the question here. Do not guess and do not silently
 degrade.
 
+**Chinese-side questions live in `cn/docs/open-questions.md`** (CN-Q1…CN-Q5:
+Tiingo A-share coverage/format, `adjClose`, limits, EOD publish latency,
+CSI 300 availability) — kept there so the two sides stay separable.
+
 ---
 
 ## Pre-market feed — FinancialData.net (M16)
@@ -111,83 +115,70 @@ changes what the index source is worth.
 *Why first:* it is one API call and it resizes the milestone. Answer it before
 writing the differ, not after.
 
-### Q1 — Does `index-constituents` reflect announcement or effective membership?
-
-**Blocks:** M18 index snapshot + diff · **Status:** open · **High priority**
-
-S&P announces changes after the close, typically Friday, effective roughly a week
-later. If the endpoint reflects **effective** membership only, a snapshot diff
-detects the change ~5 trading days *after* it was public.
-
-*If unresolved:* the index source silently becomes a lagging indicator while
-presenting as a catalyst. A supplementary check against `sec-press-releases` or
-`latest-news` would be required to recover the announcement date.
-
-*Test:* snapshot across a known reconstitution and compare the detection date to
-the published announcement date.
-
-### Q2 — Does `insider-transactions` distinguish tax-withholding dispositions and option exercises at grant price?
-
-**Blocks:** M17 insider detectors · **Status:** open
-
-Both are mechanical, non-discretionary, and carry no signal. A CFO surrendering
-shares to cover withholding on a vest is not a CFO selling.
-
-*If unresolved:* do **not** silently include them and do **not** silently drop
-them. Reduce severity by 1 and annotate the item — an ambiguous signal shown as
-ambiguous is honest; either silent choice is not. Expect elevated false
-positives on `outsized_sale` and `cluster` until answered.
-
-*Test:* pull a known vest-heavy issuer and inspect `transaction_type` cardinality
-against the Form 4 footnote codes.
-
-### Q3 — Does `proposed-sales` expose a stable filing identifier?
-
-**Blocks:** M17 proposed-sales ingest · **Status:** open
-
-`natural_key` prefers an accession number if one is exposed.
-
-*If unresolved:* fall back to a deterministic hash of
-`symbol|insider_name|filing_date|shares_proposed`. Slightly weaker dedup — an
-amended filing with identical fields collapses into the original. Document
-whichever is used.
-
-### Q4 — Does `securities-information` provide public float reliably?
-
-**Blocks:** M18 lockups, M17 `large_144` · **Status:** open
-
-`pct_of_float` is what makes a supply signal legible: 1.2M shares means nothing,
-0.24% of float means something.
-
-*If unresolved:* `pct_of_float` is NULL and renders as **"size unknown"** rather
-than the row being dropped. An unknown size is information; a missing row is not.
-`large_144` (≥0.5% of float) cannot fire and degrades to `standard_144`.
-
-### Q5 — What is the actual `etf-holdings` call volume for the tracked set?
-
-**Blocks:** M18 ETF snapshot · **Status:** open
-
-`etf-holdings` pages at 50 records. SPY alone is ~10 calls; 30 ETFs is on the
-order of 300 calls per full pass. The weekday stagger exists to spread this, but
-the stagger width should be set from a measured number.
-
-*If unresolved:* the rate-limit budget is a guess. Measure on the first live
-pass, log call counts per endpoint per run, and set the stagger from the result.
-
-### Q6 — Does `initial-public-offerings` cover de-SPACs and direct listings?
-
-**Blocks:** M18 lockups · **Status:** open
-
-The lockup calendar derives entirely from `listing_date`, so a listing type
-missing from this endpoint produces no lockup signal at all — silently.
-
-*If unresolved:* silent gaps. De-SPACs are also the population where the
-180-day convention is *least* reliable, so they are doubly exposed: absent from
-the calendar, and mis-dated when present. The per-symbol override table is the
-manual escape hatch.
-
 ---
 
 ## Answered
 
-*(none yet — move entries here with the answer and the date)*
+*(Q1–Q6 settled 2026-08-15 by user decision — recorded as design rulings, not
+vendor-probed facts. Where an entry's original fallback still guards a residual
+risk, it is restated with the answer.)*
+
+### Q1 — Does `index-constituents` reflect announcement or effective membership?
+
+**Answered 2026-08-15:** treat it as reflecting **announcement** membership.
+The index differ takes its detection date as the announcement date; no
+supplementary `sec-press-releases` / `latest-news` check is built for v1.
+
+*Residual guard:* the M18 DoD test (snapshot across a known reconstitution,
+compare detection date to the published announcement date) stays — it is now a
+verification of this answer rather than an open probe. If it shows the endpoint
+is actually effective-only, the original fallback (a news-based announcement
+supplement) reactivates and this answer reopens.
+
+### Q2 — Does `insider-transactions` distinguish tax-withholding dispositions and option exercises at grant price?
+
+**Answered 2026-08-15:** **no differentiation for now** — all Form 4
+dispositions are counted alike by the M17 detectors, and the work will circle
+back to this. Consequence accepted: elevated false positives on
+`outsized_sale` and `cluster` (a CFO surrendering shares to cover withholding
+on a vest will look like a CFO selling). The severity-reduction-and-annotate
+mitigation from the original entry is **not** applied in v1; when the work
+circles back, the original test still applies (pull a known vest-heavy issuer
+and inspect `transaction_type` cardinality against the Form 4 footnote codes).
+
+### Q3 — Does `proposed-sales` expose a stable filing identifier?
+
+**Answered 2026-08-15:** **use the deterministic hash as the natural key** —
+`symbol|insider_name|filing_date|shares_proposed` — rather than depending on
+an accession number. Accepted cost, as documented: slightly weaker dedup — an
+amended filing with identical fields collapses into the original. If the
+endpoint does expose an accession number, it may be recorded in `detail`
+jsonb for reference, but the hash stays the key.
+
+### Q4 — Does `securities-information` provide public float reliably?
+
+**Answered 2026-08-15:** **skip % of float for now** — `securities-information`
+is not called; `pct_of_float` is NULL everywhere and renders as **"size
+unknown"** (an unknown size is information; a missing row is not).
+Consequence accepted: `large_144` (≥0.5% of float) cannot fire and every
+proposed sale grades as `standard_144`. Revisit when float sourcing is
+worth a probe.
+
+### Q5 — What is the actual `etf-holdings` call volume for the tracked set?
+
+**Answered 2026-08-15:** the budget is set rather than measured — **300 calls
+per week** is the rate limit for the ETF pass. The token-bucket limiter and
+the weekday stagger are sized to it (~43 calls/day across the tracked ETFs;
+SPY alone is ~10 calls at 50 records/page, so the tracked-ETF list must fit
+the weekly budget rather than the budget stretching to the list). Log call
+counts per endpoint per run so the first live pass can confirm the list fits;
+if it doesn't, shrink the tracked set — the budget is the fixed point.
+
+### Q6 — Does `initial-public-offerings` cover de-SPACs and direct listings?
+
+**Answered 2026-08-15:** **out of scope for now** — the lockup calendar does
+not need to cover de-SPACs or direct listings yet. Consequence accepted:
+silent gaps for those listing types (and the 180-day convention is least
+reliable exactly there, so this is also the population where a wrong date
+would have been likeliest). The per-symbol override table remains the manual
+escape hatch if a specific name matters before this reopens.

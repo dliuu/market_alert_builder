@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.assemble import SCHEMA_VERSION, assemble_and_store
+from worker.assemble_shared import to_contract_json
 from worker.constants import ATTRIBUTION_MODEL_VERSION
 
 # A throwaway user, distinct from the real dev tenant.
@@ -115,8 +116,10 @@ def test_assemble_and_store_persists_the_object(db_conn: Connection) -> None:
     assert len(rows) == 1
     row = rows[0]
     assert row["schema_version"] == SCHEMA_VERSION
-    # The stored jsonb is exactly the object we returned.
-    assert row["body"] == obj.model_dump(mode="json")
+    # The stored jsonb is exactly the object we returned (minus a `currency`
+    # key Pydantic defaults to `None` but the schema forbids as null — see
+    # `to_contract_json`).
+    assert row["body"] == to_contract_json(obj)
     # Close prices made it into the attribution rows.
     body = row["body"]
     rows_by_symbol = {r["symbol"]: r for r in body["sections"][0]["rows"]}

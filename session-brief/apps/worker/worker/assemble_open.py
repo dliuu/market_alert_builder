@@ -44,7 +44,7 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from worker import config
 from worker.assemble import SCHEMA_VERSION
-from worker.assemble_shared import claim_dict, session_label
+from worker.assemble_shared import claim_dict, session_label, to_contract_json
 from worker.claims import Claim, emit_premarket_gap, store_emitted_claims
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate, candidate_dict
@@ -572,6 +572,6 @@ def _store(conn: Connection, obj: BriefObject) -> None:
             "user_id": obj.user_id,
             "session_date": obj.session_date,
             "schema_version": obj.schema_version,
-            "body": json.dumps(obj.model_dump(mode="json")),
+            "body": json.dumps(to_contract_json(obj)),
         },
     )

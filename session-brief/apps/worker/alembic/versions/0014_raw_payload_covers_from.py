@@ -65,13 +65,17 @@ def upgrade() -> None:
     # The backfill mirrors worker/ingest.py's `_session_date`: the record's
     # "date" field truncated to its first 10 chars (the vendor sends a full
     # timestamp). Derived from the stored payload, so every existing row gets
-    # the value Python would have written.
+    # the value Python would have written. Snapshot payloads (fdn latest-prices
+    # / index-quotes / futures-prices / stock-quotes) carry no per-record date,
+    # so they fall back to `as_of` — a snapshot covers its own capture date,
+    # which is also what the fdn writers stamp going forward.
     op.execute("""
         ALTER TABLE raw_payloads ADD COLUMN covers_from date;
 
-        UPDATE raw_payloads SET covers_from = (
-            SELECT min(left(elem->>'date', 10)::date)
-            FROM jsonb_array_elements(body) AS elem
+        UPDATE raw_payloads SET covers_from = COALESCE(
+            (SELECT min(left(elem->>'date', 10)::date)
+             FROM jsonb_array_elements(body) AS elem),
+            as_of
         );
 
         ALTER TABLE raw_payloads ALTER COLUMN covers_from SET NOT NULL;

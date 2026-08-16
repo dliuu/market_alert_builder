@@ -12,6 +12,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Application code (package = false, so no build step — it's importable as-is).
 COPY worker ./worker
+COPY worker_cn ./worker_cn
 COPY contracts ./contracts
 COPY alembic ./alembic
 COPY alembic.ini ./
