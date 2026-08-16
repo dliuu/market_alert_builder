@@ -236,3 +236,41 @@ def test_market_defaults_to_us_and_rejects_unknown_markets(db_conn: Connection) 
             """),
             {"u": _TEST_USER_ID},
         )
+
+
+def test_resolving_one_market_leaves_the_other_markets_claims_untouched(
+    db_conn: Connection,
+) -> None:
+    """The D23(3) trap, cross-market: the CN close fires hours before the US
+    close, so a CN resolution run must not consume US due claims."""
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    # ZZCNA.SS +10% vs its benchmark's +1% from E to D: an "up" call is
+    # correct, though this test only cares that the US claim stays untouched.
+    _seed_bar(db_conn, "ZZCNA.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNA.SS", _D, "110")
+    _seed_bar(db_conn, "ZZBENCHA.SS", _E, "100")
+    _seed_bar(db_conn, "ZZBENCHA.SS", _D, "101")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-us", _E,
+        [Claim(symbol="ZZUS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="US",
+    )
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNA.SS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="CN",
+    )
+
+    # Grade only the CN book.
+    resolve_due_claims(db_conn, _TEST_USER_ID, _D, market="CN", benchmark="ZZBENCHA.SS")
+
+    us_outcome = db_conn.execute(
+        text("SELECT outcome FROM claims WHERE user_id = :u AND symbol = 'ZZUS'"),
+        {"u": _TEST_USER_ID},
+    ).scalar()
+    assert us_outcome is None, "a CN resolution run consumed a US claim"

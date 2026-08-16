@@ -107,19 +107,21 @@ def emit_premarket_gap(quotes: list[PremarketQuote]) -> list[Claim]:
 
 _INSERT = text("""
     INSERT INTO claims (user_id, brief_id, symbol, claim_type, direction,
-                        horizon_sessions, session_date)
+                        horizon_sessions, session_date, market)
     VALUES (:user_id, :brief_id, :symbol, :claim_type, :direction,
-            :horizon_sessions, :session_date)
+            :horizon_sessions, :session_date, :market)
     ON CONFLICT (user_id, symbol, claim_type, session_date) DO NOTHING
 """)
 
 # `<=`, not `<`: a horizon-0 morning claim is due the session it was emitted
 # on. Horizon-1 claims emitted today are still excluded — not by this filter but
 # by `_resolve_session`, which places their resolution on the *next* session.
+# `market` is what keeps the 15:20 CST CN run off the US book's due claims.
 _READ_UNRESOLVED = text("""
     SELECT id, symbol, claim_type, direction, horizon_sessions, session_date
     FROM claims
     WHERE user_id = :user_id AND outcome IS NULL AND session_date <= :session_date
+      AND market = :market
 """)
 
 # The horizon-th session strictly after the emit session, for this symbol.
@@ -153,8 +155,16 @@ _UPDATE_RESOLVED = text("""
 
 
 def store_emitted_claims(
-    conn: Connection, user_id: str, brief_id: str, session_date: date, claims: list[Claim]
+    conn: Connection,
+    user_id: str,
+    brief_id: str,
+    session_date: date,
+    claims: list[Claim],
+    *,
+    market: str,
 ) -> None:
+    """``market`` is keyword-only and undefaulted: a default is exactly how a
+    call site would silently inherit US and mis-tag another book's claims."""
     for claim in claims:
         conn.execute(
             _INSERT,
@@ -166,18 +176,27 @@ def store_emitted_claims(
                 "direction": claim.direction,
                 "horizon_sessions": claim.horizon_sessions,
                 "session_date": session_date,
+                "market": market,
             },
         )
 
 
 def resolve_due_claims(
-    conn: Connection, user_id: str, session_date: date
+    conn: Connection, user_id: str, session_date: date, *, market: str, benchmark: str
 ) -> list[ResolvedClaim]:
-    """Grade every unresolved claim whose horizon window has closed as of
-    ``session_date``, persist the outcome, and return them. Idempotent — an
-    already-resolved claim is never regraded."""
+    """Grade every unresolved claim of ``market`` whose horizon window has
+    closed as of ``session_date``, persist the outcome, and return them.
+    Idempotent — an already-resolved claim is never regraded.
+
+    ``market`` and ``benchmark`` are keyword-only and undefaulted on purpose:
+    a default is exactly how a future call site would silently inherit US and
+    consume another book's due claims (the CN close fires hours before the US
+    close). ``benchmark`` is threaded into ``_grade`` for whichever grading
+    arm needs it.
+    """
     rows = conn.execute(
-        _READ_UNRESOLVED, {"user_id": user_id, "session_date": session_date}
+        _READ_UNRESOLVED,
+        {"user_id": user_id, "session_date": session_date, "market": market},
     ).mappings().all()
 
     resolved: list[ResolvedClaim] = []

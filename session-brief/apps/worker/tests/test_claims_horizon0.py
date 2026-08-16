@@ -66,8 +66,9 @@ def test_the_same_session_close_resolves_the_morning_claim(db_conn: Connection) 
     store_emitted_claims(
         db_conn, user, f"{user}-{session}-open", session,
         [Claim("ZGAP", "premarket_gap", "up", 0)],
+        market="US",
     )
-    (resolved,) = resolve_due_claims(db_conn, user, session)
+    (resolved,) = resolve_due_claims(db_conn, user, session, market="US", benchmark="SPY")
     assert resolved.symbol == "ZGAP"
     assert resolved.outcome == "correct"  # +4.8% open->close vs SPY's flat
 
@@ -99,8 +100,9 @@ def test_a_gap_up_that_fades_intraday_resolves_wrong(db_conn: Connection) -> Non
     store_emitted_claims(
         db_conn, user, f"{user}-{session}-open", session,
         [Claim("ZFADE", "premarket_gap", "up", 0)],
+        market="US",
     )
-    (resolved,) = resolve_due_claims(db_conn, user, session)
+    (resolved,) = resolve_due_claims(db_conn, user, session, market="US", benchmark="SPY")
     assert resolved.symbol == "ZFADE"
     assert resolved.outcome == "wrong"
 
@@ -143,9 +145,10 @@ def test_a_horizon_one_claim_is_not_resolved_on_its_own_session(db_conn: Connect
                 {"s": symbol, "d": d, "c": Decimal(c)},
             )
     store_emitted_claims(
-        db_conn, user, "b", session, [Claim("ZH1", "relative_strength", "up", 1)]
+        db_conn, user, "b", session, [Claim("ZH1", "relative_strength", "up", 1)],
+        market="US",
     )
-    assert resolve_due_claims(db_conn, user, session) == []
+    assert resolve_due_claims(db_conn, user, session, market="US", benchmark="SPY") == []
 
 
 def test_a_horizon_zero_claim_waits_for_its_own_bar(db_conn: Connection) -> None:
@@ -166,5 +169,6 @@ def test_a_horizon_zero_claim_waits_for_its_own_bar(db_conn: Connection) -> None
     store_emitted_claims(
         db_conn, user, f"{user}-{session}-open", session,
         [Claim("ZWAIT", "premarket_gap", "up", 0)],
+        market="US",
     )
-    assert resolve_due_claims(db_conn, user, session) == []
+    assert resolve_due_claims(db_conn, user, session, market="US", benchmark="SPY") == []
