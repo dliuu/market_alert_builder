@@ -52,11 +52,23 @@ independently. Design: `2026-08-15-shanghai-briefs-design.md`.
   job's fail-loud bar poll are the safety net until it's run at the right
   wall-clock time.
 
+- [x] **CN-M4 — CN claims + accountability loop.** `claims.market` (migration
+  0018) splits the user-wide ledger in two; `resolve_due_claims` /
+  `store_emitted_claims` take a required keyword-only `market` (and
+  `benchmark`); horizon >= 1 grading gains a close-to-close arm for markets
+  with no `attribution` model; `assemble_cn_close_and_store` emits
+  `relative_strength` and resolves what it claimed last session. *Done when:*
+  a CN close emits claims on a seeded CN book and the next CN session resolves
+  them `correct`/`wrong` graded against 510300.SS; a CN resolution run leaves
+  a due US claim untouched (and vice versa); the M13 residual test still
+  passes unchanged; the CN close email renders the resolved block;
+  `schema_version` stays 7 and `pnpm contracts:gen` is green. Design:
+  `2026-08-16-cn-m4-claims-design.md`.
+
 **Deferred (each its own future milestone, in rough order of value):** CN
-claims + accountability loop (needs a per-market claims design), CN narration
-(feed it CN headlines — needs a news source), CN flags (needs fundamentals),
-CN calendar/news vendor (Tushare/AkShare evaluation), CN return attribution
-(needs 120 sessions of real bars + theme baskets).
+narration (feed it CN headlines — needs a news source), CN flags (needs
+fundamentals), CN calendar/news vendor (Tushare/AkShare evaluation), CN
+return attribution (needs 120 sessions of real bars + theme baskets).
 
 ## Switch-on procedure: `CN_BARS_LIVE` requires a synthetic-history purge first
 

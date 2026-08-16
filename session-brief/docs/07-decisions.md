@@ -618,3 +618,71 @@ next person happens to run migrations. It does not, and cannot, catch the
 apply-from-the-wrong-branch mistake that actually caused this incident — that
 half is discipline, not tooling. See `docs/09-supabase-setup.md` for the
 worktree-facing version of this rule.
+
+---
+
+**D34 — CN claims: `market` on the ledger, required keyword-only scoping, and a two-arm grader keyed on data availability, not on a market name**
+
+*(CN-M4. Design: `cn/docs/2026-08-16-cn-m4-claims-design.md`. Discharges D32's
+own deferral: "or CN claims land (then the claims tables need a per-market
+design first).")*
+
+**(1) Market is a stored column on `claims`, not derived through a join.**
+Migration `0018_claims_market` adds `claims.market text NOT NULL DEFAULT 'US'
+CHECK (market IN ('US','CN'))`, mirroring `sectors.market` (0015), and moves
+the partial index to `(user_id, market, session_date) WHERE outcome IS NULL`
+now that market sits in every resolution query's predicate. The alternative —
+deriving a claim's market by joining to `holdings`/`sectors` — loses claims: a
+claim outlives the position it was made about, so selling the name drops its
+`holdings` row while the claim is still owed a grade, and the join would
+silently stop resolving it, forever, with nothing anywhere reporting the loss.
+The `UNIQUE(user_id, symbol, claim_type, session_date)` constraint is
+untouched — CN's exchange-suffixed symbols (`600519.SS`) can't collide with US
+tickers, the same reasoning `holdings UNIQUE(user_id, symbol)` already rests
+on (D32).
+
+**(2) `market`/`benchmark` are keyword-only and undefaulted.**
+`resolve_due_claims(conn, user_id, session_date, *, market, benchmark)` and
+`store_emitted_claims(..., *, market)` take no default. A default is precisely
+how a future call site would silently inherit `US` and consume or mis-tag the
+other book's claims — the CN close fires at 15:20 CST, hours before the US
+close brief runs, so the failure mode is not hypothetical. Every caller states
+its market at the call site, where a reviewer can see it.
+
+**(3) The horizon >= 1 grader dispatches on whether an attribution model
+exists, not on a market name.** `_grade` takes a `use_residual: bool` and
+calls `_grade_relative` (the existing residual grader, M13) when true or the
+new `_grade_close_to_close` (the pre-M13 US grader, revived under an explicit
+name rather than left implicit) when false — grading the symbol's return
+against the benchmark over the emit-close-to-resolve-close window. Today
+`resolve_due_claims` computes that bool as `market == "US"`, but the grader
+itself never inspects the market string; it only ever sees a capability flag.
+Horizon 0 keeps `_grade_open_close`, with `BENCHMARK_SYMBOL` replaced by the
+passed-in `benchmark`.
+
+**(4) D32's claims prohibition is lifted, for claims only.**
+`assemble_cn_close_and_store` now calls `resolve_due_claims(market="CN",
+benchmark=CN_BENCHMARK)` before the quiet-session skip gate — a quiet CN
+session still grades what it owes, the same precedent the US close brief
+already sets — emits off `_tier_positions(result, tape, {})`, and calls
+`store_emitted_claims(market="CN")` after `_store_brief`, so a skipped brief
+emits nothing. Narration and the catalyst readers stay prohibited: they are
+genuinely user-wide, single-run concerns, and this milestone does not touch
+them.
+
+**(5) No contract bump.** `relative_strength` was already in the schema's
+`claim_type` enum; `claims[]`/`resolved_claims[]` were already on every
+`BriefObject` and were simply empty on CN briefs before this milestone.
+`market` is a ledger column that never enters the object — the brief already
+carries its market in `kind`. `schema_version` stays at 7 and `pnpm
+contracts:gen` stays green without regeneration.
+
+*Rules out:* deriving a claim's market from holdings/sectors; a default value
+for `market` on either ledger function; grading CN against the residual (there
+is no CN attribution); CN open-brief claims (no CN pre-market feed, so no
+`premarket_gap` analogue); CN narration, flags, or catalysts (still D32's
+scope).
+
+*Reverses if:* CN return attribution lands — then CN moves to the residual arm
+and `use_residual` becomes a per-market capability lookup rather than a
+boolean.
