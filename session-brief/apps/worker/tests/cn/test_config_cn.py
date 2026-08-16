@@ -19,5 +19,7 @@ def test_cn_bars_are_synthetic_false_when_live(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_cn_benchmark_constant() -> None:
-    """CN_BENCHMARK matches the CSI 300 index symbol."""
-    assert constants.CN_BENCHMARK == "000300.SS"
+    """CN_BENCHMARK is the CSI 300 ETF proxy, not the index itself — the index
+    (000300.SS) 404s on Tiingo's free tier under every candidate format
+    (tiingo-cn-probe, cn/docs/open-questions.md CN-Q5)."""
+    assert constants.CN_BENCHMARK == "510300.SS"

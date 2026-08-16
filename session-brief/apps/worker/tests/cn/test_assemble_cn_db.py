@@ -8,10 +8,10 @@ convention `024f3c0` established: the shared dev DB already holds committed
 rows for real CN tickers (600519.SS, 300750.SZ, 000300.SS — 64 sessions each,
 from an earlier backfill smoke test), so a DB test must own symbols no other
 test or run would ever write. The CN benchmark constant
-(``worker_cn.constants.CN_BENCHMARK`` = ``000300.SS``) is not seeded here at
-all — ``compute_and_store`` degrades a missing benchmark price to
-``benchmark_return=None`` rather than raising, so this test never touches that
-real symbol's rows, seeded or not."""
+(``worker_cn.constants.CN_BENCHMARK`` = ``510300.SS``, the CSI 300 ETF proxy —
+CN-Q5) is not seeded here at all — ``compute_and_store`` degrades a missing
+benchmark price to ``benchmark_return=None`` rather than raising, so this test
+never touches that real symbol's rows, seeded or not."""
 
 from __future__ import annotations
 

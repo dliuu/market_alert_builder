@@ -132,9 +132,14 @@ all four candidate formats (`000300-SHG`, `000300.SS`, `000300`, `000300-SS`)
 — **not servable on Tiingo's free tier under any tried format.** The
 documented fallback resolves cleanly: `510300` (bare code, same CN-Q1 format)
 returned 10 records, `adjClose` present, no divergence in this window.
-`CN_BENCHMARK` should move to `"510300.SS"` when CN-M3 flips `CN_BARS_LIVE`
-on; tracking error vs the true index stays a documented caveat, not a
-blocker.
+
+`CN_BENCHMARK` (`worker_cn/constants.py`) is now `"510300.SS"` — flipped
+unconditionally (not gated behind `CN_BARS_LIVE`), fixing a Critical review
+finding: `CN_BENCHMARK` feeds the close job's bar poll
+(`book_symbols` → `ensure_todays_bars`, D20 fail-loud semantics) regardless of
+synthetic/live mode, so leaving it at the unservable `000300.SS` would have
+broken every live session on that one symbol the moment `CN_BARS_LIVE=true`.
+Tracking error vs the true index stays a documented caveat, not a blocker.
 
 ### CN-Q4 — How soon after 15:00 CST does the EOD bar publish? (partial)
 
