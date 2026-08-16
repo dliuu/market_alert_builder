@@ -9,8 +9,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from worker.assemble import assemble_and_store
 from worker.constants import ATTRIBUTION_MODEL_VERSION
@@ -204,3 +206,33 @@ def test_no_attribution_row_stays_unresolved(db_conn: Connection) -> None:
     assert row["outcome"] is None
     assert row["resolved_session"] is None
     assert row["graded_model_version"] is None
+
+
+def test_market_defaults_to_us_and_rejects_unknown_markets(db_conn: Connection) -> None:
+    """0018: existing rows are US; the CHECK constraint is real."""
+    _seed_user(db_conn)
+    db_conn.execute(
+        text("""
+            INSERT INTO claims (user_id, brief_id, symbol, claim_type,
+                                direction, horizon_sessions, session_date)
+            VALUES (:u, 'b1', 'ZZTEST', 'relative_strength', 'up', 1,
+                    DATE '2099-01-04')
+        """),
+        {"u": _TEST_USER_ID},
+    )
+    got = db_conn.execute(
+        text("SELECT market FROM claims WHERE user_id = :u AND symbol = 'ZZTEST'"),
+        {"u": _TEST_USER_ID},
+    ).scalar()
+    assert got == "US"
+
+    with pytest.raises(IntegrityError):
+        db_conn.execute(
+            text("""
+                INSERT INTO claims (user_id, brief_id, symbol, claim_type,
+                                    direction, horizon_sessions, session_date, market)
+                VALUES (:u, 'b1', 'ZZTEST2', 'relative_strength', 'up', 1,
+                        DATE '2099-01-04', 'JP')
+            """),
+            {"u": _TEST_USER_ID},
+        )
