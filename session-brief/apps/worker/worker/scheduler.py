@@ -236,15 +236,16 @@ def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
 # --- The daily job ----------------------------------------------------------
 
 
-def sector_benchmarks(conn: Connection, user_id: str) -> list[str]:
-    """Every benchmark set in the book. Settable in the UI since M1, and read by
-    two callers: the ingest universe and §2's foreign proxies."""
+def sector_benchmarks(conn: Connection, user_id: str, *, market: str = "US") -> list[str]:
+    """Every benchmark set in the book, for the given market's sectors. Settable
+    in the UI since M1, and read by two callers: the ingest universe and §2's
+    foreign proxies."""
     rows = conn.execute(
         text(
             "SELECT DISTINCT benchmark_symbol FROM sectors "
-            "WHERE user_id = :u AND benchmark_symbol IS NOT NULL"
+            "WHERE user_id = :u AND market = :market AND benchmark_symbol IS NOT NULL"
         ),
-        {"u": user_id},
+        {"u": user_id, "market": market},
     ).all()
     return sorted(str(r[0]) for r in rows)
 
@@ -256,15 +257,29 @@ def theme_symbols(conn: Connection) -> list[str]:
     return sorted(str(r[0]) for r in rows)
 
 
-def held_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> set[str]:
+def held_symbols(
+    conn: Connection, user_id: str = DEV_USER_ID, *, market: str = "US"
+) -> set[str]:
+    """The held names in one market's book (``sectors.market`` scopes the read —
+    the US and CN books never blend)."""
     rows = conn.execute(
-        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u"),
-        {"u": user_id},
+        text(
+            "SELECT DISTINCT h.symbol FROM holdings h "
+            "JOIN sectors s ON s.id = h.sector_id AND s.user_id = h.user_id "
+            "WHERE h.user_id = :u AND s.market = :market"
+        ),
+        {"u": user_id, "market": market},
     ).all()
     return {str(r[0]) for r in rows}
 
 
-def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+def book_symbols(
+    conn: Connection,
+    user_id: str = DEV_USER_ID,
+    *,
+    market: str = "US",
+    benchmark: str | None = None,
+) -> list[str]:
     """The *book's* universe: every held name, every sector benchmark, plus the
     market benchmark. SPY is *always* needed for the vs-SPY line even when it
     isn't in the book — the manual ``backfill`` omits it, which is a latent gap
@@ -275,8 +290,11 @@ def book_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
     This is the pre-market capture's universe too, which is why theme members are
     *not* here — nobody wants a pre-market quote for a basket constituent they
     don't own. See ``ingest_symbols`` for the daily-bar universe."""
-    held = held_symbols(conn, user_id)
-    return sorted(held | set(sector_benchmarks(conn, user_id)) | {BENCHMARK_SYMBOL})
+    benchmark_symbol = benchmark if benchmark is not None else BENCHMARK_SYMBOL
+    held = held_symbols(conn, user_id, market=market)
+    return sorted(
+        held | set(sector_benchmarks(conn, user_id, market=market)) | {benchmark_symbol}
+    )
 
 
 def ingest_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:

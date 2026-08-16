@@ -8,7 +8,22 @@ import { font, palette, signColor } from "./theme";
 
 const WIDTH = 600;
 
-export function CloseBrief({ brief }: { brief: BriefObject }) {
+// Configured by `emails/cn/close-brief.tsx` (D31): every default here
+// reproduces the US template's output byte-for-byte. CN specifics (¥, "vs CSI
+// 300", the CN kind label) are set only by that wrapper — never here.
+export type CloseBriefOptions = {
+  currencySymbol?: string;
+  benchmarkLabel?: string;
+  kindLabel?: string;
+};
+
+export function CloseBrief({
+  brief,
+  options,
+}: { brief: BriefObject; options?: CloseBriefOptions }) {
+  const currencySymbol = options?.currencySymbol ?? "$";
+  const benchmarkLabel = options?.benchmarkLabel ?? "vs SPY";
+  const kindLabel = options?.kindLabel;
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
@@ -32,6 +47,7 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
                 </td>
                 <td style={{ verticalAlign: "bottom", textAlign: "right" }}>
                   <span style={mtopDate}>
+                    {kindLabel && `${kindLabel} · `}
                     {dateLong}
                     <br />
                     session closed 16:00
@@ -56,7 +72,12 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
           {brief.book && (
             <Section style={sec}>
               <SectionHead title="Session scorecard" />
-              <Scorecard book={brief.book} positions={attribution?.rows.length ?? 0} />
+              <Scorecard
+                book={brief.book}
+                positions={attribution?.rows.length ?? 0}
+                currencySymbol={currencySymbol}
+                benchmarkLabel={benchmarkLabel}
+              />
             </Section>
           )}
 
@@ -64,7 +85,11 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
           {brief.book && attribution && attribution.rows.length > 0 && (
             <Section style={sec}>
               <SectionHead title="Attribution" note="contribution to book return" />
-              <Attribution rows={attribution.rows} book={brief.book} />
+              <Attribution
+                rows={attribution.rows}
+                book={brief.book}
+                currencySymbol={currencySymbol}
+              />
             </Section>
           )}
 
@@ -88,7 +113,7 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
           {catalysts && catalysts.rows.length > 0 && (
             <Section style={sec}>
               <SectionHead title="Catalysts" note="insider flow and proposed supply" />
-              <Catalysts rows={catalysts.rows} />
+              <Catalysts rows={catalysts.rows} currencySymbol={currencySymbol} />
             </Section>
           )}
 
@@ -157,29 +182,34 @@ function SectionHead({ title, note }: { title: string; note?: string }) {
   );
 }
 
-function Scorecard({ book, positions }: { book: Book; positions: number }) {
+function Scorecard({
+  book,
+  positions,
+  currencySymbol,
+  benchmarkLabel,
+}: { book: Book; positions: number; currencySymbol: string; benchmarkLabel: string }) {
   const cells = [
     {
       k: "Session",
       v: signedPct(book.day_bps / 100),
       color: signColor(book.day_pnl_cents),
-      s: signedDollars(book.day_pnl_cents),
+      s: signedDollars(book.day_pnl_cents, currencySymbol),
     },
     {
-      k: "vs SPY",
+      k: benchmarkLabel,
       v: book.vs_spy_bps != null ? bps(book.vs_spy_bps) : "—",
       color: book.vs_spy_bps != null ? signColor(book.vs_spy_bps) : palette.ink3,
       s: "20-session",
     },
     {
       k: "Book value",
-      v: dollars(book.value_cents),
+      v: dollars(book.value_cents, currencySymbol),
       color: palette.ink,
       s: `${positions} positions`,
     },
     {
       k: "Unrealised",
-      v: signedDollars(book.total_pnl_cents),
+      v: signedDollars(book.total_pnl_cents, currencySymbol),
       color: signColor(book.total_pnl_cents),
       s: book.total_pct != null ? signedPct(book.total_pct * 100) : "on cost",
     },
@@ -201,7 +231,11 @@ function Scorecard({ book, positions }: { book: Book; positions: number }) {
   );
 }
 
-function Attribution({ rows, book }: { rows: Row[]; book: Book }) {
+function Attribution({
+  rows,
+  book,
+  currencySymbol,
+}: { rows: Row[]; book: Book; currencySymbol: string }) {
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
       <thead>
@@ -230,7 +264,7 @@ function Attribution({ rows, book }: { rows: Row[]; book: Book }) {
             <td style={tdR}>{r.close != null ? r.close.toFixed(2) : "—"}</td>
             <td style={{ ...tdR, color: signColor(r.day_return) }}>{pctOrDash(r.day_return)}</td>
             <td style={{ ...tdR, color: signColor(r.day_pnl_cents) }}>
-              {r.day_pnl_cents != null ? signedDollarsRound(r.day_pnl_cents) : "—"}
+              {r.day_pnl_cents != null ? signedDollarsRound(r.day_pnl_cents, currencySymbol) : "—"}
             </td>
             <td style={{ ...tdR, color: signColor(r.contribution_bps) }}>
               {r.contribution_bps != null ? signedInt(r.contribution_bps) : "—"}
@@ -239,7 +273,9 @@ function Attribution({ rows, book }: { rows: Row[]; book: Book }) {
               {r.resid_bps != null ? signedInt(r.resid_bps) : "—"}
             </td>
             <td style={{ ...tdR, color: signColor(r.total_pnl_cents) }}>
-              {r.total_pnl_cents != null ? signedDollarsRound(r.total_pnl_cents) : "—"}
+              {r.total_pnl_cents != null
+                ? signedDollarsRound(r.total_pnl_cents, currencySymbol)
+                : "—"}
               {r.total_pct != null && <span style={mut}> {signedPct(r.total_pct * 100)}</span>}
             </td>
           </tr>
@@ -251,12 +287,12 @@ function Attribution({ rows, book }: { rows: Row[]; book: Book }) {
             {signedPct(book.day_bps / 100)}
           </td>
           <td style={{ ...totR, color: signColor(book.day_pnl_cents) }}>
-            {signedDollarsRound(book.day_pnl_cents)}
+            {signedDollarsRound(book.day_pnl_cents, currencySymbol)}
           </td>
           <td style={{ ...totR, color: signColor(book.day_bps) }}>{signedInt(book.day_bps)}</td>
           <td style={totR}>—</td>
           <td style={{ ...totR, color: signColor(book.total_pnl_cents) }}>
-            {signedDollarsRound(book.total_pnl_cents)}
+            {signedDollarsRound(book.total_pnl_cents, currencySymbol)}
             {book.total_pct != null && <span style={mut}> {signedPct(book.total_pct * 100)}</span>}
           </td>
         </tr>
@@ -297,7 +333,7 @@ function Tape({ rows }: { rows: Row[] }) {
 // `brief`-tier one (second sighting, or an inherently minor signal) is
 // condensed to a single line. Assembly decided which is which — the tier is
 // read here, never computed.
-function Catalysts({ rows }: { rows: Row[] }) {
+function Catalysts({ rows, currencySymbol }: { rows: Row[]; currencySymbol: string }) {
   const symbols: string[] = [];
   for (const r of rows) {
     const s = r.symbol ?? "—";
@@ -327,7 +363,7 @@ function Catalysts({ rows }: { rows: Row[] }) {
                   </span>
                   {mine.map((r, i) => (
                     <span key={`${r.kind}-${r.ref_date}-${i}`} style={why}>
-                      {catalystLine(r)}
+                      {catalystLine(r, currencySymbol)}
                       {r.why && ` — ${r.why}`}
                     </span>
                   ))}
@@ -344,25 +380,27 @@ function Catalysts({ rows }: { rows: Row[] }) {
 // One line of prose-free fact per signal. Every figure comes from the object;
 // nothing here is computed and nothing is inferred from a missing value — an
 // unknown size renders as "size unknown", which is information (open q. 4).
-function catalystLine(r: Row): string {
+function catalystLine(r: Row, currencySymbol: string): string {
   const on = r.ref_date ? shortDate(r.ref_date) : "";
   const suffix = r.ambiguous_code ? " [type unclassified]" : "";
 
   switch (r.kind) {
     case "clevel_buy":
-      return `Officer purchase — ${dollars(r.value_cents ?? 0)}, ${on}${suffix}`;
+      return `Officer purchase — ${dollars(r.value_cents ?? 0, currencySymbol)}, ${on}${suffix}`;
     case "cluster":
       return `Insider cluster — ${r.insider_count ?? 0} insiders, ${dollars(
         r.value_cents ?? 0,
+        currencySymbol,
       )}, ${on}${suffix}`;
     case "pre_earnings":
       return `Sale ${r.days_to_event ?? 0} sessions pre-earnings — ${dollars(
         r.value_cents ?? 0,
+        currencySymbol,
       )}${suffix}`;
     case "outsized_sale":
       return `Sold ${proportion(r.pct_of_holding)} of holding, ${on}${suffix}`;
     case "cadence_break":
-      return `Off usual cadence — ${dollars(r.value_cents ?? 0)}, ${on}${suffix}`;
+      return `Off usual cadence — ${dollars(r.value_cents ?? 0, currencySymbol)}, ${on}${suffix}`;
     case "large_144":
     case "standard_144":
       return `Form 144 — ${shares(r.shares)} proposed (${
@@ -462,16 +500,16 @@ function formatDate(iso: string): string {
     timeZone: "UTC",
   });
 }
-function dollars(cents: number): string {
-  return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+function dollars(cents: number, symbol = "$"): string {
+  return `${symbol}${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
-function signedDollars(cents: number): string {
+function signedDollars(cents: number, symbol = "$"): string {
   const s = cents >= 0 ? "+" : "-";
-  return `${s}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${s}${symbol}${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-function signedDollarsRound(cents: number): string {
+function signedDollarsRound(cents: number, symbol = "$"): string {
   const s = cents >= 0 ? "+" : "-";
-  return `${s}$${Math.round(Math.abs(cents) / 100).toLocaleString("en-US")}`;
+  return `${s}${symbol}${Math.round(Math.abs(cents) / 100).toLocaleString("en-US")}`;
 }
 function bps(v: number): string {
   return `${v >= 0 ? "+" : ""}${v}bp`;

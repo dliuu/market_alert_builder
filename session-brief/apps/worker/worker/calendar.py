@@ -1,19 +1,23 @@
 """Trading calendar — the single source of truth for "is today a session?" and
 "when does it close?" (invariant 7: never hardcode holidays or a 16:00 close).
 
-Wraps ``exchange_calendars`` (XNYS = NYSE). Half-days close at 13:00 ET and the
-close job must move with them (docs/02); ``session_close`` returns the real
-close, so nothing downstream needs a holiday or half-day list.
+Wraps ``exchange_calendars`` per market via ``MarketCalendar``. Half-days close
+at 13:00 ET and the close job must move with them (docs/02); ``session_close``
+returns the real close, so nothing downstream needs a holiday or half-day list.
 
 UTC at rest, ``America/New_York`` in logic (invariant 8): the calendar library
-returns tz-aware UTC timestamps, and the *session date* is always the ET
+returns tz-aware UTC timestamps, and the *session date* is always the local
 calendar date — ``today_et`` is how a UTC ``now`` becomes the right session.
+
+``US`` is the NYSE instance; every module-level function below is a one-line
+delegate to it, kept for the ~15 existing call sites across the worker.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time
-from functools import lru_cache
+from functools import cached_property
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
@@ -27,29 +31,96 @@ ET = ZoneInfo("America/New_York")
 _STANDARD_CLOSE_ET = time(16, 0)
 
 
-@lru_cache(maxsize=1)
-def _calendar() -> xcals.ExchangeCalendar:
-    return xcals.get_calendar(EXCHANGE)
+@dataclass(frozen=True)
+class MarketCalendar:
+    """A trading calendar for one exchange: session/close lookups in the
+    exchange's own timezone, backed by ``exchange_calendars``."""
+
+    exchange: str
+    tz: ZoneInfo
+    standard_close: time
+
+    @cached_property
+    def _calendar(self) -> xcals.ExchangeCalendar:
+        return xcals.get_calendar(self.exchange)
+
+    def is_session(self, d: date) -> bool:
+        """True iff ``d`` is a trading session (not a weekend or holiday)."""
+        return bool(self._calendar.is_session(d.isoformat()))
+
+    def session_close(self, d: date) -> datetime:
+        """The tz-aware UTC close for session ``d`` — the standard close
+        normally, earlier on a half-day, DST handled by the calendar. Raises if
+        ``d`` isn't a session."""
+        if not self.is_session(d):
+            raise ValueError(f"{d} is not a trading session")
+        close: datetime = self._calendar.session_close(d.isoformat()).to_pydatetime()
+        return close
+
+    def next_session(self, d: date) -> date:
+        """The first trading session strictly after ``d``."""
+        nxt: date = self._calendar.next_session(d.isoformat()).date()
+        return nxt
+
+    def sessions_between(self, start: date, end: date) -> int:
+        """Trading sessions in ``(start, end]`` — start excluded, end included.
+
+        "Within 5 trading days" is a distance the catalyst detectors (M17)
+        measure constantly, and calendar arithmetic is the wrong answer to it: a
+        Thursday and the following Tuesday are five calendar days apart but
+        three sessions. Zero when ``end`` is on or before ``start``."""
+        if end <= start:
+            return 0
+        sessions = self._calendar.sessions_in_range(start.isoformat(), end.isoformat())
+        return len(sessions) - (1 if self.is_session(start) else 0)
+
+    def previous_session(self, d: date) -> date:
+        """The last trading session strictly before ``d``. ``d`` need not itself
+        be a session: the open brief reads it with a session ``D`` (at 08:15
+        every figure comes from D-1's close — M14), while the attribution
+        weekend refit passes a non-session date (M13). ``exchange_calendars.
+        previous_session`` requires a session as input, so a non-session ``d``
+        is rolled back via ``date_to_session`` first. "The day before" is not
+        "yesterday": a Tuesday after a Monday holiday looks back to Friday."""
+        cal = self._calendar
+        if self.is_session(d):
+            prev: date = cal.previous_session(d.isoformat()).date()
+            return prev
+        rolled: date = cal.date_to_session(d.isoformat(), direction="previous").date()
+        return rolled
+
+    def local_date(self, now_utc: datetime) -> date:
+        """The calendar date in this market's tz for a UTC instant — the
+        session a run belongs to."""
+        return now_utc.astimezone(self.tz).date()
+
+    def close_or_standard(self, d: date) -> datetime:
+        """The tz-aware UTC send/heartbeat anchor for ``d``: the real session
+        close on a trading day, else the nominal standard-close bell so the
+        daily check-in still lands at a predictable weekday time on a
+        holiday."""
+        if self.is_session(d):
+            return self.session_close(d)
+        return datetime.combine(d, self.standard_close, tzinfo=self.tz).astimezone(ZoneInfo("UTC"))
+
+
+US = MarketCalendar("XNYS", ET, _STANDARD_CLOSE_ET)
 
 
 def is_session(d: date) -> bool:
     """True iff ``d`` is a trading session (not a weekend or NYSE holiday)."""
-    return bool(_calendar().is_session(d.isoformat()))
+    return US.is_session(d)
 
 
 def session_close(d: date) -> datetime:
     """The tz-aware UTC close for session ``d`` — 16:00 ET normally, 13:00 ET on
     a half-day, DST handled by the calendar. Raises if ``d`` isn't a session."""
-    if not is_session(d):
-        raise ValueError(f"{d} is not a trading session")
-    close: datetime = _calendar().session_close(d.isoformat()).to_pydatetime()
-    return close
+    return US.session_close(d)
 
 
 def next_session(d: date) -> date:
     """The first trading session strictly after ``d``."""
-    nxt: date = _calendar().next_session(d.isoformat()).date()
-    return nxt
+    return US.next_session(d)
 
 
 def sessions_between(start: date, end: date) -> int:
@@ -59,10 +130,7 @@ def sessions_between(start: date, end: date) -> int:
     constantly, and calendar arithmetic is the wrong answer to it: a Thursday
     and the following Tuesday are five calendar days apart but three sessions.
     Zero when ``end`` is on or before ``start``."""
-    if end <= start:
-        return 0
-    sessions = _calendar().sessions_in_range(start.isoformat(), end.isoformat())
-    return len(sessions) - (1 if is_session(start) else 0)
+    return US.sessions_between(start, end)
 
 
 def previous_session(d: date) -> date:
@@ -73,23 +141,16 @@ def previous_session(d: date) -> date:
     session as input, so a non-session ``d`` is rolled back via
     ``date_to_session`` first. "The day before" is not "yesterday": a Tuesday
     after a Monday holiday looks back to Friday."""
-    cal = _calendar()
-    if is_session(d):
-        prev: date = cal.previous_session(d.isoformat()).date()
-        return prev
-    rolled: date = cal.date_to_session(d.isoformat(), direction="previous").date()
-    return rolled
+    return US.previous_session(d)
 
 
 def today_et(now_utc: datetime) -> date:
     """The ET calendar date for a UTC instant — the session a run belongs to."""
-    return now_utc.astimezone(ET).date()
+    return US.local_date(now_utc)
 
 
 def close_or_standard(d: date) -> datetime:
     """The tz-aware UTC send/heartbeat anchor for ``d``: the real session close on
     a trading day, else the nominal 16:00 ET bell so the daily check-in still
     lands at a predictable weekday time on a holiday."""
-    if is_session(d):
-        return session_close(d)
-    return datetime.combine(d, _STANDARD_CLOSE_ET, tzinfo=ET).astimezone(ZoneInfo("UTC"))
+    return US.close_or_standard(d)

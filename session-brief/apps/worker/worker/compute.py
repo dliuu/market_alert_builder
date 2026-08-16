@@ -221,9 +221,11 @@ _READ_LOTS = text("""
            l.cost_basis_cents AS cost_basis_cents, l.opened_on AS opened_on
     FROM lots l
     JOIN holdings h ON h.id = l.holding_id
+    JOIN sectors s ON s.id = h.sector_id AND s.user_id = h.user_id
     WHERE l.user_id = :user_id
       AND l.opened_on <= :session_date
       AND (l.closed_on IS NULL OR l.closed_on > :session_date)
+      AND s.market = :market
 """)
 
 _READ_PRICES = text("""
@@ -242,11 +244,20 @@ _UPSERT = text("""
 """)
 
 
-def compute_and_store(conn: Connection, user_id: str, session_date: date) -> ComputeResult:
+def compute_and_store(
+    conn: Connection,
+    user_id: str,
+    session_date: date,
+    *,
+    market: str = "US",
+    benchmark: str | None = None,
+) -> ComputeResult:
     """Read the book and bars, compute, and persist per-symbol metrics. Reads
-    are for the given user; the benchmark (SPY) feeds vs_spy but isn't stored."""
-    lots = _read_lots(conn, user_id, session_date)
-    needed = sorted({lot.symbol for lot in lots} | {BENCHMARK_SYMBOL})
+    are for the given user, filtered to the given market's sectors; the
+    benchmark (SPY by default) feeds vs_spy but isn't stored."""
+    benchmark_symbol = benchmark if benchmark is not None else BENCHMARK_SYMBOL
+    lots = _read_lots(conn, user_id, session_date, market)
+    needed = sorted({lot.symbol for lot in lots} | {benchmark_symbol})
     prices = _read_prices(conn, needed, session_date)
 
     missing = sorted({lot.symbol for lot in lots} - prices.keys())
@@ -255,17 +266,17 @@ def compute_and_store(conn: Connection, user_id: str, session_date: date) -> Com
             f"no bars for {', '.join(missing)} on {session_date}; run backfill for these symbols"
         )
 
-    benchmark = prices.get(BENCHMARK_SYMBOL)
-    benchmark_return = _day_return(benchmark) if benchmark else None
+    benchmark_price = prices.get(benchmark_symbol)
+    benchmark_return = _day_return(benchmark_price) if benchmark_price else None
 
     result = compute(session_date, lots, prices, benchmark_return=benchmark_return)
     _store(conn, user_id, session_date, result)
     return result
 
 
-def _read_lots(conn: Connection, user_id: str, session_date: date) -> list[Lot]:
+def _read_lots(conn: Connection, user_id: str, session_date: date, market: str) -> list[Lot]:
     rows = conn.execute(
-        _READ_LOTS, {"user_id": user_id, "session_date": session_date}
+        _READ_LOTS, {"user_id": user_id, "session_date": session_date, "market": market}
     ).mappings().all()
     return [
         Lot(

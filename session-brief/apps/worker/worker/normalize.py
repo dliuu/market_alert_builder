@@ -38,7 +38,7 @@ class Payload(NamedTuple):
 _SELECT = text("""
     SELECT symbol, fetched_at, body::text AS body
     FROM raw_payloads
-    WHERE source = :source AND endpoint = :endpoint
+    WHERE source = ANY(:sources) AND endpoint = :endpoint
     ORDER BY fetched_at, id
 """)
 
@@ -65,10 +65,20 @@ def bars_from_payloads(payloads: list[Payload]) -> list[Bar]:
     return [bar for _, (_, bar) in sorted(latest.items(), key=lambda item: item[0])]
 
 
-def normalize_bars(conn: Connection, symbols: list[str] | None = None) -> int:
+def normalize_bars(
+    conn: Connection,
+    symbols: list[str] | None = None,
+    *,
+    sources: tuple[str, ...] = (SOURCE,),
+) -> int:
     """Replay stored payloads into bars_daily. Returns the number of bars
-    written. Idempotent: re-running reproduces identical rows."""
-    rows = conn.execute(_SELECT, {"source": SOURCE, "endpoint": ENDPOINT}).mappings().all()
+    written. Idempotent: re-running reproduces identical rows. ``sources``
+    scopes the replay so it never crosses namespaces — a plain call only ever
+    consumes Tiingo payloads, and the CN backfill path passes
+    ``sources=("synthetic-cn",)``."""
+    rows = conn.execute(
+        _SELECT, {"sources": list(sources), "endpoint": ENDPOINT}
+    ).mappings().all()
     wanted = {s.upper() for s in symbols} if symbols else None
     payloads = [
         Payload(symbol=row["symbol"], fetched_at=row["fetched_at"], body=row["body"])

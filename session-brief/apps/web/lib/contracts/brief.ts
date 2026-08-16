@@ -13,9 +13,13 @@ export interface BriefObject {
   brief_id: string;
   user_id: string;
   session_date: string;
-  kind: "open" | "close";
+  kind: "open" | "close" | "open_cn" | "close_cn";
   generated_at: string;
   subject: string;
+  /**
+   * Optional; absent means USD. Stored pre-v7 bodies remain valid — this optionality is deliberate, so old renderers/bodies must keep working (docs/04).
+   */
+  currency?: "USD" | "CNY";
   one_thing?: string | null;
   /**
    * Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.
@@ -32,7 +36,7 @@ export interface BriefObject {
   };
 }
 /**
- * All monetary values are integer cents. Never float.
+ * All monetary values are integer minor units (cents / fen). Never float.
  */
 export interface Book {
   value_cents: number;
@@ -40,6 +44,9 @@ export interface Book {
   day_bps: number;
   total_pnl_cents: number;
   total_pct?: number;
+  /**
+   * vs the book's benchmark (SPY for the US book, CSI 300 for the CN book).
+   */
   vs_spy_bps?: number;
 }
 export interface Section {
@@ -160,7 +167,7 @@ export interface Row {
    */
   pre_pct?: number | null;
   /**
-   * Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).
+   * Open brief §3: the pre-market gap in integer minor units (cents / fen). Money, not percent — a percent tells you nothing about what the position is worth (docs/01, M15).
    */
   gap_cents?: number | null;
   /**
@@ -184,7 +191,7 @@ export interface Row {
    */
   insider_count?: number | null;
   /**
-   * Close brief catalysts: transaction value in integer cents. Never float (M17).
+   * Close brief catalysts: transaction value in integer minor units (cents / fen). Never float (M17).
    */
   value_cents?: number | null;
   /**

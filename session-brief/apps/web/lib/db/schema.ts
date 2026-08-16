@@ -23,6 +23,7 @@ export const sectors = pgTable("sectors", {
 	name: text().notNull(),
 	benchmarkSymbol: text("benchmark_symbol"),
 	sortOrder: integer("sort_order").default(0).notNull(),
+	market: text().default('US').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("sectors_user_id_idx").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
@@ -32,6 +33,7 @@ export const sectors = pgTable("sectors", {
 			name: "sectors_user_id_fkey"
 		}).onDelete("cascade"),
 	unique("sectors_user_id_name_key").on(table.userId, table.name),
+	check("sectors_market_check", sql`market = ANY (ARRAY['US'::text, 'CN'::text])`),
 	pgPolicy("sectors_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
 ]);
 
@@ -117,7 +119,7 @@ export const briefs = pgTable("briefs", {
 		}).onDelete("cascade"),
 	unique("briefs_user_id_session_date_kind_key").on(table.userId, table.sessionDate, table.kind),
 	pgPolicy("briefs_tenant", { as: "permissive", for: "all", to: ["public"], using: sql`(user_id = auth.uid())`, withCheck: sql`(user_id = auth.uid())`  }),
-	check("briefs_kind_check", sql`kind = ANY (ARRAY['open'::text, 'close'::text])`),
+	check("briefs_kind_check", sql`kind = ANY (ARRAY['open'::text, 'close'::text, 'open_cn'::text, 'close_cn'::text])`),
 ]);
 
 export const metrics = pgTable("metrics", {

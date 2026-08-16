@@ -25,7 +25,19 @@ import { font, palette, signColor } from "./theme";
 
 const WIDTH = 600;
 
-export function OpenBrief({ brief }: { brief: BriefObject }) {
+// Configured by `emails/cn/open-brief.tsx` (D31): every default here
+// reproduces the US template's output byte-for-byte. CN specifics (¥, "vs CSI
+// 300", the CN kind label) are set only by that wrapper — never here.
+export type OpenBriefOptions = {
+  currencySymbol?: string;
+  benchmarkLabel?: string;
+  kindLabel?: string;
+};
+
+export function OpenBrief({ brief, options }: { brief: BriefObject; options?: OpenBriefOptions }) {
+  const currencySymbol = options?.currencySymbol ?? "$";
+  const benchmarkLabel = options?.benchmarkLabel ?? "vs SPY";
+  const kindLabel = options?.kindLabel;
   const section = (id: string) => brief.sections.find((s) => s.id === id);
   const tape = section("overnight_tape");
   const pre = section("premarket");
@@ -61,6 +73,7 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
                 </td>
                 <td style={{ verticalAlign: "bottom", textAlign: "right" }}>
                   <span style={mtopDate}>
+                    {kindLabel && `${kindLabel} · `}
                     {dateLong}
                     <br />
                     opens 09:30
@@ -100,7 +113,7 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
           {pre && pre.rows.length > 0 && (
             <Sec style={sec}>
               <SectionHead title="Your names, pre-market" note="vs prior close" />
-              <Premarket rows={pre.rows} />
+              <Premarket rows={pre.rows} currencySymbol={currencySymbol} />
               {pre.note && <p style={note}>{pre.note}</p>}
             </Sec>
           )}
@@ -129,7 +142,7 @@ export function OpenBrief({ brief }: { brief: BriefObject }) {
           {sectors && sectors.rows.length > 0 && (
             <Sec style={sec}>
               <SectionHead title="Sector setup" note="trailing five sessions" />
-              <Sectors rows={sectors.rows} />
+              <Sectors rows={sectors.rows} benchmarkLabel={benchmarkLabel} />
             </Sec>
           )}
 
@@ -236,7 +249,7 @@ function Tape({ rows }: { rows: Row[] }) {
   );
 }
 
-function Premarket({ rows }: { rows: Row[] }) {
+function Premarket({ rows, currencySymbol }: { rows: Row[]; currencySymbol: string }) {
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
       <thead>
@@ -255,7 +268,9 @@ function Premarket({ rows }: { rows: Row[] }) {
               {r.why && <span style={why}>{r.why}</span>}
             </td>
             <td style={{ ...tdR, color: signColor(r.pre_pct) }}>{pctOrDash(r.pre_pct)}</td>
-            <td style={{ ...tdR, color: signColor(r.gap_cents) }}>{dollarsOrDash(r.gap_cents)}</td>
+            <td style={{ ...tdR, color: signColor(r.gap_cents) }}>
+              {dollarsOrDash(r.gap_cents, currencySymbol)}
+            </td>
             <td style={tdR}>{multOrDash(r.premarket_vol_mult)}</td>
           </tr>
         ))}
@@ -313,14 +328,14 @@ function Tag({ tag }: { tag: Row["tag"] }) {
   );
 }
 
-function Sectors({ rows }: { rows: Row[] }) {
+function Sectors({ rows, benchmarkLabel }: { rows: Row[]; benchmarkLabel: string }) {
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
       <thead>
         <tr>
           <th style={thL}>Sector</th>
           <th style={{ ...thR, width: 70 }}>5d</th>
-          <th style={{ ...thR, width: 84 }}>vs SPY</th>
+          <th style={{ ...thR, width: 84 }}>{benchmarkLabel}</th>
           <th style={{ ...thR, width: 74 }}>Pre</th>
         </tr>
       </thead>
@@ -408,10 +423,10 @@ function signedAbs(v: number | null | undefined): string {
 // The gap is dollars per share, not percent — that's the figure you act on
 // (docs/01). Per-share, not per-position: the open brief carries no position
 // data by design.
-function dollarsOrDash(cents: number | null | undefined): string {
+function dollarsOrDash(cents: number | null | undefined, symbol = "$"): string {
   if (cents == null) return "—";
   const sign = cents >= 0 ? "+" : "−";
-  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
+  return `${sign}${symbol}${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 function multOrDash(m: number | null | undefined): string {
   return m == null ? "—" : `${m.toFixed(1)}×`;

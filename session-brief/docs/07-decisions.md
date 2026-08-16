@@ -527,3 +527,54 @@ the roll-up line empties out, at which point the floor should scale with positio
 count rather than being a constant; or the bare row proves too weak and a quiet
 mega-position needs a `why` line, which means a fourth tier rather than promotion
 to `full`.
+
+---
+
+**D32 — CN-M1…M3 Shanghai briefs: a second market as two new kinds, in a separated Chinese-side folder**
+*(Numbered D32, not D31: the suppression weight floor merged to main as D31
+while CN-M1 was in flight — the same drift D28 and D29 record.)*
+A second brief pair (`open_cn` 09:10, `close_cn` 15:20 Asia/Shanghai) over a
+**separate CNY-native A-share book** (SSE + SZSE, one XSHG calendar, CSI 300
+in the SPY role). Full design: `cn/docs/2026-08-15-shanghai-briefs-design.md`
+— the Chinese side keeps its own docs (`cn/docs/`), milestones (CN-M1…), and
+open questions; this log records only the structural choices.
+**(1) Separation by folder, bounded by the deploy contexts.** Chinese-side
+docs live in root-level `cn/`; Chinese-side code lives in dedicated packages
+*inside* the deployable apps — `apps/worker/worker_cn/`, `apps/web/emails/cn/`
+— because Fly/Vercel build from `apps/worker`/`apps/web` as their contexts and
+code outside them cannot ship. Shared files gain only parameters and seams
+(a `market` filter, a `currency` on money rendering, one scheduler import);
+schema and contract stay shared by necessity (invariant 1, D1).
+**(2) A second market, not a second product:** `sectors.market` (`'US'|'CN'`),
+suffixed internal symbols (`600519.SS`/`300750.SZ` — vendor formats live in
+providers only), two new `kind` values on the one BriefObject, `schema_version`
+→ 7 with an **optional** `currency` field (absent ⇒ USD, so v6 bodies keep
+validating), and `vs_spy_bps` keeping its name as "vs the book's benchmark".
+**(3) Time is per-market:** `calendar.py` generalizes to `MarketCalendar`
+instances (US = XNYS/ET/16:00, CN = XSHG/Asia/Shanghai/15:00 — verified on
+`exchange_calendars` 4.13.2), amending invariant 8 to "UTC at rest, the
+exchange's tz in logic"; `next_kind_fire` becomes the min of four *independent*
+per-market fires, because a shared "today" is wrong across markets (Shanghai's
+Monday morning is Sunday evening ET).
+**(4) CN assembly never touches the US ledgers:** `worker_cn/assemble.py`
+composes the pure shared `assemble()` directly rather than reusing
+`assemble_and_store`, whose user-wide `resolve_due_claims` would let a 15:20
+CST CN brief consume the US book's due claims (the D23(3) trap, cross-market).
+**(5) Synthetic-first with a disclosed, hand-set switch:** CN bars come from a
+deterministic `SyntheticCnBarsProvider` (`source="synthetic-cn"` in
+`raw_payloads`) until a live `tiingo-cn-probe` answers CN-Q1…Q5; the switch is
+`CN_BARS_LIVE`, a documented exception to D29's "derive, never hand-flip"
+because `TIINGO_API_KEY` presence already means "US book live" and cannot also
+encode the CN answer. While synthetic, every CN brief stamps
+`"cn_bars.synthetic"` into `data_quality.stale` (the M15 disclosure pattern).
+*Rules out:* FX conversion or blended books anywhere on the money path; CN
+logic in `worker/` or the shared templates; a separate database, contract, or
+Alembic chain for CN; a `briefs.market` column (kinds carry it); widening any
+shared provider protocol (D28/D30); claims, flags, narration, catalysts, or
+attribution for CN in v1; a stale CN close brief when the vendor's EOD is late.
+*Reverses if:* the Tiingo probe fails entirely (fallback ladder:
+Stooq/AkShare/EODHD behind the same seam); EOD publish latency forces the
+15:20 send later (a `CN_SEND_DELAY_MINUTES` config change, renegotiated with
+the reader, not code); the book ever genuinely needs a cross-currency view
+(then an FX feed enters as a *display-only* layer, never the exact-sum path);
+or CN claims land (then the claims tables need a per-market design first).

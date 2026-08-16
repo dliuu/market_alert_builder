@@ -13,9 +13,13 @@
     "brief_id": { "type": "string" },
     "user_id": { "type": "string" },
     "session_date": { "type": "string", "format": "date" },
-    "kind": { "enum": ["open", "close"] },
+    "kind": { "enum": ["open", "close", "open_cn", "close_cn"] },
     "generated_at": { "type": "string", "format": "date-time" },
     "subject": { "type": "string", "maxLength": 160 },
+    "currency": {
+      "enum": ["USD", "CNY"],
+      "description": "Optional; absent means USD. Stored pre-v7 bodies remain valid — this optionality is deliberate, so old renderers/bodies must keep working (docs/04)."
+    },
     "one_thing": { "type": ["string", "null"] },
     "book": {
       "description": "Absent or null on the open brief, which carries no performance or P&L (M14). Always an object on the close brief.",
@@ -39,7 +43,7 @@
   "$defs": {
     "book": {
       "type": "object",
-      "description": "All monetary values are integer cents. Never float.",
+      "description": "All monetary values are integer minor units (cents / fen). Never float.",
       "required": ["value_cents", "day_pnl_cents", "day_bps", "total_pnl_cents"],
       "additionalProperties": false,
       "properties": {
@@ -48,7 +52,10 @@
         "day_bps": { "type": "integer" },
         "total_pnl_cents": { "type": "integer" },
         "total_pct": { "type": "number" },
-        "vs_spy_bps": { "type": "integer" }
+        "vs_spy_bps": {
+          "type": "integer",
+          "description": "vs the book's benchmark (SPY for the US book, CSI 300 for the CN book)."
+        }
       }
     },
     "section": {
@@ -163,7 +170,7 @@
         },
         "gap_cents": {
           "type": ["integer", "null"],
-          "description": "Open brief §3: the pre-market gap in integer cents. Dollars, not percent — a percent tells you nothing about what the position is worth (docs/01, M15)."
+          "description": "Open brief §3: the pre-market gap in integer minor units (cents / fen). Money, not percent — a percent tells you nothing about what the position is worth (docs/01, M15)."
         },
         "premarket_vol_mult": {
           "type": ["number", "null"],
@@ -190,7 +197,7 @@
         },
         "value_cents": {
           "type": ["integer", "null"],
-          "description": "Close brief catalysts: transaction value in integer cents. Never float (M17)."
+          "description": "Close brief catalysts: transaction value in integer minor units (cents / fen). Never float (M17)."
         },
         "pct_of_holding": {
           "type": ["number", "null"],

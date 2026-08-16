@@ -19,6 +19,7 @@ from worker.assemble_open import (
     assemble_open,
     trailing_return,
 )
+from worker.assemble_shared import to_contract_json
 from worker.claims import emit_premarket_gap
 from worker.events_seed import CalendarEvent
 from worker.flags import FlagCandidate
@@ -248,11 +249,11 @@ def test_matches_frozen_fixture() -> None:
         _pm("SNDK", "49.26", "47.32"),
         _pm("RKLB", "24.98", "25.00"),
     ]
-    got = _open(
+    got = to_contract_json(_open(
         tape=_tape(),
         premarket=premarket,
         claims=emit_premarket_gap(premarket),
-    ).model_dump(mode="json")
+    ))
     assert got == json.loads(_FIXTURE.read_text())
 
 
