@@ -132,14 +132,16 @@ def test_default_cn_provider_is_synthetic_when_bars_are_synthetic(
     assert isinstance(cn_scheduler._default_cn_provider(), SyntheticCnBarsProvider)
 
 
-def test_default_cn_provider_raises_when_live_is_flipped_on(
+def test_default_cn_provider_is_tiingo_when_live_is_flipped_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The live provider lands in CN-M3 (Task 10); flipping CN_BARS_LIVE on
-    # before then must fail loudly rather than silently fall back.
+    # The live provider seam lands in CN-M3 (Task 10): flipping CN_BARS_LIVE
+    # on now switches to the live Tiingo provider rather than raising.
+    from worker.providers.tiingo import TiingoProvider
+
     monkeypatch.setattr(cn_config, "CN_BARS_LIVE", True)
-    with pytest.raises(RuntimeError, match="CN-M3"):
-        cn_scheduler._default_cn_provider()
+    monkeypatch.setattr("worker.providers.tiingo.TIINGO_API_KEY", "test-key")
+    assert isinstance(cn_scheduler._default_cn_provider(), TiingoProvider)
 
 
 # --- run_cn_open_session_job / run_cn_close_session_job -----------------------

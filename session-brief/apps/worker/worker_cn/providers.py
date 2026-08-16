@@ -19,7 +19,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
+from worker.providers.base import MarketDataProvider
+from worker.providers.tiingo import TiingoProvider
 from worker_cn.calendar import CN
+from worker_cn.config import cn_bars_are_synthetic
 
 _CENT = Decimal("0.01")
 
@@ -109,3 +112,14 @@ class SyntheticCnBarsProvider:
         """A stable value in [0, 1) for this symbol, this day, this axis."""
         digest = hashlib.sha256(f"{symbol}|{d.isoformat()}|{salt}".encode()).digest()
         return Decimal(int.from_bytes(digest[:4], "big")) / Decimal(1 << 32)
+
+
+def default_cn_bars_provider() -> MarketDataProvider:
+    """The CN bars provider seam (CN-M3, Task 10): `SyntheticCnBarsProvider`
+    while `cn_bars_are_synthetic()` is True, else the live `TiingoProvider`.
+    Both `worker_cn/scheduler.py`'s `_default_cn_provider()` and `backfill
+    --market cn` (`worker_cn/backfill.py`) route through this single seam, so
+    the switch-on lives in exactly one place."""
+    if cn_bars_are_synthetic():
+        return SyntheticCnBarsProvider()
+    return TiingoProvider()

@@ -62,6 +62,14 @@ def main() -> None:
     )
     fdn_probe.add_argument("--symbols", help="held symbols to probe, comma-separated")
 
+    tiingo_cn_probe = sub.add_parser(
+        "tiingo-cn-probe",
+        help="verify TIINGO_API_KEY and CN ticker format assumptions (read-only)",
+    )
+    tiingo_cn_probe.add_argument(
+        "--symbols", help="CN symbols to probe, comma-separated (defaults to a fixed sample)"
+    )
+
     brief = sub.add_parser("brief", help="assemble a BriefObject for a session")
     brief.add_argument(
         "--kind",
@@ -183,6 +191,10 @@ def main() -> None:
 
     if args.command == "fdn-probe":
         _fdn_probe_cmd(symbols_arg=args.symbols)
+        return
+
+    if args.command == "tiingo-cn-probe":
+        _tiingo_cn_probe_cmd(symbols_arg=args.symbols)
         return
 
     if args.command == "brief":
@@ -469,6 +481,29 @@ def _fdn_probe_cmd(symbols_arg: str | None) -> None:
             "state, not an error."
         ) from None
     _fdn_probe(client, symbols=symbols)
+
+
+def _tiingo_cn_probe_cmd(symbols_arg: str | None) -> None:
+    # CN business logic (candidate formats, calendar comparisons) lives in
+    # worker_cn.probe per cn/README.md's separation rule; this function only
+    # routes and handles the keyless-usage-error case, mirroring _fdn_probe_cmd.
+    from worker_cn.probe import DEFAULT_SYMBOLS, tiingo_cn_probe
+
+    symbols = (
+        [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+        if symbols_arg
+        else DEFAULT_SYMBOLS
+    )
+    try:
+        provider = TiingoProvider()
+    except RuntimeError:
+        raise SystemExit(
+            "TIINGO_API_KEY is not set. For local runs, add it to the repo-root "
+            ".env; for the deployed worker, `fly secrets set TIINGO_API_KEY=...`. "
+            "Without it, CN bars stay on the synthetic feed — a valid state, "
+            "not an error."
+        ) from None
+    tiingo_cn_probe(provider, symbols=symbols)
 
 
 def _safe_error(exc: Exception) -> str:

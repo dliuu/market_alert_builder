@@ -27,9 +27,10 @@ from worker_cn import config as cn_config
 from worker_cn.calendar import CN
 from worker_cn.config import cn_bars_are_synthetic
 from worker_cn.constants import CN_BENCHMARK, CN_MARKET
-from worker_cn.providers import SyntheticCnBarsProvider
+from worker_cn.providers import default_cn_bars_provider
 
-SOURCE = "synthetic-cn"  # matches worker_cn/backfill.py's namespace
+SYNTHETIC_SOURCE = "synthetic-cn"  # matches worker_cn/backfill.py's namespace
+LIVE_SOURCE = "tiingo"  # matches worker_cn/backfill.py's live namespace
 
 
 # --- Fire-time scheduling (pure) --------------------------------------------
@@ -83,11 +84,9 @@ def next_cn_close_fire(now_utc: datetime) -> datetime:
 
 
 def _default_cn_provider() -> MarketDataProvider:
-    """The provider seam CN-M3 (Task 10) swaps a live vendor into. Only the
-    synthetic branch exists today."""
-    if cn_bars_are_synthetic():
-        return SyntheticCnBarsProvider()
-    raise RuntimeError("CN live bars land in CN-M3; run tiingo-cn-probe first")
+    """The provider seam CN-M3 (Task 10) swaps a live vendor into: synthetic
+    while ``cn_bars_are_synthetic()``, else the live Tiingo provider."""
+    return default_cn_bars_provider()
 
 
 def run_cn_close_session_job(
@@ -121,6 +120,10 @@ def run_cn_close_session_job(
             )
 
         prov = provider or _default_cn_provider()
+        # Source-scope the poll to match what `prov` actually returns — a live
+        # Tiingo bar mislabeled "synthetic-cn" (or the reverse) would corrupt
+        # raw_payloads' source namespace (worker_cn/backfill.py mirrors this).
+        bars_source = SYNTHETIC_SOURCE if cn_bars_are_synthetic() else LIVE_SOURCE
         core_scheduler.ensure_todays_bars(
             engine,
             prov,
@@ -128,7 +131,7 @@ def run_cn_close_session_job(
             session_date,
             timeout_s=cn_config.CN_BAR_POLL_TIMEOUT_S,
             interval_s=cn_config.CN_BAR_POLL_INTERVAL_S,
-            source=SOURCE,
+            source=bars_source,
         )
 
         # assemble_cn_close_and_store computes the book (compute_and_store,

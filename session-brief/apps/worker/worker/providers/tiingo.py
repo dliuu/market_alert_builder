@@ -17,6 +17,18 @@ from worker.config import TIINGO_API_KEY
 
 _BASE_URL = "https://api.tiingo.com/tiingo/daily"
 
+# CN ticker formats (CN-Q1, cn/docs/open-questions.md), keyed by the internal
+# symbol suffix. Suffix -> a format template taking the numeric `code`.
+# `tiingo-cn-probe` (2026-08-16 live run) confirmed the bare numeric code
+# resolves for both exchanges against Tiingo's free tier — the originally
+# guessed `-SHG`/`-SHE` dash format, the `.SS`/`.SZ` passthrough, and the
+# `-SS`/`-SZ` dash format all 404. Update these values if a later probe run
+# reports a different working format (e.g. a Tiingo API change).
+CN_TIINGO_FORMATS: dict[str, str] = {
+    ".SS": "{code}",
+    ".SZ": "{code}",
+}
+
 
 class TiingoProvider:
     def __init__(self, api_key: str | None = None, *, base_url: str = _BASE_URL) -> None:
@@ -26,11 +38,31 @@ class TiingoProvider:
         self._key = key
         self._base_url = base_url
 
+    def _vendor_symbol(self, symbol: str) -> str:
+        """Maps an internal symbol to the ticker string Tiingo expects. US
+        symbols pass through unchanged (lowercased at the request site, as
+        today). CN symbols (`*.SS`/`*.SZ`) map via `CN_TIINGO_FORMATS`."""
+        symbol_upper = symbol.upper()
+        for suffix, fmt in CN_TIINGO_FORMATS.items():
+            if symbol_upper.endswith(suffix):
+                code = symbol[: -len(suffix)]
+                return fmt.format(code=code)
+        return symbol
+
     def daily_bars(self, symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+        return self._fetch_daily_bars(self._vendor_symbol(symbol), start, end)
+
+    def _fetch_daily_bars(
+        self, vendor_symbol: str, start: date, end: date
+    ) -> list[dict[str, Any]]:
+        """The actual request, against an already-vendor-formatted symbol —
+        split out from `daily_bars` so `tiingo-cn-probe` can try several
+        candidate vendor symbols for the same internal symbol without going
+        through `_vendor_symbol`'s single guess."""
         # Key travels in the Authorization header, never the URL (no secrets in
         # query strings). parse_float=Decimal keeps prices off the float path.
         response = httpx.get(
-            f"{self._base_url}/{symbol.lower()}/prices",
+            f"{self._base_url}/{vendor_symbol.lower()}/prices",
             params={"startDate": start.isoformat(), "endDate": end.isoformat()},
             headers={"Authorization": f"Token {self._key}"},
             timeout=30.0,
@@ -38,7 +70,7 @@ class TiingoProvider:
         response.raise_for_status()
         data = json.loads(response.text, parse_float=Decimal)
         if not isinstance(data, list):
-            raise ValueError(f"Tiingo returned non-list for {symbol}: {data!r}")
+            raise ValueError(f"Tiingo returned non-list for {vendor_symbol}: {data!r}")
         return data
 
     def quote(self, symbol: str) -> dict[str, Any]:
