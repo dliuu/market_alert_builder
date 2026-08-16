@@ -274,3 +274,42 @@ def test_resolving_one_market_leaves_the_other_markets_claims_untouched(
         {"u": _TEST_USER_ID},
     ).scalar()
     assert us_outcome is None, "a CN resolution run consumed a US claim"
+
+
+def test_a_market_without_attribution_grades_close_to_close(db_conn: Connection) -> None:
+    """CN has no `attribution` rows and won't for months. Without this arm
+    `_grade_relative` returns None forever and the claim silently accumulates
+    unresolved — the loop looks alive and grades nothing."""
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    # ZZCNB.SS +10% vs its benchmark's +1% from E to D, so the "up" call is
+    # correct on the raw close-to-close return alone.
+    _seed_bar(db_conn, "ZZCNB.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNB.SS", _D, "110")
+    _seed_bar(db_conn, "ZZBENCHB.SS", _E, "100")
+    _seed_bar(db_conn, "ZZBENCHB.SS", _D, "101")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNB.SS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="CN",
+    )
+    # No attribution row is inserted for ZZCNB.SS anywhere in this test.
+    resolved = resolve_due_claims(
+        db_conn, _TEST_USER_ID, _D, market="CN", benchmark="ZZBENCHB.SS"
+    )
+
+    assert [r.symbol for r in resolved] == ["ZZCNB.SS"]
+    assert resolved[0].outcome == "correct"
+
+    persisted = db_conn.execute(
+        text("SELECT outcome, graded_model_version FROM claims "
+             "WHERE user_id = :u AND symbol = 'ZZCNB.SS'"),
+        {"u": _TEST_USER_ID},
+    ).mappings().one()
+    assert persisted["outcome"] == "correct"
+    assert persisted["graded_model_version"] is None, (
+        "no attribution model produced this grade"
+    )
