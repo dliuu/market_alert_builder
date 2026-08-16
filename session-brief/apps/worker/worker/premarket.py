@@ -81,10 +81,10 @@ def premarket_vol_mult(quote: PremarketQuote) -> Decimal | None:
 def clears_threshold(quote: PremarketQuote, *, has_news: bool = False) -> bool:
     """docs/05 §3: only names moving more than 1% pre-market, or carrying news.
 
-    ``has_news`` is a live predicate with no feed behind it — company news is
-    Premium and unwired (docs/02), the same shape as `short_interest`'s
-    threshold-without-a-source in D18. Wire a news source and this clause starts
-    working with no change here.
+    ``has_news`` is wired by the caller (`assemble_open._premarket`) from FDN's
+    `latest-news` when `FDN_API_KEY` is set (M16); with no key it is always
+    `False`, the same threshold-without-a-source shape `short_interest` still
+    has per D18.
     """
     if has_news:
         return True
