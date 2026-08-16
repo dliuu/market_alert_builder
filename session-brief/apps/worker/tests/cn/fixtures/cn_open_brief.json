@@ -314,8 +314,6 @@
   "suppressed": [],
   "data_quality": {
     "missing": [],
-    "stale": [
-      "cn_bars.synthetic"
-    ]
+    "stale": ["cn_bars.synthetic"]
   }
 }
