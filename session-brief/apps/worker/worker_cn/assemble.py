@@ -2,13 +2,19 @@
 
 The close path mirrors ``worker.assemble.assemble_and_store``'s orchestration
 shape — ``compute_and_store`` → the closes read → the tape compute →
-``assemble()`` → upsert — but strips every US-only step. In particular this
-must NOT call ``resolve_due_claims``, ``emit_claims``, narration, or the
-catalysts readers: the claim ledger and narration are user-wide, and running
-them at the CN close would consume the US book's due claims (or spend a
-narration call) for a session the US brief hasn't seen yet. ``assemble()`` is
-called with empty/none claims, resolved claims, flags, decomposition, and
-catalysts.
+``assemble()`` → upsert — but strips every US-only step. It still does NOT
+narrate or read the catalysts sources: those are genuinely user-wide,
+single-run concerns, and running them at the CN close would spend a narration
+call or a report-once budget for a session the US brief hasn't seen yet.
+
+As of CN-M4 (D34) the claim ledger is **market-scoped**
+(``claims.market``), so the close path *does* call ``resolve_due_claims`` and
+``emit_claims``/``store_emitted_claims`` — scoped to ``market="CN"`` and
+graded against ``CN_BENCHMARK``. Market scoping is what makes this safe: the
+15:20 CST CN run resolves and stores against ``market="CN"`` only, so it can
+never consume or contaminate the US book's due claims. ``assemble()`` is
+still called with empty flags, decomposition (no CN attribution model yet),
+and catalysts.
 
 The open path (CN-M2) is forward-looking and carries no P&L at all — the
 "overnight" read for Shanghai is the **US session that closed hours earlier**,
@@ -16,8 +22,10 @@ already cached in ``bars_daily`` by the nightly US backfill. It reuses
 ``worker.assemble_open``'s pure section builders (``_overnight_tape``,
 ``_calendar``, ``_sector_setup``) and dataclasses (``SectorSetup``,
 ``trailing_return``) rather than duplicating them, same as the close path
-reuses the shared ``assemble()``. Like the close path, it never narrates and
-never touches claims — those stay user-wide, single-run concerns.
+reuses the shared ``assemble()``. Like the close path, it never narrates; it
+also never touches claims, but for a different reason than the close path
+once had — there is no CN pre-market feed, so no ``premarket_gap`` analogue
+exists to emit.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from worker.assemble import (
     SCHEMA_VERSION,
     _read_closes,
     _store_brief,
+    _tier_positions,
     assemble,
     close_brief_should_skip,
 )
@@ -47,6 +56,7 @@ from worker.assemble_open import (
 from worker.assemble_open import _read_closes as _read_trailing_closes
 from worker.assemble_open import _read_events as _read_book_events
 from worker.assemble_shared import session_label
+from worker.claims import emit_claims, resolve_due_claims, store_emitted_claims
 from worker.compute import compute_and_store
 from worker.constants import BENCHMARK_SYMBOL
 from worker.events_seed import CalendarEvent
@@ -83,6 +93,19 @@ def assemble_cn_close_and_store(
 
     stale = [STALE_CN_BARS_SYNTHETIC] if cn_bars_are_synthetic() else []
 
+    # Grade prior CN claims first — independent of whether this brief sends,
+    # and scoped to the CN book so the 15:20 CST run can never consume the US
+    # book's due claims (D34).
+    resolved = resolve_due_claims(
+        conn, user_id, session_date, market=CN_MARKET, benchmark=CN_BENCHMARK
+    )
+    # `{}` decomp: CN has no attribution rows (CN return attribution is a
+    # later milestone). `emit_claims` only appends `tier == "full"` rows, and
+    # skip is true iff none are full-tier, so a skip provably emits zero
+    # claims — what makes storing claims after `_store_brief` below safe.
+    shown, _ = _tier_positions(result, tape, {})
+    emitted = emit_claims(shown, result.benchmark_return)
+
     obj = assemble(
         result,
         closes,
@@ -91,13 +114,19 @@ def assemble_cn_close_and_store(
         session_date=session_date,
         kind="close_cn",
         generated_at=datetime.now(UTC),
+        claims=emitted,
+        resolved=resolved,
         currency="CNY",
         stale=stale,
     )
     if close_brief_should_skip(obj):
+        # A quiet session still resolved its due claims (above) but emits none.
         return None
 
     _store_brief(conn, obj)
+    store_emitted_claims(
+        conn, user_id, obj.brief_id, session_date, emitted, market=CN_MARKET
+    )
     return obj
 
 
@@ -263,10 +292,12 @@ def assemble_cn_open_and_store(
     """Read the cached inputs, assemble an ``open_cn`` brief, and upsert it.
 
     Always returns an object — no skip gate, the open brief always sends
-    (docs/05). Idempotent on ``(user_id, session_date, kind)``. Never touches
-    the claim ledger or narration — both are user-wide, single-run concerns
-    the US open brief already owns for this session (same reasoning as the
-    CN close path's docstring)."""
+    (docs/05). Idempotent on ``(user_id, session_date, kind)``. Never
+    narrates — that stays a user-wide, single-run concern the US open brief
+    already owns for this session. Never touches the claim ledger either, but
+    not because claims are user-wide (CN-M4 scoped them by market): there is
+    no CN pre-market feed, so no ``premarket_gap`` analogue exists for this
+    brief to emit."""
     from worker.scheduler import book_symbols
 
     cn_book = book_symbols(conn, user_id, market=CN_MARKET, benchmark=CN_BENCHMARK)

@@ -96,9 +96,9 @@ three calls its docstring currently forbids, in the US order:
 1. `resolve_due_claims(..., market="CN", benchmark=CN_BENCHMARK)` — **before**
    the skip gate. A quiet CN session still grades what it owes; that's the US
    precedent (`assemble.py:369`) and the reason the comment there exists.
-2. `shown, _ = _tier_positions(result, tape, None)` then
+2. `shown, _ = _tier_positions(result, tape, {})` then
    `emit_claims(shown, result.benchmark_return)` — `emit_claims` is already
-   pure and benchmark-relative, so it is reused unchanged. `None` for decomp:
+   pure and benchmark-relative, so it is reused unchanged. `{}` for decomp:
    CN has no attribution.
 3. `store_emitted_claims(..., market="CN")` — after `_store_brief`, so a
    skipped brief emits nothing, exactly as the US path does.
@@ -115,9 +115,7 @@ column that never enters the object — the brief already carries its market in
 `kind`. `schema_version` stays at 7 and `pnpm contracts:gen` stays green
 without regeneration.
 
-**The CN close template renders what the US one does.** `emails/cn/
-close-brief.tsx` gains the "Yesterday's flag, resolved" block from the US
-template, labelled in CN terms (vs CSI 300).
+**The CN close template inherits the shared block.** `emails/cn/close-brief.tsx` is a thin wrapper over the shared `CloseBrief` component, passing CN-context options (`currencySymbol: "¥"`, `benchmarkLabel: "vs CSI 300"`, `kindLabel: "CN Close"`) — but the "Yesterday's flag, resolved" block lives in the shared template, gated only on `brief.resolved_claims.length > 0`, and renders no market- or currency-specific content. It appears on CN close briefs automatically, with no CN-side rendering code.
 
 ## Out of scope
 
@@ -137,6 +135,10 @@ analogue exists; CN's loop is close→next-close at horizon 1.
 - US claims still grade against the residual — the existing M13 test
   ("right on raw return but wrong on residual resolves `wrong`") must stay
   green, unchanged.
-- The CN close fixture regains a populated `claims[]`, and stored v7 bodies
-  still validate.
+- End-to-end coverage — emission, persistence, and resolution — lives in the
+  DB test `test_the_cn_close_emits_claims_and_resolves_the_prior_sessions`.
+  `tests/cn/fixtures/cn_close_brief.json` keeps `claims: []` and
+  `resolved_claims: []`: the test that produces it calls the pure `assemble()`
+  directly and never routes claims through it, same as every other fixture in
+  this repo. Stored v7 bodies still validate.
 - Existing US claim tests pass with no edits beyond the new required kwargs.

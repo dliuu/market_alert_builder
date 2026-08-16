@@ -52,11 +52,23 @@ independently. Design: `2026-08-15-shanghai-briefs-design.md`.
   job's fail-loud bar poll are the safety net until it's run at the right
   wall-clock time.
 
+- [x] **CN-M4 — CN claims + accountability loop.** `claims.market` (migration
+  0018) splits the user-wide ledger in two; `resolve_due_claims` /
+  `store_emitted_claims` take a required keyword-only `market` (and
+  `benchmark`); horizon >= 1 grading gains a close-to-close arm for markets
+  with no `attribution` model; `assemble_cn_close_and_store` emits
+  `relative_strength` and resolves what it claimed last session. *Done when:*
+  a CN close emits claims on a seeded CN book and the next CN session resolves
+  them `correct`/`wrong` graded against 510300.SS; a CN resolution run leaves
+  a due US claim untouched (and vice versa); the M13 residual test still
+  passes unchanged; the CN close email renders the resolved block;
+  `schema_version` stays 7 and `pnpm contracts:gen` is green. Design:
+  `2026-08-16-cn-m4-claims-design.md`.
+
 **Deferred (each its own future milestone, in rough order of value):** CN
-claims + accountability loop (needs a per-market claims design), CN narration
-(feed it CN headlines — needs a news source), CN flags (needs fundamentals),
-CN calendar/news vendor (Tushare/AkShare evaluation), CN return attribution
-(needs 120 sessions of real bars + theme baskets).
+narration (feed it CN headlines — needs a news source), CN flags (needs
+fundamentals), CN calendar/news vendor (Tushare/AkShare evaluation), CN
+return attribution (needs 120 sessions of real bars + theme baskets).
 
 ## Switch-on procedure: `CN_BARS_LIVE` requires a synthetic-history purge first
 
@@ -69,6 +81,35 @@ so on switch-on a real today's volume gets divided by a partly-invented
 disclosure banner now off, since the feed is live. There is no provenance
 column and no code that guesses which rows are synthetic; this is a one-time
 human step, not something the pipeline can self-clean.
+
+CN-M4 (`2026-08-16-cn-m4-claims-design.md`, D34) adds a second hazard this
+procedure predates and, until now, did not cover: outstanding CN claims. From
+the moment CN-M4 merges, the CN close brief emits `relative_strength` claims
+computed from `SyntheticCnBarsProvider`'s hash-fabricated bars and grades them
+close-to-close against equally fabricated `510300.SS` bars. The `claims`
+table has no provenance column either, so nothing distinguishes a claim
+emitted against synthetic tape from one emitted against live tape. The
+`bars_daily` DELETE below removes exactly the bars any outstanding claim was
+emitted on; any CN claim still outstanding (`outcome IS NULL`) across that
+purge is then graded against **different bars than it was emitted on** — a
+claim emitted because the synthetic tape showed the name beating the
+benchmark can get its verdict from real prices that say the opposite. Worse:
+if the emit session falls outside the re-backfilled 90-day window,
+`_grade_close_to_close` finds no bar row to grade against, returns `None`
+forever, and `resolve_due_claims` reads that `None` as "not ready yet" — the
+claim sits unresolved permanently, with nothing anywhere reporting it, the
+exact silent-accumulation failure this milestone was built to prevent. Drain
+the CN ledger before the bars purge, either by running the CN close once
+against the synthetic tape to resolve what is due, or by discarding what's
+outstanding:
+
+```sql
+-- Step zero: CN claims emitted against synthetic bars cannot be honestly
+-- graded against live ones. Drain them before the bars they reference go away.
+DELETE FROM claims WHERE market = 'CN' AND outcome IS NULL;
+```
+
+Then purge the synthetic bars themselves:
 
 ```sql
 -- Every CN bar written before the key went live is synthetic. Scope to the
