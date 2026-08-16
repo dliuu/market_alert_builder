@@ -639,17 +639,13 @@ silently stop resolving it, forever, with nothing anywhere reporting the loss.
 The `UNIQUE(user_id, symbol, claim_type, session_date)` constraint is
 untouched — CN's exchange-suffixed symbols (`600519.SS`) can't collide with US
 tickers, the same reasoning `holdings UNIQUE(user_id, symbol)` already rests
-on (D32).
-
-**(2) `market`/`benchmark` are keyword-only and undefaulted.**
+on (D32). **(2) `market`/`benchmark` are keyword-only and undefaulted.**
 `resolve_due_claims(conn, user_id, session_date, *, market, benchmark)` and
 `store_emitted_claims(..., *, market)` take no default. A default is precisely
 how a future call site would silently inherit `US` and consume or mis-tag the
 other book's claims — the CN close fires at 15:20 CST, hours before the US
 close brief runs, so the failure mode is not hypothetical. Every caller states
-its market at the call site, where a reviewer can see it.
-
-**(3) The horizon >= 1 grader dispatches on whether an attribution model
+its market at the call site, where a reviewer can see it. **(3) The horizon >= 1 grader dispatches on whether an attribution model
 exists, not on a market name.** `_grade` takes a `use_residual: bool` and
 calls `_grade_relative` (the existing residual grader, M13) when true or the
 new `_grade_close_to_close` (the pre-M13 US grader, revived under an explicit
@@ -658,9 +654,7 @@ against the benchmark over the emit-close-to-resolve-close window. Today
 `resolve_due_claims` computes that bool as `market == "US"`, but the grader
 itself never inspects the market string; it only ever sees a capability flag.
 Horizon 0 keeps `_grade_open_close`, with `BENCHMARK_SYMBOL` replaced by the
-passed-in `benchmark`.
-
-**(4) D32's claims prohibition is lifted, for claims only.**
+passed-in `benchmark`. **(4) D32's claims prohibition is lifted, for claims only.**
 `assemble_cn_close_and_store` now calls `resolve_due_claims(market="CN",
 benchmark=CN_BENCHMARK)` before the quiet-session skip gate — a quiet CN
 session still grades what it owes, the same precedent the US close brief
@@ -668,9 +662,7 @@ already sets — emits off `_tier_positions(result, tape, {})`, and calls
 `store_emitted_claims(market="CN")` after `_store_brief`, so a skipped brief
 emits nothing. Narration and the catalyst readers stay prohibited: they are
 genuinely user-wide, single-run concerns, and this milestone does not touch
-them.
-
-**(5) No contract bump.** `relative_strength` was already in the schema's
+them. **(5) No contract bump.** `relative_strength` was already in the schema's
 `claim_type` enum; `claims[]`/`resolved_claims[]` were already on every
 `BriefObject` and were simply empty on CN briefs before this milestone.
 `market` is a ledger column that never enters the object — the brief already

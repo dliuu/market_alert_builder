@@ -115,9 +115,7 @@ column that never enters the object — the brief already carries its market in
 `kind`. `schema_version` stays at 7 and `pnpm contracts:gen` stays green
 without regeneration.
 
-**The CN close template renders what the US one does.** `emails/cn/
-close-brief.tsx` gains the "Yesterday's flag, resolved" block from the US
-template, labelled in CN terms (vs CSI 300).
+**The CN close template inherits the shared block.** `emails/cn/close-brief.tsx` is a thin wrapper over the shared `CloseBrief` component, passing CN-context options (`currencySymbol: "¥"`, `benchmarkLabel: "vs CSI 300"`, `kindLabel: "CN Close"`) — but the "Yesterday's flag, resolved" block lives in the shared template, gated only on `brief.resolved_claims.length > 0`, and renders no market- or currency-specific content. It appears on CN close briefs automatically, with no CN-side rendering code.
 
 ## Out of scope
 
