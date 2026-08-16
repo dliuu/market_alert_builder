@@ -4,7 +4,7 @@ Vendor-behaviour questions the Chinese-side feature cannot answer from code.
 Same rules as `session-brief/docs/open-questions.md`: each entry blocks a
 specific piece of work, needs a live probe to settle, and has a written
 fallback so nothing waits on it to start. An entry leaves here by being
-answered — record the answer inline, then fold anything load-bearing into D31's
+answered — record the answer inline, then fold anything load-bearing into D32's
 successors in the shared decision log.
 
 ---

@@ -26,7 +26,7 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 **Chinese side (Shanghai/Shenzhen A-share briefs):** tracked separately in
 `cn/docs/milestones.md` (CN-M1…CN-M3) so the two feature sets stay separable —
 design in `cn/docs/2026-08-15-shanghai-briefs-design.md`, structural decisions
-in D31.
+in D32.
 
 **M3 is the one to be pedantic about.** If contribution bps don't sum to the book return, every downstream insight is quietly wrong and you won't notice for a month.
 

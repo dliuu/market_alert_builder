@@ -5,15 +5,15 @@
   "session_date": "2026-08-11",
   "kind": "close",
   "generated_at": "2026-08-11T20:42:11Z",
-  "subject": "Close \u00b7 Tue Aug 11 \u2014 book +3.8% (+$95.50)",
+  "subject": "Close \u00b7 Tue Aug 11 \u2014 book +4.5% (+$95.10)",
   "one_thing": null,
   "book": {
-    "value_cents": 259550,
-    "day_pnl_cents": 9550,
-    "day_bps": 382,
-    "total_pnl_cents": 39550,
-    "total_pct": 0.17977272727272728,
-    "vs_spy_bps": 282
+    "value_cents": 219510,
+    "day_pnl_cents": 9510,
+    "day_bps": 453,
+    "total_pnl_cents": 39510,
+    "total_pct": 0.2195,
+    "vs_spy_bps": 353
   },
   "sections": [
     {
@@ -27,7 +27,7 @@
           "close": 110.0,
           "day_return": 0.1,
           "day_pnl_cents": 10000,
-          "contribution_bps": 400,
+          "contribution_bps": 476,
           "total_pnl_cents": 20000,
           "total_pct": 0.2222222222222222,
           "rvol": null,
@@ -73,7 +73,7 @@
           "close": 49.75,
           "day_return": -0.005,
           "day_pnl_cents": -500,
-          "contribution_bps": -20,
+          "contribution_bps": -24,
           "total_pnl_cents": 19500,
           "total_pct": 0.24375,
           "rvol": null,

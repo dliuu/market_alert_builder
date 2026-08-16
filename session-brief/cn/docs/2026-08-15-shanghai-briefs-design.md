@@ -3,7 +3,7 @@
 *2026-08-15. The Chinese-side counterpart to the US open/close pair: a second
 brief pair over a real A-share book, sent on Shanghai wall-clock times. This
 spec is the source of truth for the CN feature; the structural decisions are
-recorded as D31 in `session-brief/docs/07-decisions.md`.*
+recorded as D32 in `session-brief/docs/07-decisions.md`.*
 
 ## Product shape
 

@@ -173,13 +173,9 @@
   "flags": [],
   "claims": [],
   "resolved_claims": [],
-  "suppressed": [
-    "300750.SZ"
-  ],
+  "suppressed": ["300750.SZ"],
   "data_quality": {
     "missing": [],
-    "stale": [
-      "cn_bars.synthetic"
-    ]
+    "stale": ["cn_bars.synthetic"]
   }
 }

@@ -35,4 +35,4 @@ builds `apps/web` the same way. The separation rule is therefore:
 ## Status
 
 Designed, not yet built. See `docs/milestones.md`; the American-side decision
-log records the structural choices as D31 in `session-brief/docs/07-decisions.md`.
+log records the structural choices as D32 in `session-brief/docs/07-decisions.md`.

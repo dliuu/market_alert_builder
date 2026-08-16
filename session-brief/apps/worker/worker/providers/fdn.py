@@ -137,9 +137,9 @@ def _capture_key(params: dict[str, str]) -> str:
 
 
 _INSERT_RAW = text("""
-    INSERT INTO raw_payloads (source, endpoint, symbol, as_of, body)
-    VALUES ('fdn', :endpoint, :symbol, :as_of, CAST(:body AS jsonb))
-    ON CONFLICT (source, endpoint, symbol, as_of) DO NOTHING
+    INSERT INTO raw_payloads (source, endpoint, symbol, covers_from, as_of, body)
+    VALUES ('fdn', :endpoint, :symbol, :as_of, :as_of, CAST(:body AS jsonb))
+    ON CONFLICT (source, endpoint, symbol, covers_from, as_of) DO NOTHING
 """)
 
 

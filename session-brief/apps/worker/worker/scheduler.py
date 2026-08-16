@@ -14,7 +14,9 @@ skipped" (docs/08 M10):
 - **Every run pings the dead-man's switch.** Success (including a correct holiday
   skip) pings Healthchecks; an uncaught failure pings ``/fail`` and re-raises. A
   worker that dies simply stops pinging, and the check goes red — which is how
-  you learn about Thursday's failure on Thursday, not Monday (docs/02).
+  you learn about Thursday's failure on Thursday, not Monday (docs/02). A close
+  whose bars aren't published yet is a third state: it pings ``/log``, keeps the
+  status where it is, and re-fires until its same-day deadline (D20, amended).
 
 The pure parts (``fire_time``/``next_fire``) and the job body (``run_session_job``,
 which takes an injected ``now``) are unit-tested without a clock or a network.
@@ -70,6 +72,24 @@ def ping_fail(url: str, detail: str) -> None:
         pass
 
 
+def ping_log(url: str, detail: str) -> None:
+    """Record an event **without moving the check's status.**
+
+    The third state the switch needs: a deferral is neither a success (nothing
+    was sent) nor a failure (a retry is pending and the vendor is merely late).
+    Pinging ``/fail`` for it would train you to ignore a red check on the one
+    signal that should always mean "look now". The run's own grace period still
+    catches a deferral chain that never resolves, because a deferral never pings
+    success — so silence still goes red on schedule.
+    """
+    if not url:
+        return
+    try:
+        httpx.post(f"{url}/log", content=detail.encode("utf-8"), timeout=10.0)
+    except httpx.HTTPError:
+        pass
+
+
 # --- Fire-time scheduling (pure) --------------------------------------------
 
 
@@ -120,9 +140,9 @@ def next_weekly_fire(now_utc: datetime, weekday: int, at_et: clock_time) -> date
     raise RuntimeError(f"no weekly fire within 8 days of {now_utc}")  # pragma: no cover
 
 
-def open_fire_time(d: date) -> datetime | None:
-    """When the open brief for session ``d`` fires: a **fixed 08:15 ET**, or
-    ``None`` if ``d`` isn't a trading session.
+def open_fire_time(d: date) -> datetime:
+    """When the open brief's fire for date ``d`` lands: a **fixed 08:15 ET**,
+    every calendar day.
 
     This is deliberately *not* the close fire's construction. The close is
     anchored on the real session close plus a delay, which is what makes a
@@ -131,14 +151,65 @@ def open_fire_time(d: date) -> datetime | None:
     morning — so it is a wall-clock time converted through ``America/New_York``
     (invariant 8, so DST doesn't shift it twice a year).
 
-    Unlike the close fire it also does not run on non-sessions. The close fire
-    keeps firing daily because it carries the dead-man's-switch heartbeat; the
-    open brief has its own check and nothing to say on a holiday.
+    It fires on non-sessions too, matching ``close_or_standard``'s nominal-bell
+    pattern — this used to return ``None`` on a non-session day, so
+    ``next_kind_fire`` never produced an "open" candidate at all on a weekend
+    or holiday. ``run_open_session_job`` already checks ``is_session`` itself
+    and pings success before doing any other work, so the only thing missing
+    was ever *reaching* that check: with no candidate, the job was simply never
+    invoked, and ``HEALTHCHECKS_OPEN_URL`` went dark for the entire weekend —
+    every weekend — with no failure and no fire to explain it. Exactly the
+    "weekday-only cron reads a holiday as a failed check-in" anti-pattern D20
+    built the close job to avoid, just not applied here until now.
     """
-    if not calendar.is_session(d):
-        return None
     et_time = clock_time(config.OPEN_SEND_ET_HOUR, config.OPEN_SEND_ET_MINUTE)
     return datetime.combine(d, et_time, tzinfo=ET).astimezone(UTC)
+
+
+def retry_deadline(session_date: date) -> datetime:
+    """The last instant a close retry for ``session_date`` may fire (ET → UTC)."""
+    cutoff = clock_time(config.BAR_RETRY_UNTIL_ET_HOUR, config.BAR_RETRY_UNTIL_ET_MINUTE)
+    return _et_fire(session_date, cutoff)
+
+
+def retry_fire_time(
+    now_utc: datetime,
+    session_date: date,
+    interval: timedelta | None = None,
+) -> datetime | None:
+    """When to re-attempt ``session_date``'s close, or ``None`` to give up.
+
+    Bounded by ``retry_deadline`` so the chain always terminates on the session's
+    own ET date — see the invariant in ``config.BAR_RETRY_UNTIL_ET_HOUR``. A
+    candidate landing past the deadline yields ``None`` rather than being clamped
+    *to* the deadline, which would otherwise busy-retry against the cutoff.
+    """
+    step = interval or timedelta(minutes=config.BAR_RETRY_INTERVAL_MINUTES)
+    candidate = now_utc + step
+    return candidate if candidate <= retry_deadline(session_date) else None
+
+
+def next_after_outcome(
+    now_utc: datetime,
+    outcome: str,
+    session_date: date,
+    delay: timedelta,
+) -> tuple[datetime, str]:
+    """Where the self-rescheduling one-shot points after a run of ``outcome``.
+
+    Every outcome but a deferral resumes the ordinary open/close rotation. A
+    deferral inserts one close retry ahead of it — but never *past* the next
+    scheduled fire: the scheduler keeps a single ``brief`` job id (D20), so a
+    retry placed after the next open would silently replace it and cost a
+    morning brief. Deferring a close must never cost a different send.
+    """
+    if outcome == "deferred-no-bars":
+        retry_at = retry_fire_time(now_utc, session_date)
+        regular = next_kind_fire(now_utc, delay)
+        if retry_at is not None and retry_at < regular[0]:
+            return retry_at, "close"
+        return regular
+    return next_kind_fire(now_utc, delay)
 
 
 def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
@@ -151,11 +222,10 @@ def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
     """
     d = calendar.today_et(now_utc)
     for _ in range(8):
-        candidates: list[tuple[datetime, str]] = [(fire_time(d, delay), "close")]
-        open_at = open_fire_time(d)
-        if open_at is not None:
-            candidates.append((open_at, "open"))
-
+        candidates: list[tuple[datetime, str]] = [
+            (fire_time(d, delay), "close"),
+            (open_fire_time(d), "open"),
+        ]
         future = sorted(c for c in candidates if c[0] > now_utc)
         if future:
             return future[0]
@@ -180,20 +250,18 @@ def sector_benchmarks(conn: Connection, user_id: str, *, market: str = "US") -> 
     return sorted(str(r[0]) for r in rows)
 
 
-def book_symbols(
-    conn: Connection,
-    user_id: str = DEV_USER_ID,
-    *,
-    market: str = "US",
-    benchmark: str | None = None,
-) -> list[str]:
-    """The symbols to refresh: every held name, every sector benchmark, plus the
-    market benchmark. SPY is *always* needed for the vs-SPY line even when it
-    isn't in the book — the manual ``backfill`` omits it, which is a latent gap
-    the unattended run can't afford. The sector benchmarks are the same trap one
-    level down: settable in the book UI since M1, never ingested, so the open
-    brief's §5 trailing-5d line had nothing to read (M14)."""
-    benchmark_symbol = benchmark if benchmark is not None else BENCHMARK_SYMBOL
+def theme_symbols(conn: Connection) -> list[str]:
+    """Every symbol in a theme basket. Shared reference data, so no ``user_id``
+    (D21) — the theme model is a property of the market, not of a book."""
+    rows = conn.execute(text("SELECT DISTINCT symbol FROM theme_members")).all()
+    return sorted(str(r[0]) for r in rows)
+
+
+def held_symbols(
+    conn: Connection, user_id: str = DEV_USER_ID, *, market: str = "US"
+) -> set[str]:
+    """The held names in one market's book (``sectors.market`` scopes the read —
+    the US and CN books never blend)."""
     rows = conn.execute(
         text(
             "SELECT DISTINCT h.symbol FROM holdings h "
@@ -202,8 +270,54 @@ def book_symbols(
         ),
         {"u": user_id, "market": market},
     ).all()
-    held = {str(r[0]) for r in rows}
-    return sorted(held | set(sector_benchmarks(conn, user_id, market=market)) | {benchmark_symbol})
+    return {str(r[0]) for r in rows}
+
+
+def book_symbols(
+    conn: Connection,
+    user_id: str = DEV_USER_ID,
+    *,
+    market: str = "US",
+    benchmark: str | None = None,
+) -> list[str]:
+    """The *book's* universe: every held name, every sector benchmark, plus the
+    market benchmark. SPY is *always* needed for the vs-SPY line even when it
+    isn't in the book — the manual ``backfill`` omits it, which is a latent gap
+    the unattended run can't afford. The sector benchmarks are the same trap one
+    level down: settable in the book UI since M1, never ingested, so the open
+    brief's §5 trailing-5d line had nothing to read (M14).
+
+    This is the pre-market capture's universe too, which is why theme members are
+    *not* here — nobody wants a pre-market quote for a basket constituent they
+    don't own. See ``ingest_symbols`` for the daily-bar universe."""
+    benchmark_symbol = benchmark if benchmark is not None else BENCHMARK_SYMBOL
+    held = held_symbols(conn, user_id, market=market)
+    return sorted(
+        held | set(sector_benchmarks(conn, user_id, market=market)) | {benchmark_symbol}
+    )
+
+
+def ingest_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """Everything the daily-bar ingest must fetch: the book's universe plus the
+    attribution model's theme constituents.
+
+    Theme members were seeded as reference data but never ingested, so the weekly
+    refit ran against symbols with no bars at all — 5 of 8 members on 2026-08-14
+    — and its baskets could not be built. The model's own inputs have to be in
+    the refresh set or it silently re-breaks every time a theme gains a name."""
+    return sorted(set(book_symbols(conn, user_id)) | set(theme_symbols(conn)))
+
+
+def required_symbols(conn: Connection, user_id: str = DEV_USER_ID) -> list[str]:
+    """The symbols the close brief genuinely cannot go out without: the held
+    names and the market benchmark.
+
+    Deliberately narrower than ``ingest_symbols``. A theme constituent or a
+    sector benchmark that a vendor publishes late has no bearing on tonight's
+    P&L, and gating the send on it would hold back — and eventually fail — a
+    brief whose every number was already computable. Fetch broadly; block on
+    little."""
+    return sorted(held_symbols(conn, user_id) | {BENCHMARK_SYMBOL})
 
 
 def _bars_present(engine: Engine, symbols: list[str], session_date: date) -> set[str]:
@@ -224,24 +338,31 @@ def ensure_todays_bars(
     symbols: list[str],
     session_date: date,
     *,
+    required: list[str] | None = None,
     timeout_s: int,
     interval_s: int,
     now_monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> set[str]:
-    """Poll Tiingo until every symbol has a bar for ``session_date`` or the
-    timeout elapses. Ingest is idempotent (D13), so re-fetching a short window is
-    cheap. Returns the set still missing at the end — empty means all present."""
+    """Poll Tiingo until every *required* symbol has a bar for ``session_date`` or
+    the timeout elapses. Ingest is idempotent (D13), so re-fetching a short window
+    is cheap. Returns the set still missing at the end — empty means all present.
+
+    ``symbols`` is what gets fetched; ``required`` is what the caller is willing
+    to wait for, defaulting to all of ``symbols``. Keeping them separate is what
+    lets the daily ingest cover the attribution model's theme constituents
+    without letting a late basket member hold up a brief that does not read it."""
     from worker.ingest import ingest_daily_bars
     from worker.normalize import normalize_bars
 
+    gate = list(symbols) if required is None else required
     start = session_date - timedelta(days=7)  # small top-up window; history already stored
     deadline = now_monotonic() + timeout_s
     while True:
         with engine.begin() as conn:
             ingest_daily_bars(conn, provider, symbols, start, session_date)
             normalize_bars(conn, symbols)
-        missing = set(symbols) - _bars_present(engine, symbols, session_date)
+        missing = set(gate) - _bars_present(engine, gate, session_date)
         if not missing or now_monotonic() >= deadline:
             return missing
         sleep(interval_s)
@@ -259,8 +380,9 @@ def run_session_job(
     poll: bool = True,
 ) -> str:
     """One day's go/no-go run. Returns an outcome tag: ``skipped-holiday``,
-    ``skipped-quiet`` (nothing moved >1%), or ``sent``. Pings the dead-man's
-    switch on the way out; a crash pings ``/fail`` and re-raises."""
+    ``skipped-quiet`` (nothing moved >1%), ``deferred-no-bars``, ``failed-no-bars``,
+    or ``sent``. Pings the dead-man's switch on the way out; a crash pings
+    ``/fail`` and re-raises."""
     from worker.assemble import assemble_and_store
     from worker.deliver import deliver_brief
     from worker.narrate import default_narrator
@@ -274,7 +396,8 @@ def run_session_job(
             return "skipped-holiday"
 
         with engine.connect() as conn:
-            symbols = book_symbols(conn, user_id)
+            symbols = ingest_symbols(conn, user_id)
+            required = required_symbols(conn, user_id)
         if poll:
             prov = provider or _default_provider()
             missing = ensure_todays_bars(
@@ -282,11 +405,35 @@ def run_session_job(
                 prov,
                 symbols,
                 session_date,
+                required=required,
                 timeout_s=config.BAR_POLL_TIMEOUT_S,
                 interval_s=config.BAR_POLL_INTERVAL_S,
             )
             if missing:
-                print(f"scheduler {session_date}: bars still missing after poll: {sorted(missing)}")
+                # The vendor hasn't published yet. Compute would raise "no bars
+                # for … run backfill" here — advice that is both misleading (the
+                # poll *is* the backfill, and it just ran) and useless (a manual
+                # backfill this instant fetches the same absent data). Defer to a
+                # later fire instead of converting a known wait into a crash.
+                names = ", ".join(sorted(missing))
+                retry_at = retry_fire_time(now_utc, session_date)
+                if retry_at is None:
+                    detail = (
+                        f"{session_date}: no bars for {names} and the retry deadline "
+                        f"({retry_deadline(session_date).astimezone(ET):%H:%M %Z}) has passed"
+                    )
+                    print(f"scheduler {detail}")
+                    ping_fail(hc, detail)
+                    return "failed-no-bars"
+                print(
+                    f"scheduler {session_date}: bars still missing after poll ({names}); "
+                    f"deferring to {retry_at.astimezone(ET):%H:%M %Z}"
+                )
+                ping_log(
+                    hc,
+                    f"{session_date}: waiting on bars for {names}; retry at {retry_at:%H:%M}Z",
+                )
+                return "deferred-no-bars"
 
         # Assemble in its own transaction so the briefs row is committed before
         # delivery reads it back (deliver renders from the persisted body).
@@ -673,12 +820,14 @@ def run_reconcile_job(
 def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live, not in unit tests
     """Start the self-rescheduling loop. The brief job is a **single** one-shot
     rather than a cron or two competing triggers (D20's shape): each tick runs
-    whichever kind is due (open or close), then asks ``next_kind_fire`` for the
-    next one of either kind — keeping the half-day behaviour automatic for the
-    close, the wall-clock behaviour exact for the open, and the ordering between
-    them explicit. Alongside it, the M13 attribution fires each self-reschedule
-    on their own one-shot and ping their own Healthchecks check: a weekly weekend
-    refit, a PM synthetic score, and an AM reconcile."""
+    whichever kind is due (open or close), then asks ``next_after_outcome`` for
+    the next one of either kind — keeping the half-day behaviour automatic for
+    the close, the wall-clock behaviour exact for the open, and the ordering
+    between them explicit. A close that deferred on missing bars re-fires ahead
+    of the rotation until its same-day deadline. Alongside it, the M13
+    attribution fires each self-reschedule on their own one-shot and ping their
+    own Healthchecks check: a weekly weekend refit, a PM synthetic score, and an
+    AM reconcile."""
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.date import DateTrigger
 
@@ -686,16 +835,18 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
     sched = BlockingScheduler(timezone="UTC")
 
     def tick(kind: str) -> None:
+        outcome = "failed"
         try:
             now = datetime.now(UTC)
             if kind == "open":
                 run_open_session_job(engine, now_utc=now)
             else:
-                run_session_job(engine, now_utc=now)
+                outcome = run_session_job(engine, now_utc=now)
         except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
             print(f"scheduler: {kind} run failed: {exc!r}")
         finally:
-            nxt, nxt_kind = next_kind_fire(datetime.now(UTC) + timedelta(seconds=1), delay)
+            after = datetime.now(UTC) + timedelta(seconds=1)
+            nxt, nxt_kind = next_after_outcome(after, outcome, calendar.today_et(after), delay)
             sched.add_job(
                 tick,
                 DateTrigger(run_date=nxt),
