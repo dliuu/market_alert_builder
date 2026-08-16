@@ -203,6 +203,15 @@ def test_the_cn_close_emits_claims_and_resolves_the_prior_sessions(
     assert full_claims[0].type.value == "relative_strength"
     assert full_claims[0].direction.value == "down"
 
+    # The wiring, not just the shape: `store_emitted_claims` must actually
+    # persist market="CN" (D34) — a call site that silently wrote "US" would
+    # still pass every assertion above, since this test only ever reads the
+    # CN book back through the same market-scoped calls it wrote through.
+    assert db_conn.execute(
+        text("SELECT DISTINCT market FROM claims WHERE user_id = :u"),
+        {"u": _TEST_USER_ID},
+    ).scalars().all() == ["CN"]
+
     second = assemble_cn_close_and_store(db_conn, _TEST_USER_ID, _RESOLVE_SESSION)
     assert second is not None
     assert second.resolved_claims, "the CN close resolved nothing it had claimed"
