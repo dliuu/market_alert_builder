@@ -1,4 +1,4 @@
-"""briefs.kind: widen the CHECK to accept the CN kinds (CN-M1, D31)
+"""briefs.kind: widen the CHECK to accept the CN kinds (CN-M1, D32)
 
 Contract v7 adds `open_cn`/`close_cn` alongside `open`/`close`. The briefs
 table's kind CHECK (named by Postgres's default convention, verified against

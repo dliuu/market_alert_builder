@@ -303,6 +303,39 @@ def test_run_cn_close_session_job_quiet_session_skips_the_send(
     assert pings == [("ok", "https://hc.example/cn-close")]
 
 
+def test_run_cn_close_session_job_missing_bar_fails_loudly_no_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late/missing bar (e.g. 510300.SS) must never send a brief silently
+    missing its vs-benchmark line and disclosure — the poll's returned
+    missing-set now raises rather than being discarded, so the wrapping
+    try/except pings /fail and re-raises, and delivery is never reached."""
+    pings: list[Any] = []
+    monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(us_scheduler, "book_symbols", lambda *a, **k: ["000001.SZ", CN_BENCHMARK])
+    monkeypatch.setattr(us_scheduler, "ensure_todays_bars", lambda *a, **k: {CN_BENCHMARK})
+
+    def _must_not_assemble(*a: Any, **k: Any) -> None:
+        raise AssertionError("a missing-bar session must never reach assembly")
+
+    monkeypatch.setattr("worker_cn.assemble.assemble_cn_close_and_store", _must_not_assemble)
+
+    def _must_not_deliver(*a: Any, **k: Any) -> None:
+        raise AssertionError("a missing-bar session must never send")
+
+    monkeypatch.setattr("worker.deliver.deliver_brief", _must_not_deliver)
+
+    with pytest.raises(RuntimeError, match=CN_BENCHMARK):
+        cn_scheduler.run_cn_close_session_job(
+            _engine(),  # type: ignore[arg-type]
+            now_utc=datetime(2026, 9, 4, 8, 0, tzinfo=UTC),
+            healthcheck_url="https://hc.example/cn-close",
+        )
+    # /fail pinged, never /ok — no stale send.
+    assert pings == [("fail", "https://hc.example/cn-close")]
+
+
 def test_run_cn_close_session_job_pings_fail_and_reraises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

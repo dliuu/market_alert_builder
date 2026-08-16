@@ -124,7 +124,7 @@ def run_cn_close_session_job(
         # Tiingo bar mislabeled "synthetic-cn" (or the reverse) would corrupt
         # raw_payloads' source namespace (worker_cn/backfill.py mirrors this).
         bars_source = SYNTHETIC_SOURCE if cn_bars_are_synthetic() else LIVE_SOURCE
-        core_scheduler.ensure_todays_bars(
+        missing = core_scheduler.ensure_todays_bars(
             engine,
             prov,
             symbols,
@@ -133,6 +133,12 @@ def run_cn_close_session_job(
             interval_s=cn_config.CN_BAR_POLL_INTERVAL_S,
             source=bars_source,
         )
+        if missing:
+            # A late bar (e.g. 510300.SS) must never send a brief silently
+            # missing its vs-benchmark line and disclosure — fail loudly
+            # instead. The enclosing try/except pings /fail and re-raises.
+            names = ", ".join(sorted(missing))
+            raise RuntimeError(f"{session_date}: no bars for {names}")
 
         # assemble_cn_close_and_store computes the book (compute_and_store,
         # market="CN") internally, same as the US path's assemble_and_store.

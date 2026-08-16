@@ -66,7 +66,7 @@ def test_an_open_body_carries_no_pnl(validator: Draft202012Validator) -> None:
 
 
 def test_close_cn_with_currency_validates(validator: Draft202012Validator) -> None:
-    """v7 (CN-M1, D31): the two new kinds and the optional, non-USD `currency`
+    """v7 (CN-M1, D32): the two new kinds and the optional, non-USD `currency`
     (docs/04) — a minimal object, not a frozen fixture, since CN production is
     Task 7's job."""
     body = {

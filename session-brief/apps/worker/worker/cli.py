@@ -16,7 +16,7 @@ from worker import calendar
 from worker.assemble import assemble_and_store
 from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
-from worker.constants import DEV_USER_ID, FDN_TAPE_IDENTIFIERS
+from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID, FDN_TAPE_IDENTIFIERS
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
@@ -399,7 +399,7 @@ def _attribution(
 
 def _backfill(symbols_arg: str | None, days: int, market: str) -> None:
     engine = get_engine()
-    symbols = _resolve_symbols(symbols_arg, engine)
+    symbols = _resolve_symbols(symbols_arg, engine, market=market.upper())
     if not symbols:
         raise SystemExit(
             "No symbols to backfill. Pass --symbols AAPL,MSFT or add holdings to your book."
@@ -672,21 +672,34 @@ def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:
         print("✗ latest-news per-symbol filter: no held symbols to probe")
 
 
-def _resolve_symbols(symbols_arg: str | None, engine: Engine) -> list[str]:
-    """Held names *plus every sector benchmark*. The benchmarks are settable in
-    the book UI but were never ingested, so §5's trailing-5d line had no bars to
-    read (M14)."""
+def _resolve_symbols(symbols_arg: str | None, engine: Engine, *, market: str = "US") -> list[str]:
+    """Held names *plus every sector benchmark*, scoped to one market — a CN
+    backfill must never pull in the US book's symbols (and vice versa on a
+    mixed book). Mirrors ``worker.scheduler.book_symbols``'s market filter and
+    benchmark union. The benchmarks are settable in the book UI but were never
+    ingested, so §5's trailing-5d line had no bars to read (M14)."""
     if symbols_arg:
         return [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+    if market == "CN":
+        from worker_cn.constants import CN_BENCHMARK
+
+        benchmark_symbol = CN_BENCHMARK
+    else:
+        benchmark_symbol = BENCHMARK_SYMBOL
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT DISTINCT symbol FROM holdings "
+                "SELECT DISTINCT h.symbol FROM holdings h "
+                "JOIN sectors s ON s.id = h.sector_id AND s.user_id = h.user_id "
+                "WHERE s.market = :market "
                 "UNION "
                 "SELECT DISTINCT benchmark_symbol FROM sectors "
-                "WHERE benchmark_symbol IS NOT NULL "
+                "WHERE benchmark_symbol IS NOT NULL AND market = :market "
+                "UNION "
+                "SELECT :benchmark "
                 "ORDER BY symbol"
-            )
+            ),
+            {"market": market, "benchmark": benchmark_symbol},
         ).all()
     return [str(row[0]) for row in rows]
 
