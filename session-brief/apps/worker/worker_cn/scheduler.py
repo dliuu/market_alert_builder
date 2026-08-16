@@ -118,6 +118,12 @@ def run_cn_close_session_job(
             symbols = core_scheduler.book_symbols(
                 conn, user_id, market=CN_MARKET, benchmark=CN_BENCHMARK
             )
+            # Narrower than `symbols`, mirroring `worker.scheduler.required_symbols`:
+            # held names + the market benchmark only. A late CN sector benchmark
+            # has no bearing on tonight's P&L and must not hold back — or fail —
+            # a brief whose every number is already computable.
+            held = core_scheduler.held_symbols(conn, user_id, market=CN_MARKET)
+            required = sorted(held | {CN_BENCHMARK})
 
         prov = provider or _default_cn_provider()
         # Source-scope the poll to match what `prov` actually returns — a live
@@ -129,14 +135,17 @@ def run_cn_close_session_job(
             prov,
             symbols,
             session_date,
+            required=required,
             timeout_s=cn_config.CN_BAR_POLL_TIMEOUT_S,
             interval_s=cn_config.CN_BAR_POLL_INTERVAL_S,
             source=bars_source,
         )
         if missing:
-            # A late bar (e.g. 510300.SS) must never send a brief silently
-            # missing its vs-benchmark line and disclosure — fail loudly
-            # instead. The enclosing try/except pings /fail and re-raises.
+            # A late held-name or benchmark bar (e.g. 510300.SS) must never
+            # send a brief silently missing its vs-benchmark line and
+            # disclosure — fail loudly instead. The enclosing try/except pings
+            # /fail and re-raises. A late *sector* benchmark bar is not in
+            # `required` and so never reaches here.
             names = ", ".join(sorted(missing))
             raise RuntimeError(f"{session_date}: no bars for {names}")
 

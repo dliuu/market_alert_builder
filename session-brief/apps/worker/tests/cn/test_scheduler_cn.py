@@ -230,9 +230,9 @@ def test_cn_close_job_resolves_its_own_env_url_by_default(
 
 
 def test_run_cn_close_session_job_full_pipeline_sends(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wiring order: book_symbols -> ensure_todays_bars (source-scoped) ->
-    assemble_cn_close_and_store -> deliver_brief(kind="close_cn") -> success
-    ping."""
+    """Wiring order: book_symbols + held_symbols -> ensure_todays_bars
+    (source-scoped, required=held+benchmark) -> assemble_cn_close_and_store ->
+    deliver_brief(kind="close_cn") -> success ping."""
     pings: list[Any] = []
     monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
     monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
@@ -245,11 +245,17 @@ def test_run_cn_close_session_job_full_pipeline_sends(monkeypatch: pytest.Monkey
         assert benchmark == CN_BENCHMARK
         return ["000001.SZ"]
 
+    def fake_held_symbols(conn: Any, user_id: str, *, market: str) -> set[str]:
+        calls.append("held_symbols")
+        assert market == "CN"
+        return {"000001.SZ"}
+
     def fake_ensure(
         engine: Any, provider: Any, symbols: list[str], session_date: Any, **kw: Any
     ) -> set[str]:
         calls.append("ensure_todays_bars")
         assert symbols == ["000001.SZ"]
+        assert kw.get("required") == ["000001.SZ", CN_BENCHMARK]
         assert kw.get("source") == "synthetic-cn"
         return set()
 
@@ -265,6 +271,7 @@ def test_run_cn_close_session_job_full_pipeline_sends(monkeypatch: pytest.Monkey
         return SimpleNamespace(status="sent", provider_msg_id="m1")
 
     monkeypatch.setattr(us_scheduler, "book_symbols", fake_book_symbols)
+    monkeypatch.setattr(us_scheduler, "held_symbols", fake_held_symbols)
     monkeypatch.setattr(us_scheduler, "ensure_todays_bars", fake_ensure)
     monkeypatch.setattr("worker_cn.assemble.assemble_cn_close_and_store", fake_assemble)
     monkeypatch.setattr("worker.deliver.deliver_brief", fake_deliver)
@@ -275,7 +282,7 @@ def test_run_cn_close_session_job_full_pipeline_sends(monkeypatch: pytest.Monkey
         healthcheck_url="https://hc.example/cn-close",
     )
     assert outcome == "sent"
-    assert calls == ["book_symbols", "ensure_todays_bars", "assemble", "deliver"]
+    assert calls == ["book_symbols", "held_symbols", "ensure_todays_bars", "assemble", "deliver"]
     assert pings == [("ok", "https://hc.example/cn-close")]
 
 
@@ -286,6 +293,7 @@ def test_run_cn_close_session_job_quiet_session_skips_the_send(
     monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
     monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
     monkeypatch.setattr(us_scheduler, "book_symbols", lambda *a, **k: ["000001.SZ"])
+    monkeypatch.setattr(us_scheduler, "held_symbols", lambda *a, **k: {"000001.SZ"})
     monkeypatch.setattr(us_scheduler, "ensure_todays_bars", lambda *a, **k: set())
     monkeypatch.setattr("worker_cn.assemble.assemble_cn_close_and_store", lambda *a, **k: None)
 
@@ -303,17 +311,19 @@ def test_run_cn_close_session_job_quiet_session_skips_the_send(
     assert pings == [("ok", "https://hc.example/cn-close")]
 
 
-def test_run_cn_close_session_job_missing_bar_fails_loudly_no_send(
+def test_run_cn_close_session_job_missing_held_or_benchmark_bar_fails_loudly_no_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A late/missing bar (e.g. 510300.SS) must never send a brief silently
-    missing its vs-benchmark line and disclosure — the poll's returned
-    missing-set now raises rather than being discarded, so the wrapping
+    """A missing bar for a *held* name or the *market* benchmark (e.g.
+    510300.SS) must never send a brief silently missing its vs-benchmark line
+    and disclosure — the poll's returned missing-set (scoped to `required` =
+    held + benchmark) now raises rather than being discarded, so the wrapping
     try/except pings /fail and re-raises, and delivery is never reached."""
     pings: list[Any] = []
     monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
     monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
     monkeypatch.setattr(us_scheduler, "book_symbols", lambda *a, **k: ["000001.SZ", CN_BENCHMARK])
+    monkeypatch.setattr(us_scheduler, "held_symbols", lambda *a, **k: {"000001.SZ"})
     monkeypatch.setattr(us_scheduler, "ensure_todays_bars", lambda *a, **k: {CN_BENCHMARK})
 
     def _must_not_assemble(*a: Any, **k: Any) -> None:
@@ -336,6 +346,50 @@ def test_run_cn_close_session_job_missing_bar_fails_loudly_no_send(
     assert pings == [("fail", "https://hc.example/cn-close")]
 
 
+def test_run_cn_close_session_job_required_set_excludes_sector_benchmarks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late CN *sector* benchmark bar must never hold back — or fail — the
+    close brief, mirroring `worker.scheduler.required_symbols`'s US semantics
+    (held names + the market benchmark only). `book_symbols` is the broader
+    fetch set and includes a sector benchmark; `required` (built from
+    `held_symbols` + `CN_BENCHMARK`) must exclude it, so `ensure_todays_bars`
+    never gates on it."""
+    pings: list[Any] = []
+    monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
+    monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
+    monkeypatch.setattr(
+        us_scheduler,
+        "book_symbols",
+        lambda *a, **k: ["000001.SZ", CN_BENCHMARK, "512480.SS"],  # 512480.SS: a sector benchmark
+    )
+    monkeypatch.setattr(us_scheduler, "held_symbols", lambda *a, **k: {"000001.SZ"})
+
+    def fake_ensure(
+        engine: Any, provider: Any, symbols: list[str], session_date: Any, **kw: Any
+    ) -> set[str]:
+        # The sector benchmark is fetched (in `symbols`) but must not gate the send.
+        assert set(kw["required"]) == {"000001.SZ", CN_BENCHMARK}
+        return set()  # nothing in `required` is missing
+
+    monkeypatch.setattr(us_scheduler, "ensure_todays_bars", fake_ensure)
+
+    fake_obj = SimpleNamespace(brief_id="u-2026-09-04-close_cn")
+    monkeypatch.setattr("worker_cn.assemble.assemble_cn_close_and_store", lambda *a, **k: fake_obj)
+    monkeypatch.setattr(
+        "worker.deliver.deliver_brief",
+        lambda *a, **k: SimpleNamespace(status="sent", provider_msg_id="m1"),
+    )
+
+    outcome = cn_scheduler.run_cn_close_session_job(
+        _engine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 8, 0, tzinfo=UTC),
+        healthcheck_url="https://hc.example/cn-close",
+    )
+    assert outcome == "sent"
+    assert pings == [("ok", "https://hc.example/cn-close")]
+
+
 def test_run_cn_close_session_job_pings_fail_and_reraises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -343,6 +397,7 @@ def test_run_cn_close_session_job_pings_fail_and_reraises(
     monkeypatch.setattr(us_scheduler, "ping_success", lambda url: pings.append(("ok", url)))
     monkeypatch.setattr(us_scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
     monkeypatch.setattr(us_scheduler, "book_symbols", lambda *a, **k: ["000001.SZ"])
+    monkeypatch.setattr(us_scheduler, "held_symbols", lambda *a, **k: {"000001.SZ"})
     monkeypatch.setattr(us_scheduler, "ensure_todays_bars", lambda *a, **k: set())
 
     def _boom(*a: Any, **k: Any) -> None:
