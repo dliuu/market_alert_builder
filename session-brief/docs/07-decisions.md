@@ -517,6 +517,39 @@ book, so under the floor it could no longer be suppressed at all. It's now a
 genuinely small position (~4.6%), which keeps the fixture exercising the roll-up
 line it exists to cover.
 
+**D32 — The shared dev database's `alembic_version` tracks `main`, not whichever worktree last ran `upgrade head`**
+
+Solo development across parallel git worktrees means several branches can hold
+unmerged migrations descending from the same parent at once — invariant 1 (one
+schema, one Alembic chain) doesn't forbid that, it's the normal shape of
+parallel feature work, and this repo already has the reconciliation pattern for
+it: a merge revision at integration time (`0011_attribution_consumers` merging
+the two `0010` heads; `0015_merge_catalysts_and_covers_from` merging the two
+`0014` heads). What invariant 1 does forbid, and what actually broke, is
+**applying** an unmerged branch's migrations to the one shared database that
+every worktree's `.env` points at. `0014_catalysts` grew two children in
+parallel — `0014_raw_payload_covers_from` on this line, `0015_cn_book` on
+`feat/cn-m1-task7` — and the CN worktree ran `alembic upgrade head` straight
+through `0016_cn_brief_kinds` against the shared dev DB while this branch's own
+`0014` collision was still unmerged and unresolved. The result: `alembic
+current` here can't locate `0016_cn_brief_kinds` at all — it isn't in this
+branch's history — and every DB-integration test fails against a schema this
+branch's code was never written against.
+
+**The rule:** the shared dev database's `alembic_version` is `main`'s, not any
+worktree's. Run `alembic upgrade head` against it only from a checkout that is
+caught up to `main`'s current migration tip — never from a feature branch that
+is behind or has diverged. A feature branch develops and tests its migrations
+(against a local/ephemeral Postgres, or by reading `alembic upgrade head
+--sql` rather than applying), then reconciles at merge time exactly like
+`0011`/`0015` did. CI now enforces the mechanical half of this: a job fails the
+build if `alembic heads` ever prints more than one line, so a collision like
+`0014`'s is caught the moment it's pushed rather than sitting broken until the
+next person happens to run migrations. It does not, and cannot, catch the
+apply-from-the-wrong-branch mistake that actually caused this incident — that
+half is discipline, not tooling. See `docs/09-supabase-setup.md` for the
+worktree-facing version of this rule.
+
 *Rules out:* a per-symbol pin or `holdings.always_show` column (new state and a
 migration to express what weight already says); keying the floor off the
 concentration flag (couples visibility to a weekly rate limit); lowering

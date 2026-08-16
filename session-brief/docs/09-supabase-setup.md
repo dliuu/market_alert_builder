@@ -61,6 +61,19 @@ uv run alembic current             # prints 0001_initial (head)
 proves the database is genuinely connected. That's the last item in M0's
 definition of done — tick the box in `docs/08-milestones.md` once it passes.
 
+## Multiple worktrees, one database (D32)
+
+Every worktree's `.env` points at the same Supabase project by default, but
+only one branch's migration history should ever be *applied* to it: treat the
+shared dev database's `alembic_version` as belonging to `main`, not whichever
+worktree you happen to have open. Before running `alembic upgrade head`
+against it, make sure your checkout is caught up to `main`'s current migration
+tip — otherwise you can stamp the shared DB onto a revision another,
+still-unmerged branch invented, and every other worktree's DB-integration
+tests start failing against a schema their code was never written against.
+`uv run alembic heads` should always print exactly one line; CI fails the
+build if it doesn't.
+
 ## Later (not needed for M0)
 
 - **RLS** is the tenancy mechanism (D10). Enable RLS on every table with

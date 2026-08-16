@@ -40,6 +40,14 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run mypy
+      - name: Fail on multiple Alembic heads
+        run: |
+          heads="$(uv run alembic heads)"
+          echo "$heads"
+          if [ "$(echo "$heads" | grep -c .)" -ne 1 ]; then
+            echo "::error::Multiple Alembic heads — two migrations branched off the same revision. Add a merge revision (see 0011_attribution_consumers.py or 0015_merge_catalysts_and_covers_from.py) before merging."
+            exit 1
+          fi
       - run: uv run pytest
 
   contracts:
