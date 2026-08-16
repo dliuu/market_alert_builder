@@ -96,7 +96,7 @@ def main() -> None:
     schedule.add_argument(
         "--kind",
         default="close",
-        choices=("open", "close"),
+        choices=("open", "close", "open_cn", "close_cn"),
         help="which job --once runs (default close); ignored by the blocking loop",
     )
 
@@ -770,9 +770,6 @@ def _send(kind: str, date_arg: str | None, user_id: str, to: str | None, dry_run
     from worker import config
     from worker.deliver import deliver_brief
 
-    if kind == "open_cn":
-        raise SystemExit("CN open brief lands in CN-M2")
-
     recipient = to or config.BRIEF_RECIPIENT
     if not recipient:
         raise SystemExit("No recipient. Pass --to you@example.com or set BRIEF_RECIPIENT in .env.")
@@ -835,20 +832,33 @@ def _schedule(once: bool, dry_run: bool, kind: str) -> None:
     )
 
     if dry_run:
+        from worker_cn import config as cn_config
+        from worker_cn.calendar import CN
+
         delay = timedelta(minutes=config.SEND_DELAY_MINUTES)
         now = datetime.now(UTC)
         print(
             f"schedule: now {now.isoformat()}  "
             f"(close = session close +{config.SEND_DELAY_MINUTES}min, "
-            f"open = {config.OPEN_SEND_ET_HOUR:02d}:{config.OPEN_SEND_ET_MINUTE:02d} ET fixed)"
+            f"open = {config.OPEN_SEND_ET_HOUR:02d}:{config.OPEN_SEND_ET_MINUTE:02d} ET fixed, "
+            f"close_cn = session close +{cn_config.CN_SEND_DELAY_MINUTES}min, "
+            f"open_cn = {cn_config.CN_OPEN_SEND_HOUR:02d}:{cn_config.CN_OPEN_SEND_MINUTE:02d} "
+            f"CST fixed)"
         )
         for _ in range(8):
             when, kind = next_kind_fire(now, delay)
-            et = when.astimezone(calendar.ET)
-            session = "session" if calendar.is_session(et.date()) else "non-session"
+            # Each kind reads in its own market's wall clock — an ET-only
+            # display would mislabel a 15:20 CST CN close as "03:20 ET".
+            if kind in ("open_cn", "close_cn"):
+                local, tz_label = when.astimezone(CN.tz), "CST"
+                is_session = CN.is_session
+            else:
+                local, tz_label = when.astimezone(calendar.ET), "ET"
+                is_session = calendar.is_session
+            session = "session" if is_session(local.date()) else "non-session"
             print(
-                f"  {kind:5}  {when.isoformat()}   "
-                f"{et:%a %Y-%m-%d %H:%M} ET   ({session})"
+                f"  {kind:8}  {when.isoformat()}   "
+                f"{local:%a %Y-%m-%d %H:%M} {tz_label}   ({session})"
             )
             now = when + timedelta(seconds=1)
         return
@@ -858,8 +868,16 @@ def _schedule(once: bool, dry_run: bool, kind: str) -> None:
         now = datetime.now(UTC)
         if kind == "open":
             outcome = run_open_session_job(engine, now_utc=now)
-        else:
+        elif kind == "close":
             outcome = run_session_job(engine, now_utc=now)
+        elif kind == "open_cn":
+            from worker_cn.scheduler import run_cn_open_session_job
+
+            outcome = run_cn_open_session_job(engine, now_utc=now)
+        else:  # close_cn
+            from worker_cn.scheduler import run_cn_close_session_job
+
+            outcome = run_cn_close_session_job(engine, now_utc=now)
         print(f"schedule --once ({kind}): {outcome}")
         return
 
