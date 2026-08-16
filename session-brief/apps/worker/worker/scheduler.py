@@ -39,6 +39,7 @@ from sqlalchemy.engine import Connection, Engine
 from worker import calendar, config
 from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, DEV_USER_ID
 from worker.providers.base import MarketDataProvider, PremarketProvider
+from worker_cn import scheduler as cn_scheduler
 
 if TYPE_CHECKING:
     from worker.providers.fdn import FdnClient
@@ -112,8 +113,15 @@ def next_fire(now_utc: datetime, delay: timedelta) -> datetime:
     raise RuntimeError(f"no fire time within 8 days of {now_utc}")  # pragma: no cover
 
 
+def _wall_fire(d: date, t: clock_time, tz: ZoneInfo) -> datetime:
+    """A wall-clock time ``t`` on date ``d`` in timezone ``tz``, converted to
+    UTC. The general form ``_et_fire`` delegates to — worker_cn's own open fire
+    (09:10 Asia/Shanghai) needs the same construction against a different tz."""
+    return datetime.combine(d, t, tzinfo=tz).astimezone(UTC)
+
+
 def _et_fire(d: date, at_et: clock_time) -> datetime:
-    return datetime.combine(d, at_et, tzinfo=ET).astimezone(UTC)
+    return _wall_fire(d, at_et, ET)
 
 
 def next_session_fire(now_utc: datetime, at_et: clock_time) -> datetime:
@@ -212,25 +220,39 @@ def next_after_outcome(
     return next_kind_fire(now_utc, delay)
 
 
-def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
-    """The next fire of *either* kind, as ``(instant, kind)``.
-
-    One loop over both schedules rather than two independent triggers: the
-    scheduler stays a single self-rescheduling one-shot (D20's shape), and the
-    ordering between the morning and evening runs is explicit rather than
-    emergent from two timers racing.
-    """
+def next_open_fire(now_utc: datetime) -> datetime:
+    """The next open-brief wall-clock fire strictly after ``now_utc``. Its own
+    day-walk (mirroring ``next_fire``'s shape) since ``open_fire_time`` now
+    fires every calendar day — no session gate at this layer, matching
+    ``next_fire``'s own heartbeat-on-holidays behaviour."""
     d = calendar.today_et(now_utc)
     for _ in range(8):
-        candidates: list[tuple[datetime, str]] = [
-            (fire_time(d, delay), "close"),
-            (open_fire_time(d), "open"),
-        ]
-        future = sorted(c for c in candidates if c[0] > now_utc)
-        if future:
-            return future[0]
+        ft = open_fire_time(d)
+        if ft > now_utc:
+            return ft
         d = d + timedelta(days=1)
-    raise RuntimeError(f"no fire time within 8 days of {now_utc}")  # pragma: no cover
+    raise RuntimeError(f"no open fire within 8 days of {now_utc}")  # pragma: no cover
+
+
+def next_kind_fire(now_utc: datetime, delay: timedelta) -> tuple[datetime, str]:
+    """The next fire of *any* of the four kinds, as ``(instant, kind)``.
+
+    Min over four independent candidate streams — the US close walk
+    (``next_fire``), the US open walk (``next_open_fire``), and CN's own two
+    walks (``worker_cn.scheduler.next_cn_open_fire`` / ``next_cn_close_fire``,
+    the one sanctioned shared→CN seam). Each stream is computed entirely
+    within its own market's calendar rather than one day-walk generalized
+    across markets (controller ruling): a shared "today" is wrong across
+    markets — Shanghai's Monday 09:10 is Sunday evening ET. Tie-break stays
+    deterministic: ``sorted`` compares the ``(datetime, kind)`` tuples.
+    """
+    candidates: list[tuple[datetime, str]] = [
+        (next_fire(now_utc, delay), "close"),
+        (next_open_fire(now_utc), "open"),
+        (cn_scheduler.next_cn_open_fire(now_utc), "open_cn"),
+        (cn_scheduler.next_cn_close_fire(now_utc), "close_cn"),
+    ]
+    return sorted(candidates)[0]
 
 
 # --- The daily job ----------------------------------------------------------
@@ -341,27 +363,35 @@ def ensure_todays_bars(
     required: list[str] | None = None,
     timeout_s: int,
     interval_s: int,
+    source: str | None = None,
     now_monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> set[str]:
-    """Poll Tiingo until every *required* symbol has a bar for ``session_date`` or
-    the timeout elapses. Ingest is idempotent (D13), so re-fetching a short window
-    is cheap. Returns the set still missing at the end — empty means all present.
+    """Poll a provider until every *required* symbol has a bar for
+    ``session_date`` or the timeout elapses. Ingest is idempotent (D13), so
+    re-fetching a short window is cheap. Returns the set still missing at the
+    end — empty means all present.
 
     ``symbols`` is what gets fetched; ``required`` is what the caller is willing
     to wait for, defaulting to all of ``symbols``. Keeping them separate is what
     lets the daily ingest cover the attribution model's theme constituents
-    without letting a late basket member hold up a brief that does not read it."""
+    without letting a late basket member hold up a brief that does not read it.
+
+    ``source`` defaults to Tiingo's namespace; the CN close job passes
+    ``source="synthetic-cn"`` so its rows stay source-scoped, same as the
+    backfill path (``worker_cn/backfill.py``)."""
+    from worker.ingest import SOURCE as DEFAULT_SOURCE
     from worker.ingest import ingest_daily_bars
     from worker.normalize import normalize_bars
 
+    src = source or DEFAULT_SOURCE
     gate = list(symbols) if required is None else required
     start = session_date - timedelta(days=7)  # small top-up window; history already stored
     deadline = now_monotonic() + timeout_s
     while True:
         with engine.begin() as conn:
-            ingest_daily_bars(conn, provider, symbols, start, session_date)
-            normalize_bars(conn, symbols)
+            ingest_daily_bars(conn, provider, symbols, start, session_date, source=src)
+            normalize_bars(conn, symbols, sources=(src,))
         missing = set(gate) - _bars_present(engine, gate, session_date)
         if not missing or now_monotonic() >= deadline:
             return missing
@@ -840,8 +870,12 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
             now = datetime.now(UTC)
             if kind == "open":
                 run_open_session_job(engine, now_utc=now)
-            else:
+            elif kind == "close":
                 outcome = run_session_job(engine, now_utc=now)
+            elif kind == "open_cn":
+                cn_scheduler.run_cn_open_session_job(engine, now_utc=now)
+            else:  # close_cn
+                cn_scheduler.run_cn_close_session_job(engine, now_utc=now)
         except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
             print(f"scheduler: {kind} run failed: {exc!r}")
         finally:

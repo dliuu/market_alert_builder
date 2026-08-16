@@ -345,6 +345,7 @@ _READ_SECTORS = text("""
 _READ_EVENTS = text("""
     SELECT symbol, event_type, occurs_at, label FROM events
     WHERE occurs_at >= :session_date AND occurs_at <= :horizon
+      AND (symbol IS NULL OR symbol = ANY(:book_symbols))
 """)
 
 # Chronological closes for one symbol, oldest first, ending at the prior session.
@@ -375,12 +376,16 @@ def read_open_inputs(
            list[TapeQuote], list[PremarketQuote]]:
     """Every read the open brief needs, in one place."""
     from worker.premarket import read_premarket, read_tape
+    from worker.scheduler import book_symbols
 
     holdings = {
         row["symbol"]: str(row["status"])
         for row in conn.execute(_READ_HOLDINGS, {"user_id": user_id}).mappings()
     }
-    events = _read_events(conn, session_date)
+    # The US book's own universe — the "two books never bleed" rule: a CN
+    # symbol's earnings/ex-div/lockup row must never surface in the US open
+    # brief's §4, and vice versa (change 2, CN-M2).
+    events = _read_events(conn, session_date, book_symbols(conn, user_id, market="US"))
     sectors = _read_sectors(conn, user_id, prior_session, session_date)
     benchmarks = [s.benchmark_symbol for s in sectors if s.benchmark_symbol]
     tape = read_tape(conn, session_date, benchmarks)
@@ -392,7 +397,13 @@ def read_open_inputs(
     return events, sectors, holdings, tape, premarket
 
 
-def _read_events(conn: Connection, session_date: date) -> list[CalendarEvent]:
+def _read_events(
+    conn: Connection, session_date: date, book_symbols: list[str]
+) -> list[CalendarEvent]:
+    """``book_symbols`` scopes the read to one book — a macro row (``symbol``
+    ``NULL``) always passes; a per-symbol row only survives if it names a
+    symbol in *this* book (change 2, CN-M2: the US and CN books never bleed
+    into each other's §4)."""
     horizon = session_date.fromordinal(session_date.toordinal() + _CALENDAR_WINDOW_DAYS)
     return [
         CalendarEvent(
@@ -404,7 +415,12 @@ def _read_events(conn: Connection, session_date: date) -> list[CalendarEvent]:
             label=row["label"] or _fallback_label(row["symbol"], str(row["event_type"])),
         )
         for row in conn.execute(
-            _READ_EVENTS, {"session_date": session_date, "horizon": horizon}
+            _READ_EVENTS,
+            {
+                "session_date": session_date,
+                "horizon": horizon,
+                "book_symbols": book_symbols,
+            },
         ).mappings()
     ]
 
