@@ -62,13 +62,13 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 # landed first and took v4, so M15 is v5: the §2/§3 row fields and the
 # horizon-0 morning claim. v6 = M17: the close brief's catalysts section
 # (insider flow and Form 144 supply signals) and its row fields. v7 = CN-M1
-# (D31): `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD,
+# (D32): `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD,
 # so v6 bodies keep validating).
 SCHEMA_VERSION = 7
 
 _BPS_PER_UNIT = 10_000
 
-# Subject-line prefix per kind (D31: CN kinds get a "CN " prefix rather than
+# Subject-line prefix per kind (D32: CN kinds get a "CN " prefix rather than
 # `kind.capitalize()`, which would render "Open_cn").
 _KIND_LABELS = {"open": "Open", "close": "Close", "open_cn": "CN Open", "close_cn": "CN Close"}
 
@@ -211,7 +211,7 @@ def close_brief_should_skip(obj: BriefObject) -> bool:
     """A close brief is skipped entirely when nothing was a full-tier mover
     (docs/05). Brief-tier names alone don't warrant a send; the open brief
     (not yet built) always sends regardless. Both close kinds (`close`,
-    `close_cn`) share this gate; both open kinds always send (D31)."""
+    `close_cn`) share this gate; both open kinds always send (D32)."""
     if obj.kind.value not in ("close", "close_cn"):
         return False
     attribution = next((s for s in obj.sections if s.id is SectionId.attribution), None)

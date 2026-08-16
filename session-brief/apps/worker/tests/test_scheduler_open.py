@@ -65,7 +65,11 @@ def test_half_day_moves_the_close_fire_but_not_the_open() -> None:
 
 
 def test_next_fire_returns_the_open_first_on_a_session_morning() -> None:
-    now = datetime(2026, 9, 4, 6, 0, tzinfo=UTC)  # 02:00 ET, before both
+    # 04:00 ET, before both US fires and after CN's close_cn heartbeat (07:20
+    # UTC) has already passed for the day — CN-M2 interleaves two more kinds
+    # into this same walk (see tests/cn/test_scheduler_cn.py), so 08:00 UTC
+    # rather than 06:00 UTC keeps this test about the US pair specifically.
+    now = datetime(2026, 9, 4, 8, 0, tzinfo=UTC)
     when, kind = scheduler.next_kind_fire(now, _DELAY)
     assert kind == "open"
     assert when == datetime(2026, 9, 4, 12, 15, tzinfo=UTC)
@@ -81,7 +85,7 @@ def test_next_fire_returns_the_close_after_the_open_has_passed() -> None:
 def test_after_fridays_close_the_next_fire_is_saturdays_open_heartbeat() -> None:
     """Both fires now keep a daily heartbeat (the 2026-08-15 fix): Saturday's
     08:15 ET open candidate lands before its 16:45 ET close candidate, so it's
-    the very next fire — not close, and not a gap until Monday.
+    the next *US* fire — not Monday, and not a gap until Monday.
 
     Before this fix, ``open_fire_time`` returned ``None`` on a non-session day,
     so ``next_kind_fire`` never produced an "open" candidate on a weekend or
@@ -92,8 +96,15 @@ def test_after_fridays_close_the_next_fire_is_saturdays_open_heartbeat() -> None
     following Monday. Exactly the "weekday-only cron reads a holiday as a
     failed check-in" anti-pattern D20 built the close job to avoid — just not
     applied symmetrically here until now.
+
+    CN-M2 note: starting from Saturday 08:00 UTC rather than straight after
+    Friday's US close (21:00 UTC Friday) — the literal next fire at that
+    instant is CN's own close_cn heartbeat (07:20 UTC Saturday), which fires
+    daily independent of the US calendar (tests/cn/test_scheduler_cn.py covers
+    that four-way interleaving directly). This test stays scoped to proving
+    the US open heartbeat is the next *US* fire.
     """
-    now = datetime(2026, 9, 4, 21, 0, tzinfo=UTC)  # after Friday's close fire
+    now = datetime(2026, 9, 5, 8, 0, tzinfo=UTC)  # Saturday, after CN's own heartbeat
     when, kind = scheduler.next_kind_fire(now, _DELAY)
     assert kind == "open"
     assert when == datetime(2026, 9, 5, 12, 15, tzinfo=UTC)  # Sat 08:15 ET
@@ -103,10 +114,15 @@ def test_an_open_heartbeat_fires_every_day_including_a_holiday() -> None:
     """The schedule no longer skips "open" candidates on non-sessions — every
     calendar day gets one, mirroring the close heartbeat (D20). Whether a given
     fire actually *sends* is the job body's call (``run_open_session_job``'s own
-    is_session check), not the scheduler's."""
+    is_session check), not the scheduler's.
+
+    CN-M2 interleaves two more kinds into the same walk (CN's open_cn fires on
+    XSHG sessions only, close_cn every day) — this test filters to "open" only,
+    same as before, but needs 13 fires rather than 8 to reach four of them now
+    that two more candidates land most days."""
     now = datetime(2026, 9, 4, 21, 0, tzinfo=UTC)
     opens = []
-    for _ in range(8):  # 4 days x (open, close) = 8 fires, through Tuesday's open
+    for _ in range(13):
         when, kind = scheduler.next_kind_fire(now, _DELAY)
         if kind == "open":
             opens.append(when.date())
@@ -147,12 +163,20 @@ def test_a_holiday_open_heartbeat_reaches_the_skip_and_ping_success_path(
 
 
 def test_a_session_gets_exactly_one_open_and_one_close() -> None:
-    """Walk a full session's worth of fires and check the pair, in order."""
+    """Walk a full session's worth of fires and check the US pair, in order.
+
+    CN-M2 interleaves two more kinds (open_cn, close_cn) into the same walk on
+    a shared session day — see
+    ``tests/cn/test_scheduler_cn.py::test_a_full_shared_session_day_yields_four_fires_in_order``
+    for the four-way version — so this walks enough fires to collect the US
+    pair and filters to it explicitly, same as before CN-M2.
+    """
     now = datetime(2026, 9, 4, 0, 0, tzinfo=UTC)
     fires = []
-    for _ in range(2):
+    for _ in range(4):
         when, kind = scheduler.next_kind_fire(now, _DELAY)
-        fires.append((when, kind))
+        if kind in ("open", "close"):
+            fires.append((when, kind))
         now = when + timedelta(seconds=1)
 
     assert [k for _, k in fires] == ["open", "close"]

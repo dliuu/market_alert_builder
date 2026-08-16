@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from worker.providers.tiingo import TiingoProvider
+from worker.providers.tiingo import CN_TIINGO_FORMATS, TiingoProvider
 
 _SAMPLE = (
     '[{"date":"2026-08-07T00:00:00.000Z","open":10.5,"high":11.0,"low":10.0,'
@@ -53,3 +53,42 @@ def test_daily_bars_parses_and_authenticates_in_header(monkeypatch: pytest.Monke
 def test_missing_key_raises() -> None:
     with pytest.raises(RuntimeError, match="TIINGO_API_KEY"):
         TiingoProvider(api_key="")
+
+
+# --- _vendor_symbol (CN-M3 Task 10) -----------------------------------------
+
+
+def test_vendor_symbol_passes_us_symbols_through_unchanged() -> None:
+    provider = TiingoProvider(api_key="secret-key")
+    assert provider._vendor_symbol("AAPL") == "AAPL"
+
+
+def test_vendor_symbol_maps_shanghai_suffix() -> None:
+    # tiingo-cn-probe (2026-08-16 live run) confirmed the bare code resolves;
+    # cn/docs/open-questions.md CN-Q1.
+    provider = TiingoProvider(api_key="secret-key")
+    assert provider._vendor_symbol("600519.SS") == "600519"
+    assert CN_TIINGO_FORMATS[".SS"] == "{code}"
+
+
+def test_vendor_symbol_maps_shenzhen_suffix() -> None:
+    provider = TiingoProvider(api_key="secret-key")
+    assert provider._vendor_symbol("300750.SZ") == "300750"
+    assert CN_TIINGO_FORMATS[".SZ"] == "{code}"
+
+
+def test_daily_bars_routes_cn_symbol_through_vendor_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_get(url: str, **kwargs: Any) -> _FakeResponse:
+        captured["url"] = url
+        return _FakeResponse(_SAMPLE)
+
+    monkeypatch.setattr("worker.providers.tiingo.httpx.get", fake_get)
+
+    provider = TiingoProvider(api_key="secret-key")
+    provider.daily_bars("600519.SS", date(2026, 8, 1), date(2026, 8, 7))
+
+    assert captured["url"].endswith("/600519/prices")

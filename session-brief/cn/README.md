@@ -34,5 +34,9 @@ builds `apps/web` the same way. The separation rule is therefore:
 
 ## Status
 
-Designed, not yet built. See `docs/milestones.md`; the American-side decision
-log records the structural choices as D32 in `session-brief/docs/07-decisions.md`.
+Built through CN-M3: the CN close brief (CN-M1, PR #21), the CN open brief +
+four-kind scheduler (CN-M2, PR #23), and the live Tiingo A-share swap behind
+the probe (CN-M3, PR #24). See `docs/milestones.md` for each milestone's
+definition of done and outstanding items (CN-M2's live soak, CN-M3's latency
+half); the American-side decision log records the structural choices as D32
+in `session-brief/docs/07-decisions.md`.

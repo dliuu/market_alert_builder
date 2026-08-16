@@ -1,4 +1,4 @@
-"""sectors.market: discriminator for multi-book support (US vs CN) (M18)
+"""sectors.market: discriminator for multi-book support (US vs CN) (CN-M1)
 
 The book is expanded to hold separate US stocks and Chinese A-shares positions.
 Holdings and lots inherit the market through sector_id — only sectors changes.

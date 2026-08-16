@@ -12,6 +12,7 @@ export function CloseBrief({ brief }: { brief: BriefObject }) {
         currencySymbol: "¥",
         benchmarkLabel: "vs CSI 300",
         kindLabel: "CN Close",
+        closeLabel: "session closed 15:00 CST",
       }}
     />
   );

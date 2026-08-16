@@ -8,13 +8,14 @@ import { font, palette, signColor } from "./theme";
 
 const WIDTH = 600;
 
-// Configured by `emails/cn/close-brief.tsx` (D31): every default here
+// Configured by `emails/cn/close-brief.tsx` (D32): every default here
 // reproduces the US template's output byte-for-byte. CN specifics (¥, "vs CSI
 // 300", the CN kind label) are set only by that wrapper — never here.
 export type CloseBriefOptions = {
   currencySymbol?: string;
   benchmarkLabel?: string;
   kindLabel?: string;
+  closeLabel?: string;
 };
 
 export function CloseBrief({
@@ -24,6 +25,7 @@ export function CloseBrief({
   const currencySymbol = options?.currencySymbol ?? "$";
   const benchmarkLabel = options?.benchmarkLabel ?? "vs SPY";
   const kindLabel = options?.kindLabel;
+  const closeLabel = options?.closeLabel ?? "session closed 16:00";
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
@@ -50,7 +52,7 @@ export function CloseBrief({
                     {kindLabel && `${kindLabel} · `}
                     {dateLong}
                     <br />
-                    session closed 16:00
+                    {closeLabel}
                   </span>
                 </td>
               </tr>
