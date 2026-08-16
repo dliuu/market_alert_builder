@@ -62,3 +62,6 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: needs a real DATABASE_URL; skips itself when unset (see tests/conftest.py)",
+]
