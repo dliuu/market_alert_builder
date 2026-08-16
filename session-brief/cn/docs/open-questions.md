@@ -90,6 +90,35 @@ error vs the index is a documented caveat, not a blocker.
 
 ---
 
+## Claims grading (CN-M4)
+
+### CN claims grade on raw close (`c`), not adjusted close (`adj_c`)
+
+**Blocks:** nothing — CN-M4 ships as designed · **Status:** open, not
+blocking
+
+`_grade_close_to_close` grades CN `relative_strength` claims on raw closes,
+not adjusted closes. An A-share holding going ex-dividend or ex-rights
+between the emit and resolve sessions — bonus-share issues are common,
+large, and cluster in June/July (CN-Q2) — produces a raw return that has
+nothing to do with the call, and the claim gets graded on it anyway. This is
+consistent with emission — `worker/compute.py` also grades off raw closes —
+so it's a repo-wide convention, not something CN-M4 invented. But CN-M4 does
+introduce the asymmetry: the US book's horizon-≥1 grading reads the
+`attribution` table, which is built from `adj_c`, so the US book is
+insulated from this and the CN book (graded close-to-close, D34) is not.
+
+*What would settle it:* whether raw-close grading is an acceptable
+repo-wide convention to keep, or worth fixing — off `adj_c`, US and CN both
+— which becomes moot for CN once CN return attribution lands and the CN book
+moves to the residual arm (D34's *Reverses if:*).
+*If unresolved:* leave as is. No known CN ex-div/ex-rights date has yet
+fallen inside a live claim's one-session grading window, and the convention
+is US-precedented — not a risk CN-M4 introduced, only one it inherited and
+made asymmetric.
+
+---
+
 ## Answered
 
 ### CN-Q1 — Does Tiingo's free tier serve SSE/SZSE tickers at all, and in what format?

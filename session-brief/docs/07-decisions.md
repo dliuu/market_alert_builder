@@ -637,9 +637,17 @@ claim outlives the position it was made about, so selling the name drops its
 `holdings` row while the claim is still owed a grade, and the join would
 silently stop resolving it, forever, with nothing anywhere reporting the loss.
 The `UNIQUE(user_id, symbol, claim_type, session_date)` constraint is
-untouched — CN's exchange-suffixed symbols (`600519.SS`) can't collide with US
-tickers, the same reasoning `holdings UNIQUE(user_id, symbol)` already rests
-on (D32). **(2) `market`/`benchmark` are keyword-only and undefaulted.**
+untouched. Its safety rests on a constraint, not a convention:
+`holdings UNIQUE(user_id, symbol)` already guarantees a symbol maps to
+exactly one `sector_id`, and therefore exactly one `sectors.market`, per
+user — and claims are only ever emitted for held names (`emit_claims`
+iterates `result.positions`; `compute_and_store` filters on `sectors.market`).
+So the same `(user_id, symbol, ...)` key structurally cannot be produced by
+both markets, no suffix convention required. CN's exchange-suffixed symbols
+(`600519.SS`) not colliding with US tickers, the reasoning D32 originally
+gave, still holds and is the belt to this constraint's suspenders, but the
+`holdings UNIQUE` constraint is the real guarantee. **(2) `market`/`benchmark`
+are keyword-only and undefaulted.**
 `resolve_due_claims(conn, user_id, session_date, *, market, benchmark)` and
 `store_emitted_claims(..., *, market)` take no default. A default is precisely
 how a future call site would silently inherit `US` and consume or mis-tag the
@@ -677,4 +685,16 @@ scope).
 
 *Reverses if:* CN return attribution lands — then CN moves to the residual arm
 and `use_residual` becomes a per-market capability lookup rather than a
-boolean.
+boolean. Also reverses if a future milestone ever emits a claim for a
+non-held symbol — a benchmark call, a watchlist name, an index. The
+`(user_id, symbol, claim_type, session_date)` constraint's cross-market
+safety above depends on every claim being emitted for a `holdings` row; a
+non-held claim falls outside `holdings UNIQUE(user_id, symbol)` and only the
+weaker suffix convention remains, so the constraint must be re-examined then.
+
+Switching a market from synthetic to live bars requires draining that
+market's outstanding claims first (`session-brief/cn/docs/milestones.md`,
+"Switch-on procedure"): claims carry no provenance column, so a claim left
+outstanding across a bars purge is graded against different bars than it was
+emitted on, or — if its emit session falls outside the re-backfilled window —
+never grades at all.

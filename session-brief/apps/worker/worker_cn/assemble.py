@@ -100,7 +100,9 @@ def assemble_cn_close_and_store(
         conn, user_id, session_date, market=CN_MARKET, benchmark=CN_BENCHMARK
     )
     # `{}` decomp: CN has no attribution rows (CN return attribution is a
-    # later milestone).
+    # later milestone). `emit_claims` only appends `tier == "full"` rows, and
+    # skip is true iff none are full-tier, so a skip provably emits zero
+    # claims — what makes storing claims after `_store_brief` below safe.
     shown, _ = _tier_positions(result, tape, {})
     emitted = emit_claims(shown, result.benchmark_return)
 
