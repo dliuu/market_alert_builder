@@ -525,7 +525,7 @@ def assemble_open_and_store(
     obj = narrate_open_and_apply(obj, narrator, headlines=news)  # type: ignore[arg-type]
 
     _store(conn, obj)
-    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
+    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted, market="US")
 
     from worker.flags import record_flags
 

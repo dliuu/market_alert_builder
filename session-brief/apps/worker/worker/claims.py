@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from worker.compute import PositionMetrics
-from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL
+from worker.constants import ATTRIBUTION_MODEL_VERSION
 from worker.premarket import PremarketQuote
 
 # A full-tier name must beat/lag the benchmark by more than this (1d relative)
@@ -107,19 +107,21 @@ def emit_premarket_gap(quotes: list[PremarketQuote]) -> list[Claim]:
 
 _INSERT = text("""
     INSERT INTO claims (user_id, brief_id, symbol, claim_type, direction,
-                        horizon_sessions, session_date)
+                        horizon_sessions, session_date, market)
     VALUES (:user_id, :brief_id, :symbol, :claim_type, :direction,
-            :horizon_sessions, :session_date)
+            :horizon_sessions, :session_date, :market)
     ON CONFLICT (user_id, symbol, claim_type, session_date) DO NOTHING
 """)
 
 # `<=`, not `<`: a horizon-0 morning claim is due the session it was emitted
 # on. Horizon-1 claims emitted today are still excluded — not by this filter but
 # by `_resolve_session`, which places their resolution on the *next* session.
+# `market` is what keeps the 15:20 CST CN run off the US book's due claims.
 _READ_UNRESOLVED = text("""
     SELECT id, symbol, claim_type, direction, horizon_sessions, session_date
     FROM claims
     WHERE user_id = :user_id AND outcome IS NULL AND session_date <= :session_date
+      AND market = :market
 """)
 
 # The horizon-th session strictly after the emit session, for this symbol.
@@ -144,6 +146,13 @@ _RETURNS_OPEN_CLOSE = text("""
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
 """)
 
+# Horizon >= 1 in a market with no attribution model: the symbol's and the
+# benchmark's own closes on the emit and resolve sessions.
+_RETURNS_CLOSE_TO_CLOSE = text("""
+    SELECT symbol, session_date, c FROM bars_daily
+    WHERE symbol = ANY(:symbols) AND session_date IN (:emitted_on, :resolve_on)
+""")
+
 _UPDATE_RESOLVED = text("""
     UPDATE claims
     SET outcome = :outcome, resolved_at = now(), resolved_session = :resolved_session,
@@ -153,8 +162,16 @@ _UPDATE_RESOLVED = text("""
 
 
 def store_emitted_claims(
-    conn: Connection, user_id: str, brief_id: str, session_date: date, claims: list[Claim]
+    conn: Connection,
+    user_id: str,
+    brief_id: str,
+    session_date: date,
+    claims: list[Claim],
+    *,
+    market: str,
 ) -> None:
+    """``market`` is keyword-only and undefaulted: a default is exactly how a
+    call site would silently inherit US and mis-tag another book's claims."""
     for claim in claims:
         conn.execute(
             _INSERT,
@@ -166,18 +183,27 @@ def store_emitted_claims(
                 "direction": claim.direction,
                 "horizon_sessions": claim.horizon_sessions,
                 "session_date": session_date,
+                "market": market,
             },
         )
 
 
 def resolve_due_claims(
-    conn: Connection, user_id: str, session_date: date
+    conn: Connection, user_id: str, session_date: date, *, market: str, benchmark: str
 ) -> list[ResolvedClaim]:
-    """Grade every unresolved claim whose horizon window has closed as of
-    ``session_date``, persist the outcome, and return them. Idempotent — an
-    already-resolved claim is never regraded."""
+    """Grade every unresolved claim of ``market`` whose horizon window has
+    closed as of ``session_date``, persist the outcome, and return them.
+    Idempotent — an already-resolved claim is never regraded.
+
+    ``market`` and ``benchmark`` are keyword-only and undefaulted on purpose:
+    a default is exactly how a future call site would silently inherit US and
+    consume another book's due claims (the CN close fires hours before the US
+    close). ``benchmark`` is threaded into ``_grade`` for whichever grading
+    arm needs it.
+    """
     rows = conn.execute(
-        _READ_UNRESOLVED, {"user_id": user_id, "session_date": session_date}
+        _READ_UNRESOLVED,
+        {"user_id": user_id, "session_date": session_date, "market": market},
     ).mappings().all()
 
     resolved: list[ResolvedClaim] = []
@@ -188,7 +214,14 @@ def resolve_due_claims(
         if resolve_on is None or resolve_on > session_date:
             continue  # the horizon hasn't elapsed yet
         graded = _grade(
-            conn, row["symbol"], row["direction"], resolve_on, row["horizon_sessions"]
+            conn,
+            row["symbol"],
+            row["direction"],
+            resolve_on,
+            row["horizon_sessions"],
+            benchmark=benchmark,
+            emitted_on=row["session_date"],
+            use_residual=(market == "US"),
         )
         if graded is None:
             continue  # no residual yet, or no bar to grade from — leave for next run
@@ -236,23 +269,36 @@ def _resolve_session(
 
 
 def _grade(
-    conn: Connection, symbol: str, direction: str, resolve_on: date, horizon: int
+    conn: Connection,
+    symbol: str,
+    direction: str,
+    resolve_on: date,
+    horizon: int,
+    *,
+    benchmark: str,
+    emitted_on: date,
+    use_residual: bool,
 ) -> tuple[str, int | None] | None:
-    """Dispatch to the grader the claim's own shape calls for.
+    """Dispatch to the grader the claim's own shape and its market's available
+    data call for.
 
-    The two arms answer different questions, so they are separate functions
-    rather than branches inside one body. Both return
-    ``(outcome, model_version)``; the model version is ``None`` for horizon 0,
-    because no attribution model produced that grade and the
-    ``claims.graded_model_version`` column is nullable so that stays honest.
+    The arms answer different questions, so they are separate functions rather
+    than branches inside one body. All return `(outcome, model_version)`; the
+    model version is `None` for horizon 0 and for the close-to-close arm,
+    because no attribution model produced those grades and
+    `claims.graded_model_version` is nullable so that stays honest.
     """
     if horizon == 0:
-        return _grade_open_close(conn, symbol, direction, resolve_on)
-    return _grade_relative(conn, symbol, direction, resolve_on)
+        return _grade_open_close(conn, symbol, direction, resolve_on, benchmark)
+    if use_residual:
+        return _grade_relative(conn, symbol, direction, resolve_on)
+    return _grade_close_to_close(
+        conn, symbol, direction, emitted_on, resolve_on, benchmark
+    )
 
 
 def _grade_open_close(
-    conn: Connection, symbol: str, direction: str, resolve_on: date
+    conn: Connection, symbol: str, direction: str, resolve_on: date, benchmark: str
 ) -> tuple[str, None] | None:
     """Horizon 0 (the morning ``premarket_gap`` claim): open→close on the emit
     session itself, against the benchmark.
@@ -270,10 +316,52 @@ def _grade_open_close(
         row["symbol"]: _day_return(row["c"], row["o"])
         for row in conn.execute(
             _RETURNS_OPEN_CLOSE,
-            {"session_date": resolve_on, "symbols": [symbol, BENCHMARK_SYMBOL]},
+            {"session_date": resolve_on, "symbols": [symbol, benchmark]},
         ).mappings()
     }
-    verdict = _verdict(returns.get(symbol), returns.get(BENCHMARK_SYMBOL), direction)
+    verdict = _verdict(returns.get(symbol), returns.get(benchmark), direction)
+    return None if verdict is None else (verdict, None)
+
+
+def _grade_close_to_close(
+    conn: Connection,
+    symbol: str,
+    direction: str,
+    emitted_on: date,
+    resolve_on: date,
+    benchmark: str,
+) -> tuple[str, None] | None:
+    """Horizon >= 1 where no attribution model exists (CN, CN-M4).
+
+    Grades the symbol against the benchmark over the emit close → resolve close
+    window. This is the pre-M13 US grader: it credits beta, which is exactly
+    what M13/D24 rejected for the US book — but residualizing needs an
+    `attribution` row, and CN has none and will not until CN return attribution
+    lands (~120 sessions of real bars + theme baskets). Grading relative return
+    is the honest thing to do meanwhile; grading nothing is not, because
+    `resolve_due_claims` reads a `None` as "not ready yet" and the claim would
+    sit unresolved forever.
+
+    Returns `(outcome, None)` — the `None` model version is the truth: no
+    attribution model produced this grade.
+    """
+    closes: dict[tuple[str, date], Fraction] = {
+        (row["symbol"], row["session_date"]): Fraction(str(row["c"]))
+        for row in conn.execute(
+            _RETURNS_CLOSE_TO_CLOSE,
+            {"symbols": [symbol, benchmark],
+             "emitted_on": emitted_on, "resolve_on": resolve_on},
+        ).mappings()
+    }
+
+    def window(s: str) -> Fraction | None:
+        base = closes.get((s, emitted_on))
+        end = closes.get((s, resolve_on))
+        if base is None or end is None or base == 0:
+            return None
+        return (end - base) / base
+
+    verdict = _verdict(window(symbol), window(benchmark), direction)
     return None if verdict is None else (verdict, None)
 
 

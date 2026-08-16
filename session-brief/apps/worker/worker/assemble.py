@@ -48,7 +48,7 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
-from worker.constants import ATTRIBUTION_MODEL_VERSION, CATALYST_MODEL_VERSION
+from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, CATALYST_MODEL_VERSION
 from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
 
@@ -367,7 +367,9 @@ def assemble_and_store(
     decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
-    resolved = resolve_due_claims(conn, user_id, session_date)
+    resolved = resolve_due_claims(
+        conn, user_id, session_date, market="US", benchmark=BENCHMARK_SYMBOL
+    )
     shown, _ = _tier_positions(result, tape, decomp)
     emitted = emit_claims(shown, result.benchmark_return)
 
@@ -407,7 +409,7 @@ def assemble_and_store(
     # the cost of the send — a failed Claude call returns the object unchanged.
     obj = narrate_and_apply(obj, narrator)
     _store_brief(conn, obj)
-    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted)
+    store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted, market="US")
     mark_reported(conn, user_id, catalysts, now=datetime.now(UTC))
     return obj
 

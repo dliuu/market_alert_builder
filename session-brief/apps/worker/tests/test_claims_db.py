@@ -9,8 +9,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from worker.assemble import assemble_and_store
 from worker.constants import ATTRIBUTION_MODEL_VERSION
@@ -204,3 +206,203 @@ def test_no_attribution_row_stays_unresolved(db_conn: Connection) -> None:
     assert row["outcome"] is None
     assert row["resolved_session"] is None
     assert row["graded_model_version"] is None
+
+
+def test_market_defaults_to_us_and_rejects_unknown_markets(db_conn: Connection) -> None:
+    """0018: existing rows are US; the CHECK constraint is real."""
+    _seed_user(db_conn)
+    db_conn.execute(
+        text("""
+            INSERT INTO claims (user_id, brief_id, symbol, claim_type,
+                                direction, horizon_sessions, session_date)
+            VALUES (:u, 'b1', 'ZZTEST', 'relative_strength', 'up', 1,
+                    DATE '2099-01-04')
+        """),
+        {"u": _TEST_USER_ID},
+    )
+    got = db_conn.execute(
+        text("SELECT market FROM claims WHERE user_id = :u AND symbol = 'ZZTEST'"),
+        {"u": _TEST_USER_ID},
+    ).scalar()
+    assert got == "US"
+
+    with pytest.raises(IntegrityError):
+        db_conn.execute(
+            text("""
+                INSERT INTO claims (user_id, brief_id, symbol, claim_type,
+                                    direction, horizon_sessions, session_date, market)
+                VALUES (:u, 'b1', 'ZZTEST2', 'relative_strength', 'up', 1,
+                        DATE '2099-01-04', 'JP')
+            """),
+            {"u": _TEST_USER_ID},
+        )
+
+
+def test_resolving_one_market_leaves_the_other_markets_claims_untouched(
+    db_conn: Connection,
+) -> None:
+    """The D23(3) trap, cross-market: the CN close fires hours before the US
+    close, so a CN resolution run must not consume US due claims.
+
+    ZZUS is seeded with real bars (+10% E->D) precisely so this is
+    non-vacuous: absent the `market` predicate in `_READ_UNRESOLVED`, the
+    CN-scoped run (`use_residual=False`) would reach
+    `_grade_close_to_close("ZZUS", ..., benchmark="ZZBENCHA.SS")`, find both
+    legs (ZZUS +10% vs ZZBENCHA.SS +1%), and write `outcome="correct"`. With
+    no ZZUS bars, `_resolve_session` would return `None` and the claim would
+    stay unresolved for a reason that has nothing to do with market scoping,
+    and the assertion below would pass either way. Verified by temporarily
+    deleting the `AND market = :market` line from `_READ_UNRESOLVED`: this
+    test then FAILS (`us_outcome == "correct"`); restoring the line makes it
+    pass again — see the fix report appended to this milestone's report file
+    for the transcript.
+    """
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    # ZZUS +10% vs ZZBENCHA.SS's +1% from E to D: if a CN-scoped run ever
+    # reached this row, an "up" call would resolve "correct" — the guard is
+    # what stops that from happening.
+    _seed_bar(db_conn, "ZZUS", _E, "100")
+    _seed_bar(db_conn, "ZZUS", _D, "110")
+    # ZZCNA.SS +10% vs its own benchmark's +1% from E to D: an "up" call is
+    # correct — this is the CN claim the CN-scoped run is actually meant to
+    # grade.
+    _seed_bar(db_conn, "ZZCNA.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNA.SS", _D, "110")
+    _seed_bar(db_conn, "ZZBENCHA.SS", _E, "100")
+    _seed_bar(db_conn, "ZZBENCHA.SS", _D, "101")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-us", _E,
+        [Claim(symbol="ZZUS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="US",
+    )
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNA.SS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="CN",
+    )
+
+    # Grade only the CN book.
+    resolve_due_claims(db_conn, _TEST_USER_ID, _D, market="CN", benchmark="ZZBENCHA.SS")
+
+    us_outcome = db_conn.execute(
+        text("SELECT outcome FROM claims WHERE user_id = :u AND symbol = 'ZZUS'"),
+        {"u": _TEST_USER_ID},
+    ).scalar()
+    assert us_outcome is None, "a CN resolution run consumed a US claim"
+
+
+def test_resolving_us_leaves_a_due_cn_claim_untouched(db_conn: Connection) -> None:
+    """The mirror of the above (design doc: "...and vice versa"). A US-scoped
+    run dispatches every fetched row through the residual arm
+    (`use_residual=(market == "US")` in `resolve_due_claims` is keyed on the
+    *call's* market, not each row's own `market` column) — so this direction
+    is non-vacuous only if the CN row would actually grade under the residual
+    arm were the guard removed. `ZZCNC.SS` therefore gets both real bars (so
+    `_resolve_session` finds a `resolve_on`) *and* a same-shaped attribution
+    row as the US tests use (`_seed_attribution`, resid_bps positive) so that,
+    absent `AND market = :market`, `_grade_relative("ZZCNC.SS", "up", ...)`
+    would find it and resolve "correct". CN never has real attribution rows
+    in production (M13/CN-M4 design) — this row exists only to make the
+    guard-removed failure mode observable in a test.
+    """
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    _seed_bar(db_conn, "ZZCNC.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNC.SS", _D, "110")
+    _seed_attribution(db_conn, "ZZCNC.SS", _D, resid_bps="50")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNC.SS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="CN",
+    )
+
+    # Grade only the US book.
+    resolve_due_claims(db_conn, _TEST_USER_ID, _D, market="US", benchmark="SPY")
+
+    cn_outcome = db_conn.execute(
+        text("SELECT outcome FROM claims WHERE user_id = :u AND symbol = 'ZZCNC.SS'"),
+        {"u": _TEST_USER_ID},
+    ).scalar()
+    assert cn_outcome is None, "a US resolution run consumed a due CN claim"
+
+
+def test_a_market_without_attribution_grades_close_to_close(db_conn: Connection) -> None:
+    """CN has no `attribution` rows and won't for months. Without this arm
+    `_grade_relative` returns None forever and the claim silently accumulates
+    unresolved — the loop looks alive and grades nothing."""
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    # ZZCNB.SS +10% vs its benchmark's +1% from E to D, so the "up" call is
+    # correct on the raw close-to-close return alone.
+    _seed_bar(db_conn, "ZZCNB.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNB.SS", _D, "110")
+    _seed_bar(db_conn, "ZZBENCHB.SS", _E, "100")
+    _seed_bar(db_conn, "ZZBENCHB.SS", _D, "101")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNB.SS", claim_type="relative_strength",
+               direction="up", horizon_sessions=1)],
+        market="CN",
+    )
+    # No attribution row is inserted for ZZCNB.SS anywhere in this test.
+    resolved = resolve_due_claims(
+        db_conn, _TEST_USER_ID, _D, market="CN", benchmark="ZZBENCHB.SS"
+    )
+
+    assert [r.symbol for r in resolved] == ["ZZCNB.SS"]
+    assert resolved[0].outcome == "correct"
+
+    persisted = db_conn.execute(
+        text("SELECT outcome, graded_model_version FROM claims "
+             "WHERE user_id = :u AND symbol = 'ZZCNB.SS'"),
+        {"u": _TEST_USER_ID},
+    ).mappings().one()
+    assert persisted["outcome"] == "correct"
+    assert persisted["graded_model_version"] is None, (
+        "no attribution model produced this grade"
+    )
+
+
+def test_close_to_close_wrong_direction_resolves_wrong(db_conn: Connection) -> None:
+    """Mirror of the above: same window (symbol beats its benchmark), but the
+    claim calls "down" — the wrong direction — so it must resolve "wrong"."""
+    from worker.claims import Claim, resolve_due_claims, store_emitted_claims
+
+    _seed_user(db_conn)
+    # ZZCNW.SS +10% vs its benchmark's +1% from E to D: the symbol outperforms,
+    # so a "down" call is wrong.
+    _seed_bar(db_conn, "ZZCNW.SS", _E, "100")
+    _seed_bar(db_conn, "ZZCNW.SS", _D, "110")
+    _seed_bar(db_conn, "ZZBENCHW.SS", _E, "100")
+    _seed_bar(db_conn, "ZZBENCHW.SS", _D, "101")
+
+    store_emitted_claims(
+        db_conn, _TEST_USER_ID, "b-cn", _E,
+        [Claim(symbol="ZZCNW.SS", claim_type="relative_strength",
+               direction="down", horizon_sessions=1)],
+        market="CN",
+    )
+    resolved = resolve_due_claims(
+        db_conn, _TEST_USER_ID, _D, market="CN", benchmark="ZZBENCHW.SS"
+    )
+
+    assert [r.symbol for r in resolved] == ["ZZCNW.SS"]
+    assert resolved[0].outcome == "wrong"
+
+    persisted = db_conn.execute(
+        text("SELECT outcome, graded_model_version FROM claims "
+             "WHERE user_id = :u AND symbol = 'ZZCNW.SS'"),
+        {"u": _TEST_USER_ID},
+    ).mappings().one()
+    assert persisted["outcome"] == "wrong"
+    assert persisted["graded_model_version"] is None
