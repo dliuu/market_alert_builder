@@ -42,6 +42,7 @@ def validator() -> Draft202012Validator:
         "open_brief_v3.json",
         "open_brief_v6.json",
         "../cn/fixtures/cn_close_brief.json",
+        "../cn/fixtures/cn_open_brief.json",
     ],
 )
 def test_fixture_validates_against_the_canonical_schema(

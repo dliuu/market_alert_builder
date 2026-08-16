@@ -699,9 +699,6 @@ def _brief(
 
     from worker.narrate import default_narrator
 
-    if kind == "open_cn":
-        raise SystemExit("CN open brief lands in CN-M2")
-
     engine = get_engine()
     session_date = date.fromisoformat(date_arg) if date_arg else _latest_session(engine)
     if session_date is None:
@@ -733,6 +730,18 @@ def _brief(
             from worker_cn.assemble import assemble_cn_close_and_store
 
             obj = assemble_cn_close_and_store(conn, user_id, session_date)
+        elif kind == "open_cn":
+            # CN logic stays in worker_cn (separation rule); cli.py only routes.
+            from worker_cn.assemble import assemble_cn_open_and_store
+            from worker_cn.calendar import CN
+
+            obj = assemble_cn_open_and_store(
+                conn,
+                user_id,
+                session_date,
+                prior_session=CN.previous_session(session_date),
+                generated_at=datetime.now(UTC),
+            )
         else:
             obj = assemble_and_store(conn, user_id, session_date, kind, narrator=narrator)
         if dry_run:
