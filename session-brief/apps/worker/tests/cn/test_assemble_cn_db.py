@@ -139,3 +139,74 @@ def test_empty_cn_book_raises(db_conn: Connection) -> None:
 
     with pytest.raises(ValueError, match="no CN holdings"):
         assemble_cn_close_and_store(db_conn, _EMPTY_BOOK_USER_ID, _SESSION)
+
+
+# --- CN-M4: the close->next-close claims loop ------------------------------
+
+# A synthetic benchmark this test fully controls, ZZ-prefixed per the module
+# docstring's rule: the real CN_BENCHMARK (510300.SS) is never seeded here, so
+# `CN_BENCHMARK` is monkeypatched to this symbol instead.
+_SYM_BENCH = "ZZCNBENCH.SS"
+
+# The next XSHG session after `_SESSION` (Fri 8/14 -> Mon 8/17), needed to
+# grade a horizon-1 claim emitted on `_SESSION`.
+_RESOLVE_SESSION = date(2026, 8, 17)
+
+
+def _seed_claims_loop(conn: Connection) -> None:
+    """Extends `_seed_book`'s bars through `_RESOLVE_SESSION` (its own ingest
+    stops at `_SESSION`, one session short of what horizon-1 grading needs)
+    and seeds `_SYM_BENCH`, the synthetic benchmark `CN_BENCHMARK` is
+    monkeypatched to.
+
+    `SyntheticCnBarsProvider` is a pure function of (symbol, date), verified
+    by direct computation:
+        ZZCNA7.SS     1038.74 (8/13) -> 1020.14 (8/14) -> 1016.83 (8/17)
+        ZZCNBENCH.SS    36.86 (8/13) ->   37.54 (8/14) ->   37.12 (8/17)
+    On `_SESSION` (8/14), ZZCNA7.SS returns -1.79% against the benchmark's
+    +1.85%: a -3.6% relative move, far past the 1% `_REL_STRENGTH_THRESHOLD`
+    and unambiguously a "down" relative-strength claim (the -1.79% alone
+    already clears the 1% full-tier move threshold, so ZZCNA7.SS is a
+    full-tier mover independent of the benchmark). Over the 8/14 -> 8/17
+    resolve window ZZCNA7.SS returns -0.32% against the benchmark's -1.12%: a
+    +0.8% relative move, the opposite sign, so the claim resolves "wrong".
+    """
+    _seed_book(conn)
+    provider = SyntheticCnBarsProvider()
+    for symbol in (_SYM_FULL, _SYM_QUIET, _SYM_BENCH):
+        ingest_daily_bars(
+            conn, provider, [symbol], _INGEST_START, _RESOLVE_SESSION,
+            source=_SOURCE, endpoint=_ENDPOINT,
+        )
+    normalize_bars(conn, [_SYM_FULL, _SYM_QUIET, _SYM_BENCH], sources=(_SOURCE,))
+
+
+def test_the_cn_close_emits_claims_and_resolves_the_prior_sessions(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CN-M4: the close -> next-close loop, end to end, on the CN book only.
+
+    `CN_BENCHMARK` is monkeypatched to a ZZ-prefixed symbol this test fully
+    controls, since the module docstring never seeds the real 510300.SS in
+    this file. Patching the module-level name in `worker_cn.assemble` covers
+    both its `compute_and_store` and `resolve_due_claims` calls, since both
+    read the module global at call time.
+    """
+    monkeypatch.setattr("worker_cn.assemble.CN_BENCHMARK", _SYM_BENCH)
+    _seed_claims_loop(db_conn)
+
+    first = assemble_cn_close_and_store(db_conn, _TEST_USER_ID, _SESSION)
+    assert first is not None
+    assert first.claims, "the CN close emitted no claims"
+    full_claims = [c for c in first.claims if c.symbol == _SYM_FULL]
+    assert len(full_claims) == 1
+    assert full_claims[0].type.value == "relative_strength"
+    assert full_claims[0].direction.value == "down"
+
+    second = assemble_cn_close_and_store(db_conn, _TEST_USER_ID, _RESOLVE_SESSION)
+    assert second is not None
+    assert second.resolved_claims, "the CN close resolved nothing it had claimed"
+    assert {r.outcome.value for r in second.resolved_claims} <= {"correct", "wrong"}
+    resolved_full = [r for r in second.resolved_claims if r.symbol == _SYM_FULL]
+    assert len(resolved_full) == 1
+    assert resolved_full[0].outcome.value == "wrong"
