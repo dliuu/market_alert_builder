@@ -618,3 +618,69 @@ next person happens to run migrations. It does not, and cannot, catch the
 apply-from-the-wrong-branch mistake that actually caused this incident — that
 half is discipline, not tooling. See `docs/09-supabase-setup.md` for the
 worktree-facing version of this rule.
+
+---
+
+**D35 — M19 technical snapshot: adjusted bars, ATR-clustered zones, and §4 as the one untiered section**
+
+The close brief could say what the book *did* but nothing about where each name
+stood in its own price structure. §4 becomes that snapshot. Four choices carry
+the weight, and each rules something out.
+
+*Adjusted OHLCV is a prerequisite, not a nice-to-have.* `normalize.py` kept only
+`adjClose` and discarded the `adjOpen`/`adjHigh`/`adjLow`/`adjVolume` Tiingo has
+always sent. Every level construction reads `h` and `l`, so over a 252-session
+window a single split makes every pivot and every extreme wrong — with no error,
+no null, and no way to notice. `0019_bars_adjusted` adds the four columns and
+`normalize_bars` repopulates them by replaying `raw_payloads` at zero API cost,
+which is the property D13 exists to guarantee. The engine computes in adjusted
+space; the DB layer rescales absolute prices by the latest bar's `c / adj_c` so
+a stored level is comparable to a quote. A symbol with any null adjusted bar in
+its window is skipped — falling back to the raw high would trade a null for a
+confident lie.
+
+*Levels are swing pivots plus rolling extremes, clustered by ATR.* A bar is a
+pivot when its high is the strict maximum of the seven bars centred on it (k=3,
+more selective than Williams' k=2); strictness matters because a flat top would
+otherwise emit two levels at one price. Candidates merge within ½ ATR under a
+1 ATR width cap — ATR because a fixed percentage band means one thing for a
+utility and another for a biotech, and the cap because without it a chain of
+levels each just inside the radius collapses into one meaningless band. Zone
+price is volume-weighted across its members. *Rules out:* k-means (an arbitrary
+`k` and a random initialisation, for no gain on a sorted one-dimensional array),
+Fibonacci retracements (the ratios have no empirical support), classic
+floor-trader pivots (an intraday cadence in a twice-daily briefing), regression
+channels (fitting where none is needed), and full volume profile (its uniform
+intrabar-volume assumption is unverifiable and it is the construction most
+damaged by the split problem above). Round-number levels are left out of v1:
+the order-clustering mechanism is well documented, but the strong evidence is
+FX-intraday, and levels with no price history behind them are the fastest route
+to the indicator soup `docs/01` forbids.
+
+*Strength is raw evidence, not a score.* A zone carries its touch count and its
+last-touch date — the two variables the literature actually associates with a
+repeat bounce — and nothing else. `tested 4×, last 06/12` is auditable against
+`bars_daily`; a 0-100 composite is unfalsifiable in an email. Zones below two
+touches are not reported at all: one touch is a coincidence.
+
+*§4 is the one section that does not tier.* Everywhere else suppression is the
+point. §4 answers a different question — *where does each position stand* — and
+a name sitting quietly on its support is precisely the one worth seeing, so it
+carries a row per owned name and is never suppressed. This is a deliberate
+departure from `docs/05`'s silent-by-default rule, confined to this section. The
+*event* half stays thresholded: `breakout` fires only when the close crossed a
+zone with at least two touches **and** `rvol` exceeded `_RVOL_SPIKE` — reusing
+assembly's existing constant and its strict `>`, so the brief has one volume
+threshold rather than two that can drift apart.
+
+*Rules out:* levels on the open brief (it must survive missing bars and never
+gains a compute dependency); intraday or live volume (D8/D9 stand — "current
+session" means today's completed EOD bar, which is what the close brief runs
+on); and CN levels for now, since CN bar history is still partly synthetic and
+`worker_cn.assemble` deliberately passes no technicals.
+
+*Reverses if:* the always-on §4 table reads as noise after a few weeks — then
+render it in full on the web archive and cut the email to names near a level,
+breaking out, or unusual on volume. That is a judgement to make from a real
+brief, not in advance. Round numbers and a `vs sector` column (`rel_strength`
+is still declared and unpopulated) are the two clean later additions.
