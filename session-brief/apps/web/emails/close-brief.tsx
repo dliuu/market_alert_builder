@@ -303,6 +303,13 @@ function Attribution({
   );
 }
 
+// §4 carries every owned name since M19, quiet ones included — it answers
+// "where does each position stand", which a flat name has an answer to.
+//
+// Six columns is the most 600px will take, so the level evidence rides a muted
+// sub-line under the symbol rather than four more columns. The full snapshot —
+// all three MA distances, both touch counts, the 52-week pair — is on the web
+// archive, which has no width to run out of.
 function Tape({ rows }: { rows: Row[] }) {
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
@@ -310,7 +317,10 @@ function Tape({ rows }: { rows: Row[] }) {
         <tr>
           <th style={thL}>Name</th>
           <th style={thR}>RVOL</th>
-          <th style={{ ...thR, width: 150 }}>Close in range</th>
+          <th style={thR}>Vol wk</th>
+          <th style={thR}>Vol mo</th>
+          <th style={thR}>vs 50d</th>
+          <th style={{ ...thR, width: 110 }}>Close in range</th>
         </tr>
       </thead>
       <tbody>
@@ -318,9 +328,14 @@ function Tape({ rows }: { rows: Row[] }) {
           <tr key={r.symbol}>
             <td style={tdL}>
               <span style={sym}>{r.symbol}</span>
+              <Breakout kind={r.breakout} />
               {r.why && <span style={why}>{r.why}</span>}
+              <Levels row={r} />
             </td>
-            <td style={tdR}>{r.rvol != null ? `${r.rvol.toFixed(1)}×` : "—"}</td>
+            <td style={tdR}>{multiple(r.rvol)}</td>
+            <td style={tdR}>{multiple(r.vol_vs_5d)}</td>
+            <td style={tdR}>{multiple(r.vol_vs_21d)}</td>
+            <td style={{ ...tdR, color: signColor(r.ma50_dist) }}>{pctOrDash(r.ma50_dist)}</td>
             <td style={{ ...tdR, verticalAlign: "middle" }}>
               <RangeBar position={r.range_position} />
             </td>
@@ -329,6 +344,43 @@ function Tape({ rows }: { rows: Row[] }) {
       </tbody>
     </table>
   );
+}
+
+// A confirmed close through a tested level on unusual volume. Assembly decides
+// whether this fired; the renderer only reads it.
+function Breakout({ kind }: { kind: Row["breakout"] }) {
+  if (kind == null) return null;
+  const up = kind === "up";
+  return (
+    <span style={{ ...breakoutBadge, color: up ? palette.pine : palette.ox }}>
+      {up ? "▲ broke out" : "▼ broke down"}
+    </span>
+  );
+}
+
+// Support and resistance with the evidence attached. A level without its touch
+// count is a line on a chart; with it, it is a claim you can check.
+function Levels({ row }: { row: Row }) {
+  const parts: string[] = [];
+  if (row.support != null) {
+    parts.push(
+      `Support ${price(row.support)}${evidence(row.support_touches, row.support_last_touch)}`,
+    );
+  }
+  if (row.resistance != null) {
+    parts.push(
+      `Resistance ${price(row.resistance)}${evidence(row.resistance_touches, row.resistance_last_touch)}`,
+    );
+  }
+  if (row.ma_stack != null) parts.push(`MAs ${row.ma_stack}`);
+  if (parts.length === 0) return null;
+  return <span style={levelLine}>{parts.join("  ·  ")}</span>;
+}
+
+function evidence(touches: number | null | undefined, last: string | null | undefined): string {
+  if (touches == null) return "";
+  const when = last ? `, last ${shortDate(last)}` : "";
+  return ` (${touches}×${when})`;
 }
 
 // Catalysts, grouped by symbol. A `full`-tier signal gets its figures; a
@@ -526,6 +578,14 @@ function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
 }
 
+function multiple(v: number | null | undefined): string {
+  return v == null ? "—" : `${v.toFixed(1)}×`;
+}
+
+function price(v: number | null | undefined): string {
+  return v == null ? "—" : v.toFixed(2);
+}
+
 // A proportion, not a change: "45% of holding" takes no sign. Signing it would
 // read as a move of +45%, which is a different and much more alarming claim.
 function proportion(fraction: number | null | undefined): string {
@@ -678,6 +738,18 @@ const totL: React.CSSProperties = {
 const totR: React.CSSProperties = { ...totBase, textAlign: "right", paddingLeft: 8 };
 const sym: React.CSSProperties = { fontWeight: 600, fontSize: 12 };
 const mut: React.CSSProperties = { color: palette.ink3 };
+const breakoutBadge: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  paddingLeft: 6,
+  whiteSpace: "nowrap",
+};
+const levelLine: React.CSSProperties = {
+  display: "block",
+  fontSize: 11,
+  color: palette.ink3,
+  paddingTop: 2,
+};
 const provMarker: React.CSSProperties = {
   fontSize: 8,
   color: palette.ink3,
