@@ -78,7 +78,7 @@ def build_prompt(obj: BriefObject) -> str:
         if lead is not None
         else ""
     )
-    framing = _theme_framing(rows)
+    framing = _theme_framing(rows) + _technical_framing(obj)
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
@@ -277,6 +277,34 @@ def _lead_symbol(rows: list[Row]) -> str | None:
             lead_abs = magnitude
             lead = row
     return lead.symbol if lead is not None else None
+
+
+def _technical_framing(obj: BriefObject) -> str:
+    """A number-free line naming any confirmed breakout, so `one_thing` can
+    reach for it.
+
+    Silent by default (docs/05): no breakout, no clause. Only the *event* is
+    framed — the standing MA and level figures are in §4's table, and narrating
+    them every session is how a briefing turns into indicator soup (docs/01).
+    """
+    parts = []
+    for row in sorted(_tape_rows(obj), key=lambda r: r.symbol or ""):
+        if row.breakout is None:
+            continue
+        direction = "above" if row.breakout.value == "up" else "below"
+        parts.append(
+            f"{row.symbol} closed {direction} a level it had tested before, on unusual volume"
+        )
+    if not parts:
+        return ""
+    return "Technical context (words only, no figures): " + "; ".join(parts) + ".\n\n"
+
+
+def _tape_rows(obj: BriefObject) -> list[Row]:
+    for section in obj.sections:
+        if section.id is SectionId.tape_quality:
+            return list(section.rows)
+    return []
 
 
 def _theme_framing(rows: list[Row]) -> str:

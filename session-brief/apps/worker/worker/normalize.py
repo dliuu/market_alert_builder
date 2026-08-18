@@ -27,6 +27,13 @@ class Bar(NamedTuple):
     c: Decimal
     v: int
     adj_c: Decimal
+    # The rest of the adjusted series (M19). Nullable because not every vendor
+    # sends it — the CN synthetic feed emits `adjClose` alone — and an absent
+    # adjusted high must read as "no history" downstream, never as zero.
+    adj_o: Decimal | None
+    adj_h: Decimal | None
+    adj_l: Decimal | None
+    adj_v: int | None
 
 
 class Payload(NamedTuple):
@@ -43,11 +50,15 @@ _SELECT = text("""
 """)
 
 _UPSERT = text("""
-    INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v, adj_c)
-    VALUES (:symbol, :session_date, :o, :h, :l, :c, :v, :adj_c)
+    INSERT INTO bars_daily
+        (symbol, session_date, o, h, l, c, v, adj_c, adj_o, adj_h, adj_l, adj_v)
+    VALUES
+        (:symbol, :session_date, :o, :h, :l, :c, :v, :adj_c,
+         :adj_o, :adj_h, :adj_l, :adj_v)
     ON CONFLICT (symbol, session_date) DO UPDATE SET
         o = EXCLUDED.o, h = EXCLUDED.h, l = EXCLUDED.l, c = EXCLUDED.c,
-        v = EXCLUDED.v, adj_c = EXCLUDED.adj_c
+        v = EXCLUDED.v, adj_c = EXCLUDED.adj_c, adj_o = EXCLUDED.adj_o,
+        adj_h = EXCLUDED.adj_h, adj_l = EXCLUDED.adj_l, adj_v = EXCLUDED.adj_v
 """)
 
 
@@ -101,7 +112,19 @@ def _bar(symbol: str, record: dict[str, Any]) -> Bar:
         c=_dec(record["close"]),
         v=int(_dec(record["volume"])),
         adj_c=_dec(record["adjClose"]),
+        adj_o=_opt_dec(record.get("adjOpen")),
+        adj_h=_opt_dec(record.get("adjHigh")),
+        adj_l=_opt_dec(record.get("adjLow")),
+        adj_v=_opt_int(record.get("adjVolume")),
     )
+
+
+def _opt_dec(value: Any) -> Decimal | None:
+    return None if value is None else _dec(value)
+
+
+def _opt_int(value: Any) -> int | None:
+    return None if value is None else int(_dec(value))
 
 
 def _dec(value: Any) -> Decimal:

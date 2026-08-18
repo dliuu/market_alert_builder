@@ -245,7 +245,7 @@ def test_horizon_zero_premarket_gap_claim() -> None:
     assert claim.horizon_sessions == 0
 
 
-def test_schema_version_is_seven() -> None:
+def test_schema_version_is_eight() -> None:
     from worker.assemble import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION == 8

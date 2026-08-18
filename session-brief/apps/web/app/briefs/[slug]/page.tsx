@@ -384,7 +384,10 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </section>
       )}
 
-      {/* How they traded — tape quality for the movers */}
+      {/* How they traded — the full technical snapshot. The email carries a
+          six-column subset because 600px runs out; this page has no such
+          limit, so it shows all three MA distances, both touch counts and the
+          52-week pair. */}
       {tape && tape.rows.length > 0 && (
         <section style={S.card}>
           <h2 style={S.h2}>How they traded</h2>
@@ -393,15 +396,58 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
               <tr>
                 <th style={S.th}>Symbol</th>
                 <th style={S.thR}>RVOL</th>
+                <th style={S.thR}>Vol wk</th>
+                <th style={S.thR}>Vol mo</th>
+                <th style={S.thR}>vs 20d</th>
+                <th style={S.thR}>vs 50d</th>
+                <th style={S.thR}>vs 200d</th>
+                <th style={S.th}>MAs</th>
+                <th style={S.thR}>Support</th>
+                <th style={S.thR}>Resistance</th>
+                <th style={S.thR}>52w range</th>
                 <th style={S.th}>Range position</th>
               </tr>
             </thead>
             <tbody>
               {tape.rows.map((r: Row) => (
                 <tr key={r.symbol}>
-                  <td style={S.td}>{r.symbol}</td>
-                  <td style={S.tdR}>{r.rvol != null ? `${r.rvol.toFixed(2)}×` : "—"}</td>
-                  <td style={{ ...S.td, width: "55%" }}>
+                  <td style={S.td}>
+                    {r.symbol}
+                    {r.breakout != null && (
+                      <span style={S.breakout}>
+                        {r.breakout === "up" ? " ▲ broke out" : " ▼ broke down"}
+                      </span>
+                    )}
+                  </td>
+                  <td style={S.tdR}>{multOrDash(r.rvol)}</td>
+                  <td style={S.tdR}>{multOrDash(r.vol_vs_5d)}</td>
+                  <td style={S.tdR}>{multOrDash(r.vol_vs_21d)}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.ma20_dist) }}>{pctOrDash(r.ma20_dist)}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.ma50_dist) }}>{pctOrDash(r.ma50_dist)}</td>
+                  <td style={{ ...S.tdR, ...signColor(r.ma200_dist) }}>
+                    {pctOrDash(r.ma200_dist)}
+                  </td>
+                  <td style={S.td}>{r.ma_stack ?? "—"}</td>
+                  <td style={S.tdR}>
+                    <Level
+                      price={r.support}
+                      touches={r.support_touches}
+                      last={r.support_last_touch}
+                    />
+                  </td>
+                  <td style={S.tdR}>
+                    <Level
+                      price={r.resistance}
+                      touches={r.resistance_touches}
+                      last={r.resistance_last_touch}
+                    />
+                  </td>
+                  <td style={S.tdR}>
+                    {r.low_52w != null && r.high_52w != null
+                      ? `${r.low_52w.toFixed(2)} – ${r.high_52w.toFixed(2)}`
+                      : "—"}
+                  </td>
+                  <td style={{ ...S.td, width: "18%" }}>
                     <RangeBar position={r.range_position} />
                   </td>
                 </tr>
@@ -438,6 +484,31 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </p>
       )}
     </main>
+  );
+}
+
+// A level and the evidence for it. Showing the price alone would be a line on
+// a chart; the touch count and date are what make it a checkable claim.
+function Level({
+  price,
+  touches,
+  last,
+}: {
+  price: number | null | undefined;
+  touches: number | null | undefined;
+  last: string | null | undefined;
+}) {
+  if (price == null) return <span style={S.muted}>—</span>;
+  return (
+    <>
+      {price.toFixed(2)}
+      {touches != null && (
+        <span style={S.levelEvidence}>
+          {` ${touches}×`}
+          {last ? ` · ${last.slice(5)}` : ""}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -535,6 +606,8 @@ const S: Record<string, React.CSSProperties> = {
   crumb: { fontSize: "0.85rem", margin: "0 0 8px" },
   subject: { margin: "0 0 4px", fontSize: "1.35rem" },
   muted: { color: "#666", fontSize: "0.85rem", margin: "4px 0" },
+  levelEvidence: { color: "#666", fontSize: "0.78rem" },
+  breakout: { fontWeight: 600, fontSize: "0.78rem" },
   oneThing: {
     background: "#fff7d6",
     padding: "12px 14px",

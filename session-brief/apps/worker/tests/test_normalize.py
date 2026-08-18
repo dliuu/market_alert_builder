@@ -78,3 +78,46 @@ def test_output_sorted_by_symbol_then_date() -> None:
 
 def test_empty_input() -> None:
     assert bars_from_payloads([]) == []
+
+
+# --- adjusted OHLCV (M19) -------------------------------------------------
+
+
+def test_maps_the_full_adjusted_series() -> None:
+    # Levels drawn from raw h/l are silently wrong across a split, so the
+    # adjusted high and low have to survive normalization too, not just the close.
+    record = _day(
+        "2026-08-07",
+        "100.0",
+        adjClose="50.0",
+        adjOpen="49.0",
+        adjHigh="51.0",
+        adjLow="48.5",
+        adjVolume=2000,
+    )
+    (bar,) = bars_from_payloads([_payload("AAPL", _FETCH, [record])])
+
+    assert bar.adj_c == Decimal("50.0")
+    assert bar.adj_o == Decimal("49.0")
+    assert bar.adj_h == Decimal("51.0")
+    assert bar.adj_l == Decimal("48.5")
+    assert bar.adj_v == 2000
+
+
+def test_adjusted_ohlc_is_null_when_the_vendor_omits_it() -> None:
+    # The CN synthetic feed emits adjClose alone. A missing adjusted high must
+    # normalize to null so the technicals loader treats it as absent history,
+    # rather than crashing the replay or silently reading as zero.
+    (bar,) = bars_from_payloads([_payload("ZZA", _FETCH, [_day("2026-08-07", "10.0")])])
+
+    assert bar.adj_c == Decimal("10.0")
+    assert bar.adj_o is None
+    assert bar.adj_h is None
+    assert bar.adj_l is None
+    assert bar.adj_v is None
+
+
+def test_adjusted_volume_stays_an_integer() -> None:
+    record = _day("2026-08-07", "10.0", adjVolume="1500.0")
+    (bar,) = bars_from_payloads([_payload("ZZA", _FETCH, [record])])
+    assert bar.adj_v == 1500

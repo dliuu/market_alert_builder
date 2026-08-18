@@ -118,12 +118,25 @@ def test_tiers_partition_every_name() -> None:
     assert obj.suppressed == [_SUPPRESSED]
 
 
-def test_tape_quality_is_full_movers_only() -> None:
+def test_tape_quality_covers_every_owned_name() -> None:
+    # §4 stopped tiering in M19 — it answers "where does each position stand",
+    # which a suppressed name has an answer to. The CN book inherits that.
     obj = _cn_close()
     tape = next(s for s in obj.sections if s.id.value == "tape_quality")
-    assert [r.symbol for r in tape.rows] == [_FULL]
-    assert tape.rows[0].rvol == 2.0
-    assert tape.rows[0].range_position == 0.8
+    assert [r.symbol for r in tape.rows] == sorted([_FULL, _BRIEF, _SUPPRESSED])
+    full = next(r for r in tape.rows if r.symbol == _FULL)
+    assert full.rvol == 2.0
+    assert full.range_position == 0.8
+
+
+def test_cn_tape_quality_carries_no_levels() -> None:
+    """CN bar history is still partly synthetic, so `worker_cn.assemble` passes
+    no technicals and every level field stays null. A level computed off a
+    synthetic bar would be confidently wrong rather than absent."""
+    obj = _cn_close()
+    tape = next(s for s in obj.sections if s.id.value == "tape_quality")
+    assert all(r.support is None and r.resistance is None for r in tape.rows)
+    assert all(r.ma50_dist is None and r.breakout is None for r in tape.rows)
 
 
 def test_data_quality_discloses_synthetic_cn_bars() -> None:

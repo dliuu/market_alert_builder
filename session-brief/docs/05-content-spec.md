@@ -22,7 +22,7 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 | 1 | The one thing | Single highlighted paragraph explaining the session. |
 | 2 | Session scorecard | Day %, day $, vs SPY in bps, book value, unrealised P&L. |
 | 3 | Attribution | Per name: close, day %, day P&L, contribution bps, total P&L. **Plus a book totals row.** |
-| 4 | How they traded | Tape quality: RVOL, close-in-range bar, vs sector, distance from 50d. |
+| 4 | How they traded | Technical snapshot, every owned name: RVOL, weekly/monthly volume multiples, close-in-range bar, distance from the 20/50/200-day averages and their stack, nearest support and resistance with touch counts, the 52-week range, and a confirmed breakout marker (M19). *`vs sector` is still unbuilt — `rel_strength` remains a declared, unpopulated field.* |
 | 5 | Sector rotation | Per sector: day move, breadth (`n of m up`), bar vs benchmark. |
 | 6 | After hours | Earnings prints and extended-hours moves, with the implied effect on tomorrow's open in bps. |
 | 7 | Yesterday's flag, resolved | The accountability loop. Always last. |

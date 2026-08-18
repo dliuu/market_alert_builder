@@ -80,6 +80,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 - **Money is integer cents.** Never float, anywhere in the object.
 - **Bump `schema_version` on any shape change** and keep old renderers. You will want to read year-old briefs.
 - **`tier` drives suppression.** The renderer never decides what to hide; assembly does.
+- **v8 (M19): §4 is the one section that does not tier.** Everywhere else suppression is the point — §1-§3 answer *what happened today*, and a name that did nothing is noise there. §4 answers *where does each position stand*, which a flat name has an answer to, so it carries a row per owned name and is never suppressed. The event half stays thresholded: `breakout` fires only on a confirmed crossing, so a quiet session still reads quietly. §4 rows are ordered by symbol, not by salience — it is a reference table you scan by name, and a ranking that reshuffles nightly would defeat that.
 - **v4 (M13): `market_bps`/`theme_bps`/`resid_bps`/`resid_z`/`provisional`** decompose each attribution row's move (`market + theme + resid == total_bps`, read verbatim from the shared `attribution` table, never recomputed in assembly). A residual-material name (`|resid_z| >= 2.0`) is always `full` tier, even on a flat raw move.
 - **Attribution row order is salience, in two bands.** Residual-material rows (`|resid_z| >= 2.0`) lead, ordered by `|resid_z|` — the largest idiosyncratic mover first. Everything else follows, ordered by `|contribution_bps|`. The two scales are never compared against each other; a z-score only ever ranks against z-scores and bps against bps. This replaces the original "`|resid_z|` descending, `null` sorted last", which let *any* decomposed row outrank *every* undecomposed one: on 2026-08-14 the brief led with a −25 bps name at an immaterial `|resid_z|` of 1.34 while the name that drove the whole +192 bps day sat last, because it belonged to no theme and so had no fit. Being undecomposed is a recurring state — a position opened before the weekly refit, a recent IPO, a name in no theme — so the fallback has to be materiality, not last place.
 - **The JSON Schema is the contract, not the generated Pydantic.** Codegen types a
@@ -98,6 +99,9 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 3 | M14 | `book` nullable (the open brief omits P&L); §4 calendar and §5 sector-setup row fields; `row.symbol` optional for macro releases |
 | 4 | M13 | attribution decomposition (`market_bps`/`theme_bps`/`resid_bps`/`resid_z`/`provisional`) + `|resid_z|` salience ordering on the close brief's attribution rows |
 | 5 | M15 | §2 `overnight_tape` row fields (`level`, `overnight_pct`, `overnight_abs`); §3 `premarket` row fields (`pre_pct`, `gap_cents`, `premarket_vol_mult`); `claim.horizon_sessions` allows `0`; `claim.type` gains `premarket_gap` |
+| 6 | M17 | close brief `catalysts` section and its row fields |
+| 7 | CN-M1 | `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD) |
+| 8 | M19 | §4 technical snapshot row fields: `ma20_dist`/`ma50_dist`/`ma200_dist`, `ma_stack`, `vol_vs_5d`/`vol_vs_21d`, `atr14`, `support`/`resistance` with `*_touches` and `*_last_touch`, `high_52w`/`low_52w`, `breakout` |
 
 ## Narration contract
 

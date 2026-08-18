@@ -133,5 +133,49 @@ deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
 | `hhi` | `Σ weightᵢ²` | daily bars + lots |
 | `cash_runway_q` | `cash / mean(quarterly_burn, 4q)` | fundamentals |
 | `dilution_yoy` | `shares_out / shares_out_1y_ago − 1` | fundamentals |
+| `ma_20` / `ma_50` / `ma_200` | `mean(adj_c, Nd)` — today included | adjusted daily bars |
+| `vol_vs_5d` / `vol_vs_21d` | `adj_v / mean(adj_v, N *prior* d)` | adjusted daily bars |
+| `atr_14` | `mean(max(h−l, |h−prev_c|, |l−prev_c|), 14d)` — simple mean, not Wilder's | adjusted daily bars |
+| `support` / `resistance` | nearest clustered zone below / above the close | adjusted daily bars |
+| `support_touches` / `resistance_touches` | distinct sessions within ½ ATR of the zone | adjusted daily bars |
+| `high_52w` / `low_52w` | `max(adj_h, 252d)` / `min(adj_l, 252d)` | adjusted daily bars |
 
 Everything above runs on **daily OHLCV**. Only gap-fill behaviour and VWAP need minute bars — defer them, and the whole v1 stays on a free data tier.
+
+### The M19 technical metrics
+
+Three things about the block above are load-bearing rather than incidental.
+
+**They read the adjusted series, not the raw one.** `bars_daily` gained
+`adj_o`/`adj_h`/`adj_l`/`adj_v` in `0019_bars_adjusted` for exactly this: a
+level drawn from a raw `h` is silently wrong for a year after any split, and
+silence is the failure mode worth paying to avoid. The columns are nullable and
+backfilled by replaying `raw_payloads` — Tiingo has always sent them, we simply
+threw them away. A symbol whose window still has a null adjusted bar is
+**skipped**, not computed from the raw column.
+
+**`vol_vs_5d`/`vol_vs_21d` are not `rvol`.** They share its denominator
+discipline — the measured session never appears in its own denominator — but
+they are 5- and 21-session windows and they drive nothing. `rvol` remains the
+30-session ratio that decides suppression tier and confirms a breakout. Three
+volume ratios now coexist (with `premarket_vol_mult`, D28); conflating any two
+of them would quietly move a threshold.
+
+**Levels are stored in today's price space.** The engine computes in adjusted
+units and the DB layer rescales by the latest bar's `c / adj_c` before storing,
+so a stored `support` is a number you can compare against a quote. Ratios are
+dimensionless and are deliberately *not* rescaled.
+
+**A new holding needs a manual deep backfill.** The scheduler tops up only the
+last 7 calendar days (`scheduler.py`, "history already stored"), so a symbol
+added to the book today starts with a handful of bars and its levels, 200-day
+average and 52-week pair all render as `—` until enough history accumulates.
+Run `uv run -m worker.cli backfill --days 400` after adding a holding — one
+Tiingo request per symbol regardless of window width, so it is cheap against the
+free tier's 50/hour. The snapshot degrades honestly in the meantime rather than
+inventing a level, but it does stay blank.
+
+`ma_stack`, `breakout` and the two `*_last_touch` dates are **not** in `metrics`
+— `metrics.value` is `numeric`, and coercing an enum or a date into it to avoid
+a migration would be the wrong trade. Assembly reads them off the returned
+dataclass instead.

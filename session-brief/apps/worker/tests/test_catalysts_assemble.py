@@ -131,7 +131,7 @@ def test_the_close_brief_carries_the_catalysts_section() -> None:
 
     assert section.rows[0].symbol == "SNDK"
     assert section.rows[0].kind == "cluster"
-    assert obj.schema_version == 7
+    assert obj.schema_version == 8
 
 
 def test_the_open_brief_has_no_catalysts_section() -> None:
