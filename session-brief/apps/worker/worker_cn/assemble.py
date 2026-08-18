@@ -83,6 +83,11 @@ def assemble_cn_close_and_store(
 
     stale = [STALE_CN_BARS_SYNTHETIC] if cn_bars_are_synthetic() else []
 
+    # No `technicals=` (M19): §4's levels are computed from `bars_daily`, and CN
+    # history is still partly synthetic (cn/docs/milestones.md, the CN_BARS_LIVE
+    # purge). Levels off synthetic bars would be confidently wrong rather than
+    # null, which is the failure mode worth avoiding. §4 still renders RVOL and
+    # range position; the snapshot turns on when CN bar provenance is real.
     obj = assemble(
         result,
         closes,

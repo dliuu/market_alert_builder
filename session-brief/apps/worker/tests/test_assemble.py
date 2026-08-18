@@ -12,12 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from contracts.brief import BriefObject, Row
+from contracts.brief import BriefObject, Row, Section
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
 from worker.assemble_shared import to_contract_json
 from worker.catalysts import CatalystItem
 from worker.compute import Lot, Price, compute
 from worker.tape import TapeMetrics
+from worker.technicals import Technicals, Zone
 
 
 def _tier_of(row: Row) -> str:
@@ -42,6 +43,22 @@ def _tape(symbol: str, rvol: str | None, rp: str | None) -> TapeMetrics:
         rvol=Fraction(rvol) if rvol is not None else None,
         range_position=Fraction(rp) if rp is not None else None,
     )
+
+
+def _tech(symbol: str, **over: object) -> Technicals:
+    base: dict[str, object] = {
+        "symbol": symbol,
+        "ma_20": Fraction(100), "ma_50": Fraction(100), "ma_200": Fraction(100),
+        "ma_stack": "mixed",
+        "vol_vs_5d": Fraction(2), "vol_vs_21d": Fraction(3, 2),
+        "atr_14": Fraction(5),
+        "high_52w": Fraction(150), "low_52w": Fraction(50),
+        "support": Zone(Fraction(90), 4, date(2026, 6, 12)),
+        "resistance": Zone(Fraction(120), 3, date(2026, 7, 1)),
+        "breakout": None,
+    }
+    base.update(over)
+    return Technicals(**base)  # type: ignore[arg-type]
 
 
 # --- Two-name book, both movers: hand-checkable figures -------------------
@@ -99,9 +116,14 @@ def _mixed() -> BriefObject:
         "C": _tape("C", "1", "0.5"),
     }
     result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    technicals = {
+        "A": _tech("A", breakout="up"),
+        "B": _tech("B"),
+        "C": _tech("C", ma_200=None, ma_stack=None, resistance=None),
+    }
     return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
                     kind="close", generated_at=_GENERATED_AT,
-                    catalysts=_catalysts())
+                    catalysts=_catalysts(), technicals=technicals)
 
 
 def _catalysts() -> list[CatalystItem]:
@@ -132,12 +154,69 @@ def test_tiers_partition_every_name() -> None:
     assert set(tiers) | set(obj.suppressed) == {"A", "B", "C"}
 
 
-def test_tape_quality_is_full_movers_only() -> None:
-    obj = _mixed()
-    tape = next(s for s in obj.sections if s.id.value == "tape_quality")
-    assert [r.symbol for r in tape.rows] == ["A"]  # B is brief, C suppressed
+def _tape_section(obj: BriefObject) -> Section:
+    return next(s for s in obj.sections if s.id.value == "tape_quality")
+
+
+def _mixed_without_technicals() -> BriefObject:
+    """The same session with no technicals at all — the state of a book whose
+    backfill never went deep enough."""
+    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "5", "100")]
+    prices = {
+        "A": Price(c=Decimal("110"), prev_c=Decimal("100")),
+        "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),
+        "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),
+    }
+    closes = {"A": Decimal("110"), "B": Decimal("49.75"), "C": Decimal("100.1")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {"A": _tape("A", "2", "0.8")}, user_id=_USER,
+                    session_date=_SESSION, kind="close", generated_at=_GENERATED_AT)
+
+
+def test_tape_quality_covers_every_owned_name() -> None:
+    # M19 changed this deliberately: §4 was full-tier movers only, but a
+    # snapshot of "every owned stock" has to include the quiet ones — a name
+    # sitting on its support is exactly the one that did not move today.
+    tape = _tape_section(_mixed())
+    assert [r.symbol for r in tape.rows] == ["A", "B", "C"]  # C is suppressed elsewhere
     assert tape.rows[0].rvol == 2.0
     assert tape.rows[0].range_position == 0.8
+
+
+def test_tape_quality_carries_the_technical_snapshot() -> None:
+    row = next(r for r in _tape_section(_mixed()).rows if r.symbol == "A")
+    assert row.ma50_dist == 0.1  # close 110 against a 50-day of 100
+    assert row.ma_stack is not None and row.ma_stack.value == "mixed"
+    assert row.vol_vs_5d == 2.0
+    assert row.vol_vs_21d == 1.5
+    assert row.atr14 == 5.0
+    assert row.support == 90.0
+    assert row.support_touches == 4
+    assert row.support_last_touch is not None
+    assert row.support_last_touch.isoformat() == "2026-06-12"
+    assert row.resistance == 120.0
+    assert row.high_52w == 150.0
+    assert row.breakout is not None and row.breakout.value == "up"
+
+
+def test_tape_quality_nulls_the_fields_a_symbol_has_no_history_for() -> None:
+    row = next(r for r in _tape_section(_mixed()).rows if r.symbol == "C")
+    assert row.ma200_dist is None
+    assert row.ma_stack is None
+    assert row.resistance is None
+    assert row.resistance_touches is None
+    assert row.resistance_last_touch is None
+    assert row.ma50_dist is not None  # the shorter averages still resolved
+
+
+def test_tape_quality_rows_survive_a_symbol_missing_from_technicals() -> None:
+    # A name backfilled too shallowly has no entry at all. It still gets a row,
+    # with null technicals — dropping it would silently shorten a snapshot that
+    # claims to cover the whole book.
+    row = next(r for r in _tape_section(_mixed_without_technicals()).rows if r.symbol == "A")
+    assert row.rvol == 2.0
+    assert row.ma50_dist is None
+    assert row.support is None
 
 
 def test_mixed_session_sends() -> None:
@@ -186,11 +265,12 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_seven() -> None:
+def test_schema_version_is_eight() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
     # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
-    # `open_cn`/`close_cn` kinds and optional `currency` (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 7
+    # `open_cn`/`close_cn` kinds and optional `currency`; v8 = M19's §4
+    # technical snapshot (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 8
 
 
 def test_material_residual_predicate() -> None:

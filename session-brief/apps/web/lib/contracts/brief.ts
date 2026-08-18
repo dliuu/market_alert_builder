@@ -218,6 +218,70 @@ export interface Row {
    * Close brief catalysts: the vendor's transaction type did not map to a known Form 4 code, so tax withholding and option exercises could not be filtered. Severity is reduced by one and the row is annotated rather than silently included or dropped (M17, open question 2).
    */
   ambiguous_code?: boolean | null;
+  /**
+   * Close brief §4: signed distance of the close from its 20-session simple moving average, as a fraction (0.03 = 3% above). A distance, not the average itself, because distances are comparable across names and the average is not (M19).
+   */
+  ma20_dist?: number | null;
+  /**
+   * Close brief §4: signed distance of the close from its 50-session simple moving average, as a fraction. This is the `distance from 50d` column the content spec has carried since M5 and the design reference has always drawn (M19).
+   */
+  ma50_dist?: number | null;
+  /**
+   * Close brief §4: signed distance of the close from its 200-session simple moving average, as a fraction. Null until 200 sessions of adjusted history exist, which the default 90-day backfill does not provide (M19).
+   */
+  ma200_dist?: number | null;
+  /**
+   * Close brief §4: the trend regime in one word — `bullish` when 20 > 50 > 200, `bearish` when 20 < 50 < 200, `mixed` otherwise. Null until all three averages exist; a stack is a statement about the ordering of three numbers, which two of them cannot make (M19).
+   */
+  ma_stack?: ("bullish" | "bearish" | "mixed") | null;
+  /**
+   * Close brief §4: the session's volume over the mean of the 5 PRIOR sessions — `weekly` in trading days. The measured session is never in the denominator (verify-numbers check 6). Distinct from `rvol`, which is the 30-session ratio that drives suppression tiering and must not be conflated with it (M19).
+   */
+  vol_vs_5d?: number | null;
+  /**
+   * Close brief §4: the session's volume over the mean of the 21 PRIOR sessions — `monthly` in trading days. Same denominator rule as `vol_vs_5d` (M19).
+   */
+  vol_vs_21d?: number | null;
+  /**
+   * Close brief §4: 14-session average true range, in price. A simple mean of the true ranges, deliberately not Wilder's EMA — exact in Fraction and with no seeding convention to get wrong. Carried so a renderer can express distance to a level in ATR units, which is the only level distance comparable across names (M19).
+   */
+  atr14?: number | null;
+  /**
+   * Close brief §4: price of the nearest clustered level BELOW the close, on today's tape. Built from swing pivots and rolling extremes over 252 sessions, merged within half an ATR. Null when no such zone has been touched at least twice (M19).
+   */
+  support?: number | null;
+  /**
+   * Close brief §4: price of the nearest clustered level ABOVE the close, on today's tape. Same construction as `support` (M19).
+   */
+  resistance?: number | null;
+  /**
+   * Close brief §4: how many distinct sessions came within half an ATR of the support zone. Reported raw rather than folded into a strength score — `tested 4x` is auditable against bars_daily and a 0-100 composite is not (M19).
+   */
+  support_touches?: number | null;
+  /**
+   * Close brief §4: touch count for the resistance zone. See `support_touches` (M19).
+   */
+  resistance_touches?: number | null;
+  /**
+   * Close brief §4: the most recent session that touched the support zone. Carried because bounce probability decays with time, so recency is evidence in its own right (M19).
+   */
+  support_last_touch?: string | null;
+  /**
+   * Close brief §4: the most recent session that touched the resistance zone (M19).
+   */
+  resistance_last_touch?: string | null;
+  /**
+   * Close brief §4: highest adjusted high of the last 252 sessions, on today's tape. Null below a full year of history — a field named `52-week high` that is really a 40-week high is a lie (M19).
+   */
+  high_52w?: number | null;
+  /**
+   * Close brief §4: lowest adjusted low of the last 252 sessions, on today's tape. Same full-window rule as `high_52w` (M19).
+   */
+  low_52w?: number | null;
+  /**
+   * Close brief §4: `up` or `down` when the close went through a zone the prior close was on the other side of, the zone had at least two touches, AND the session's `rvol` exceeded the 1.5 spike threshold. An event, not a level; without the volume clause it fires on every drift across a line (M19).
+   */
+  breakout?: ("up" | "down") | null;
 }
 export interface Flag {
   type: "concentration" | "correlation" | "runway" | "dilution" | "earnings_soon" | "supply_event" | "short_interest";

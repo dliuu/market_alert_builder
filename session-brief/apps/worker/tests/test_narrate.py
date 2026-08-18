@@ -50,7 +50,36 @@ def _obj_with_attribution(rows: list[dict[str, object]]) -> BriefObject:
     return BriefObject.model_validate(payload)
 
 
+def _obj_with_breakouts(breakouts: dict[str, str | None]) -> BriefObject:
+    """The fixture with §4's `breakout` overridden per symbol."""
+    payload = json.loads(_FIXTURE.read_text())
+    section = next(s for s in payload["sections"] if s["id"] == "tape_quality")
+    for row in section["rows"]:
+        row["breakout"] = breakouts.get(row["symbol"])
+    return BriefObject.model_validate(payload)
+
+
 # --- build_prompt ---------------------------------------------------------
+
+
+def test_prompt_frames_a_breakout_in_words() -> None:
+    prompt = build_prompt(_obj_with_breakouts({"A": "up", "B": "down"}))
+    assert "A closed above a level" in prompt
+    assert "B closed below a level" in prompt
+
+
+def test_breakout_framing_carries_no_digits() -> None:
+    """The framing is injected into the prompt the model answers from, and the
+    standing rule is that it never sees a figure it might echo back."""
+    prompt = build_prompt(_obj_with_breakouts({"A": "up"}))
+    framing = prompt.split("Session data")[0]
+    line = next(x for x in framing.splitlines() if x.startswith("Technical context"))
+    assert not any(ch.isdigit() for ch in line)
+
+
+def test_a_quiet_session_gets_no_technical_framing() -> None:
+    """Silent by default: no breakout, no clause. §4 still renders its table."""
+    assert "Technical context" not in build_prompt(_obj_with_breakouts({}))
 
 
 def test_prompt_lists_the_attribution_symbols_and_forbids_numbers() -> None:

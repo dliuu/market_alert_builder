@@ -51,6 +51,7 @@ from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_
 from worker.constants import ATTRIBUTION_MODEL_VERSION, CATALYST_MODEL_VERSION
 from worker.narrate import Narrator, narrate_and_apply
 from worker.tape import TapeMetrics, compute_and_store_tape
+from worker.technicals import Technicals, Zone, compute_and_store_technicals
 
 # Object shape version. Bump on any shape change and keep old renderers
 # (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
@@ -63,8 +64,10 @@ from worker.tape import TapeMetrics, compute_and_store_tape
 # horizon-0 morning claim. v6 = M17: the close brief's catalysts section
 # (insider flow and Form 144 supply signals) and its row fields. v7 = CN-M1
 # (D32): `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD,
-# so v6 bodies keep validating).
-SCHEMA_VERSION = 7
+# so v6 bodies keep validating). v8 = M19: the §4 technical snapshot — MA
+# distances and stack, the 5d/21d volume ratios, ATR, the support/resistance
+# zones with their touch evidence, the 52-week pair, and `breakout`.
+SCHEMA_VERSION = 8
 
 _BPS_PER_UNIT = 10_000
 
@@ -104,6 +107,7 @@ def assemble(
     decomp: dict[str, dict[str, object]] | None = None,
     catalysts: list[CatalystItem] | None = None,
     currency: str = "USD",
+    technicals: dict[str, Technicals] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -132,7 +136,7 @@ def assemble(
 
     sections: list[dict[str, object]] = [
         _attribution(shown, closes, decomp),
-        _tape_quality(shown, tape),
+        _tape_quality(result.positions, closes, tape, technicals or {}),
     ]
     # Catalysts is post-close data — Form 4s and 144s land after the bell — so
     # it belongs to the close brief only. The open brief is assembled elsewhere
@@ -291,22 +295,89 @@ def _salience_sort_key(row: dict[str, object]) -> tuple[bool, float, float]:
 
 
 def _tape_quality(
-    shown: list[tuple[PositionMetrics, str]], tape: dict[str, TapeMetrics]
+    positions: list[PositionMetrics],
+    closes: dict[str, Decimal],
+    tape: dict[str, TapeMetrics],
+    technicals: dict[str, Technicals],
 ) -> dict[str, object]:
-    """§4 "How they traded" — RVOL and range position for the full-tier movers.
-    Brief-tier names get a bare attribution row but no tape detail; if there are
-    no movers, the whole section is suppressed."""
+    """§4 "How they traded" — the technical snapshot, one row per owned name.
+
+    This section does not tier (M19). Everywhere else in the brief, suppression
+    is the point: §1-§3 answer "what happened today", and a name that did
+    nothing is noise there. §4 answers a different question — "where does each
+    position stand" — and a name sitting quietly on its support is precisely
+    the one worth seeing. So every owned name gets a row here even when it is
+    suppressed from the attribution table, and the section is never suppressed.
+
+    The *event* half stays thresholded: `breakout` fires only on a confirmed
+    crossing, so a quiet session still reads quietly.
+    """
+    # Sorted by symbol, not by salience. §4 is a reference table the reader
+    # scans by name to find a position, so a stable alphabetical order beats a
+    # ranking that reshuffles every session. Salience ordering belongs to §1.
     rows = [
-        {
-            "symbol": p.symbol,
-            "rvol": _tape_float(tape, p.symbol, "rvol"),
-            "range_position": _tape_float(tape, p.symbol, "range_position"),
-        }
-        for p, tier in shown
-        if tier == "full"
+        _tape_row(p.symbol, closes.get(p.symbol), tape, technicals)
+        for p in sorted(positions, key=lambda p: p.symbol)
     ]
-    tier = "full" if rows else "suppressed"
-    return {"id": "tape_quality", "tier": tier, "note": None, "rows": rows}
+    return {"id": "tape_quality", "tier": "full", "note": None, "rows": rows}
+
+
+def _tape_row(
+    symbol: str,
+    close: Decimal | None,
+    tape: dict[str, TapeMetrics],
+    technicals: dict[str, Technicals],
+) -> dict[str, object]:
+    """One §4 row. A symbol absent from ``technicals`` — too little history, or
+    no adjusted series yet — still gets a row, with nulls. Dropping it would
+    silently shorten a snapshot that claims to cover the whole book."""
+    t = technicals.get(symbol)
+    row: dict[str, object] = {
+        "symbol": symbol,
+        "rvol": _tape_float(tape, symbol, "rvol"),
+        "range_position": _tape_float(tape, symbol, "range_position"),
+    }
+    if t is None:
+        return row
+    row.update(
+        {
+            "ma20_dist": _distance(close, t.ma_20),
+            "ma50_dist": _distance(close, t.ma_50),
+            "ma200_dist": _distance(close, t.ma_200),
+            "ma_stack": t.ma_stack,
+            "vol_vs_5d": _ratio(t.vol_vs_5d),
+            "vol_vs_21d": _ratio(t.vol_vs_21d),
+            "atr14": _ratio(t.atr_14),
+            "high_52w": _ratio(t.high_52w),
+            "low_52w": _ratio(t.low_52w),
+            "breakout": t.breakout,
+        }
+    )
+    row.update(_zone_fields("support", t.support))
+    row.update(_zone_fields("resistance", t.resistance))
+    return row
+
+
+def _zone_fields(prefix: str, zone: Zone | None) -> dict[str, object]:
+    """Price, touch count and last-touch date together — the evidence travels
+    with the level, so a renderer can never show one without the others."""
+    return {
+        prefix: _ratio(zone.price) if zone else None,
+        f"{prefix}_touches": zone.touches if zone else None,
+        f"{prefix}_last_touch": zone.last_touch if zone else None,
+    }
+
+
+def _distance(close: Decimal | None, level: Fraction | None) -> float | None:
+    """Signed distance of the close from a level, as a fraction. Distances are
+    comparable across names in a way the raw averages are not."""
+    if close is None or level is None or level == 0:
+        return None
+    return float(Fraction(close) / level - 1)
+
+
+def _ratio(value: Fraction | None) -> float | None:
+    return None if value is None else float(value)
 
 
 def _tape_float(tape: dict[str, TapeMetrics], symbol: str, field: str) -> float | None:
@@ -364,6 +435,16 @@ def assemble_and_store(
     symbols = [p.symbol for p in result.positions]
     closes = _read_closes(conn, symbols, session_date)
     tape = compute_and_store_tape(conn, user_id, symbols, session_date)
+    # §4's technical snapshot (M19). RVOL comes from the tape stage rather than
+    # being recomputed, so a breakout is confirmed by exactly the number that
+    # already decides full tier — one volume threshold in the brief, not two.
+    technicals = compute_and_store_technicals(
+        conn,
+        user_id,
+        symbols,
+        session_date,
+        rvol={sym: metrics.rvol for sym, metrics in tape.items()},
+    )
     decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
@@ -396,6 +477,7 @@ def assemble_and_store(
         resolved=resolved,
         decomp=decomp,
         catalysts=catalysts,
+        technicals=technicals,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above) but emits none.

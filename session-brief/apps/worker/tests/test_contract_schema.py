@@ -38,11 +38,15 @@ def validator() -> Draft202012Validator:
         "close_brief.json",
         "close_brief_v2.json",
         "close_brief_v6.json",
+        "close_brief_v7.json",
         "open_brief.json",
         "open_brief_v3.json",
         "open_brief_v6.json",
+        "open_brief_v7.json",
         "../cn/fixtures/cn_close_brief.json",
+        "../cn/fixtures/cn_close_brief_v7.json",
         "../cn/fixtures/cn_open_brief.json",
+        "../cn/fixtures/cn_open_brief_v7.json",
     ],
 )
 def test_fixture_validates_against_the_canonical_schema(
@@ -93,6 +97,7 @@ def test_close_cn_with_currency_validates(validator: Draft202012Validator) -> No
         "data_quality": {"missing": [], "stale": []},
     }
     errors = [
-        f"{'/'.join(str(p) for p in e.path)}: {e.message}" for e in validator.iter_errors(body)
+        f"{'/'.join(str(p) for p in e.path)}: {e.message}"
+        for e in validator.iter_errors(body)
     ]
     assert not errors, "\n".join(errors)
