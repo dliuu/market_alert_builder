@@ -28,6 +28,7 @@ export function CloseBrief({
   const closeLabel = options?.closeLabel ?? "session closed 16:00";
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
+  const standing = brief.sections.find((s) => s.id === "standing");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
   const dateLong = formatDate(brief.session_date);
   const preheader = brief.one_thing ?? brief.subject;
@@ -105,6 +106,21 @@ export function CloseBrief({
             <Section style={sec}>
               <SectionHead title="How they traded" note="tape quality, not just direction" />
               <Tape rows={tape.rows} />
+            </Section>
+          )}
+
+          {/* where they stand (M20) — gated, unlike §4. Only names actually
+              stretched against their own history, capped at three; the rest
+              are in `note` and rendered in full on the archive. */}
+          {standing && (standing.rows.some((r) => r.tier === "full") || standing.note) && (
+            <Section style={sec}>
+              <SectionHead title="Where they stand" note="against each name's own year" />
+              {standing.rows
+                .filter((r) => r.tier === "full")
+                .map((r) => (
+                  <Standing key={r.symbol} row={r} />
+                ))}
+              {standing.note && <p style={note}>{standing.note}.</p>}
             </Section>
           )}
 
@@ -381,6 +397,78 @@ function evidence(touches: number | null | undefined, last: string | null | unde
   if (touches == null) return "";
   const when = last ? `, last ${shortDate(last)}` : "";
   return ` (${touches}×${when})`;
+}
+
+// One name's standing (M20). Each indicator is a value and a bar showing where
+// that value sits in this symbol's own trailing year of the same indicator.
+// The bar is `RangeBar` — already proven through Outlook's Word renderer via
+// the bgcolor attribute, so the percentile costs no new email-client risk.
+// A value is never shown without its percentile: if the percentile is null,
+// the value column is dropped for that line rather than shown bare.
+function Standing({ row }: { row: Row }) {
+  const lines: [string, string, number | null | undefined][] = [
+    ["RSI(14)", numberOrDash(row.rsi14, 1), row.rsi14_pctile],
+    ["MACD hist", numberOrDash(row.macd_hist, 2), row.macd_hist_pctile],
+    ["ADX(14)", numberOrDash(row.adx14, 1), row.adx14_pctile],
+    ["ATR %", pctOrDash(row.atr_pct), row.atr_pct_pctile],
+    [
+      row.rel_strength_benchmark ? `vs ${row.rel_strength_benchmark} 21d` : "vs benchmark",
+      pctOrDash(row.rel_strength),
+      row.rel_strength_pctile,
+    ],
+  ];
+  return (
+    <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
+      <tbody>
+        <tr>
+          <td style={tdL} colSpan={3}>
+            <span style={sym}>{row.symbol}</span>
+            <Divergence kind={row.divergence} />
+          </td>
+        </tr>
+        {lines.map(([label, value, pctile]) => (
+          <tr key={label}>
+            <td style={{ ...tdL, width: 130 }}>{label}</td>
+            <td style={{ ...tdR, width: 70 }}>{pctile == null ? "—" : value}</td>
+            <td style={{ ...tdR, verticalAlign: "middle" }}>
+              {pctile == null ? (
+                <span style={mut}>—</span>
+              ) : (
+                <>
+                  <RangeBar position={pctile / 100} />
+                  <span style={levelLine}>{ordinal(Math.round(pctile))}</span>
+                </>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// k=3 pivots mean the second pivot needs three more sessions before it is a
+// pivot at all, so a divergence is always confirmed late. Say so rather than
+// presenting it as today's news.
+function Divergence({ kind }: { kind: Row["divergence"] }) {
+  if (kind == null) return null;
+  const bearish = kind === "bearish";
+  return (
+    <span style={{ ...breakoutBadge, color: bearish ? palette.ox : palette.pine }}>
+      {bearish ? "⚠ bearish divergence" : "⚠ bullish divergence"} · confirmed 3 sessions
+    </span>
+  );
+}
+
+function numberOrDash(value: number | null | undefined, places: number): string {
+  return value == null ? "—" : value.toFixed(places);
+}
+
+function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const suffix = ["th", "st", "nd", "rd"][n % 10] ?? "th";
+  return `${n}${n % 10 <= 3 ? suffix : "th"}`;
 }
 
 // Catalysts, grouped by symbol. A `full`-tier signal gets its figures; a
