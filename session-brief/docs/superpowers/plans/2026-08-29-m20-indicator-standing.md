@@ -204,12 +204,15 @@ def test_atr_series_last_value_equals_m19_atr():
     computes today's value only; this module needs the whole series for its
     percentile. Two implementations of one definition is a drift risk, closed
     here rather than by a comment."""
-    bars = _bars(SERIES)
     from fractions import Fraction
 
-    assert Fraction(atr_series(bars)[-1]) == pytest.approx(
-        float(_atr(bars)), rel=Decimal("1e-9")
-    )
+    bars = _bars(SERIES)
+    mine = Fraction(atr_series(bars)[-1])   # Decimal, quantized to 10dp
+    m19 = _atr(bars)                        # exact Fraction
+    assert m19 is not None
+    # Not equality: this module quantizes to 10dp and technicals.py is exact.
+    # The tolerance is one unit in the last quantized place.
+    assert abs(mine - m19) < Fraction(1, 10**9)
 
 
 def test_series_are_deterministic_across_prefixes():
@@ -1631,7 +1634,20 @@ def _standing_row(s: Standing, tier: str) -> dict[str, object]:
     }
 ```
 
-If `_ratio` does not accept `Decimal | None`, use the file's existing float-conversion helper for nullable numerics — do not add a new one.
+**`_ratio` must be widened first.** It is currently
+`def _ratio(value: Fraction | None) -> float | None` (`assemble.py:379`) and
+`Standing` carries `Decimal`, so `mypy --strict` rejects every call above.
+Change its signature to:
+
+```python
+def _ratio(value: Fraction | Decimal | None) -> float | None:
+    return None if value is None else float(value)
+```
+
+That is the whole change — the body already works for both. Do **not** add a
+second helper, and do not touch any existing call site: `float(Fraction)` is
+unchanged, so §4's output stays byte-identical, which
+`test_section_4_output_is_unchanged_by_this_milestone` asserts.
 
 6. In `assemble_and_store`, after the `compute_and_store_technicals(...)` call, add:
 
