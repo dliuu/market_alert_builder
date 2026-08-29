@@ -132,8 +132,16 @@ than an inconsistency.
 but the percentile is the comparison this milestone exists to make, and a
 hardcoded 25 would be an unearned opinion sitting next to an earned one.
 
-**`atr14` is not recomputed.** M19 already computes it exactly; `atr_pct` divides
-that by the close. One ATR in the codebase.
+**`atr_pct` needs an ATR *series*, which M19 does not provide.** `technicals._atr`
+computes today's value only, and a percentile needs 253 of them. So this module
+computes the ATR series itself, under the same definition (a simple mean of the
+last 14 true ranges, deliberately not Wilder's).
+
+Two ATR implementations in one codebase is a drift risk, so it is closed by a
+test rather than by a comment: **the last value of this module's ATR series must
+equal `technicals._atr` on the same bars**, asserted directly. The ratio is
+dimensionless, so computing it in adjusted space gives the same answer as in
+price space and no rescaling is needed.
 
 ### `rel_strength` — the field the contract has been declaring since M5
 
@@ -218,7 +226,7 @@ keep working" stays a test rather than a hope.
 
 A name qualifies when **any** of:
 
-- any of the five tracked percentiles is `>= 90` or `<= 10`
+- any of the five tracked percentiles is `> 90` or `< 10`
 - `divergence` is non-null
 - §4 set `breakout` for that symbol
 
