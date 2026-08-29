@@ -153,3 +153,121 @@ def test_series_are_deterministic_across_prefixes():
     full = rsi_series(SERIES)
     short = rsi_series(SERIES[:35])
     assert full[: len(short)] == short
+
+
+from worker.oscillators import (
+    BASELINE_SESSIONS,
+    READ_DEPTH,
+    REL_WINDOW,
+    Standing,
+    percentile,
+    rel_strength_series,
+    standing_for_symbol,
+)
+
+
+def _flat(n: int, value: str = "5") -> list[Decimal]:
+    return [Decimal(value)] * n
+
+
+def test_percentile_needs_a_full_baseline():
+    """252 PRIOR values plus today = 253. One short yields None, not a
+    percentile over a partial year."""
+    assert percentile(_flat(BASELINE_SESSIONS)) is None
+    assert percentile(_flat(BASELINE_SESSIONS + 1)) is not None
+
+
+def test_monotone_series_puts_today_at_100():
+    rising = [Decimal(i) for i in range(BASELINE_SESSIONS + 1)]
+    assert percentile(rising) == Decimal(100)
+
+
+def test_monotone_falling_series_puts_today_at_0():
+    falling = [Decimal(-i) for i in range(BASELINE_SESSIONS + 1)]
+    assert percentile(falling) == Decimal(0)
+
+
+def test_ties_use_strict_less_than():
+    """A flat history scores 0, not 50. A midpoint convention would invent
+    movement on ADX, which sits on repeated values for long stretches."""
+    assert percentile(_flat(BASELINE_SESSIONS + 1)) == Decimal(0)
+
+
+def test_today_is_excluded_from_its_own_baseline():
+    """The denominator rule, tested directly: appending today to the history it
+    is ranked against must not change its percentile."""
+    history = [Decimal(i) for i in range(BASELINE_SESSIONS)]
+    outlier = Decimal(10_000)
+    assert percentile([*history, outlier]) == Decimal(100)
+    # An extra copy of the outlier inside the baseline DOES change the answer —
+    # proving the baseline is the 252 values before today, not a window that
+    # slid to include it.
+    assert percentile([*history[1:], outlier, outlier]) < Decimal(100)
+
+
+def test_percentile_uses_only_the_last_252_prior_values():
+    ancient = [Decimal(10_000)] * 50
+    recent = [Decimal(1)] * BASELINE_SESSIONS
+    assert percentile([*ancient, *recent, Decimal(2)]) == Decimal(100)
+
+
+def test_read_depth_covers_the_longest_warmup():
+    """286 = 252 baseline + 1 today + 33 MACD warmup. Asserted directly so a
+    later change to a warmup constant fails here rather than silently ranking
+    against 251 observations."""
+    assert READ_DEPTH == BASELINE_SESSIONS + 1 + (MACD_SLOW + MACD_SIGNAL - 2)
+
+
+def test_rel_strength_is_the_return_difference():
+    closes = _flat(REL_WINDOW + 1, "100")
+    closes[-1] = Decimal("110")           # +10%
+    bench = _flat(REL_WINDOW + 1, "50")
+    bench[-1] = Decimal("52")             # +4%
+    series = rel_strength_series(closes, bench)
+    assert series[-1].quantize(Decimal("0.0001")) == Decimal("0.0600")
+
+
+def test_rel_strength_empty_when_benchmark_is_short():
+    assert rel_strength_series(_flat(60), _flat(10)) == []
+
+
+def _long_bars(n: int) -> list[TechBar]:
+    """n bars whose closes drift up with a sawtooth, so no indicator is flat."""
+    closes = [Decimal(100) + Decimal(i) / Decimal(10) + (Decimal(i % 7) / Decimal(4)) for i in range(n)]
+    return _bars([c.quantize(Decimal("0.01")) for c in closes])
+
+
+def test_standing_with_full_history_populates_every_pair():
+    bars = _long_bars(READ_DEPTH)
+    s = standing_for_symbol("ASTS", bars, benchmark_bars=bars, benchmark_symbol="SPY")
+    assert isinstance(s, Standing)
+    for field in ("rsi14", "macd_hist", "adx14", "atr_pct", "rel_strength"):
+        assert getattr(s, field) is not None, field
+        assert getattr(s, f"{field}_pctile") is not None, field
+    assert s.rel_strength_benchmark == "SPY"
+
+
+def test_standing_with_short_history_keeps_values_and_nulls_percentiles():
+    """Both halves asserted: a null percentile beside a populated value. Testing
+    only the null would pass if the whole object went missing."""
+    bars = _long_bars(200)
+    s = standing_for_symbol("ASTS", bars, benchmark_bars=bars, benchmark_symbol="SPY")
+    assert s.rsi14 is not None
+    assert s.rsi14_pctile is None
+    assert s.macd_hist is not None
+    assert s.macd_hist_pctile is None
+
+
+def test_standing_at_285_and_286_bars_is_the_percentile_boundary():
+    short = standing_for_symbol("A", _long_bars(285), benchmark_bars=_long_bars(285), benchmark_symbol="SPY")
+    exact = standing_for_symbol("A", _long_bars(286), benchmark_bars=_long_bars(286), benchmark_symbol="SPY")
+    assert short.macd_hist_pctile is None
+    assert exact.macd_hist_pctile is not None
+
+
+def test_standing_without_a_benchmark_nulls_both_relative_fields():
+    bars = _long_bars(READ_DEPTH)
+    s = standing_for_symbol("ASTS", bars, benchmark_bars=[], benchmark_symbol=None)
+    assert s.rel_strength is None
+    assert s.rel_strength_pctile is None
+    assert s.rel_strength_benchmark is None

@@ -22,6 +22,7 @@ seeded-but-meaningless value by index.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
 from worker.technicals import TechBar
@@ -215,3 +216,144 @@ def adx_series(bars: Sequence[TechBar]) -> list[Decimal]:
                 Decimal(0) if total == 0 else _q(Decimal(100) * abs(plus_di - minus_di) / total)
             )
         return _wilder(dx, ADX_WINDOW)
+
+
+# One trading year, matching ``technicals.LOOKBACK_SESSIONS``. The baseline is
+# the 252 sessions BEFORE today: the measured session is never in its own
+# denominator, which is the rule `technicals` already applies to its volume
+# ratios (verify-numbers check 6). One rule in the brief, not two that drift.
+BASELINE_SESSIONS = 252
+
+# 252 baseline + today + MACD's 33-bar warmup. MACD is the binding constraint:
+# EMA26 seeded by SMA26 gives a first line value at bar 26, and its EMA9 signal
+# seeded by SMA9 gives a first histogram at bar 34.
+READ_DEPTH = BASELINE_SESSIONS + 1 + (MACD_SLOW + MACD_SIGNAL - 2)
+
+# Relative strength is measured over 21 sessions — a trading month, the same
+# unit `technicals.VOL_WINDOWS` uses for its monthly volume ratio.
+REL_WINDOW = 21
+
+
+@dataclass(frozen=True)
+class Standing:
+    """One symbol's indicator standing. Every indicator is a *pair*: the value
+    and its rank against that symbol's own trailing year of the same indicator.
+    A value whose baseline is short keeps the value and nulls the percentile —
+    a bare value is the soup `docs/01` was right to forbid, and a percentile
+    over 40 observations is worse than no percentile."""
+
+    symbol: str
+    rsi14: Decimal | None
+    rsi14_pctile: Decimal | None
+    macd_hist: Decimal | None
+    macd_hist_pctile: Decimal | None
+    adx14: Decimal | None
+    adx14_pctile: Decimal | None
+    atr_pct: Decimal | None
+    atr_pct_pctile: Decimal | None
+    rel_strength: Decimal | None
+    rel_strength_pctile: Decimal | None
+    rel_strength_benchmark: str | None
+    divergence: str | None  # "bullish" | "bearish"
+
+
+def percentile(series: Sequence[Decimal]) -> Decimal | None:
+    """Rank ``series[-1]`` against the ``BASELINE_SESSIONS`` values before it.
+
+    ``None`` below a full baseline: a field presented as a 1-year percentile
+    that is really a 40-observation percentile is the same lie
+    ``technicals._high_52w`` refuses to tell.
+
+    Strict ``<`` in the counter, so a value tied with its whole history scores
+    0 rather than a midpoint 50. Ties are common on ADX and a midpoint
+    convention would invent movement that did not happen.
+    """
+    if len(series) < BASELINE_SESSIONS + 1:
+        return None
+    today = series[-1]
+    baseline = series[-(BASELINE_SESSIONS + 1) : -1]
+    with localcontext() as ctx:
+        ctx.prec = PREC
+        below = sum(1 for v in baseline if v < today)
+        return _q(Decimal(100) * Decimal(below) / Decimal(len(baseline)))
+
+
+def _last(series: Sequence[Decimal]) -> Decimal | None:
+    return series[-1] if series else None
+
+
+def rel_strength_series(
+    closes: Sequence[Decimal],
+    benchmark_closes: Sequence[Decimal],
+    window: int = REL_WINDOW,
+) -> list[Decimal]:
+    """The symbol's ``window``-session return less the benchmark's over the same
+    window, per session, oldest → newest.
+
+    Empty when either series is short. A benchmark whose window does not cover
+    the symbol's yields no relative strength at all rather than a shorter one —
+    a number measured over a different span is not the same number.
+    """
+    n = min(len(closes), len(benchmark_closes))
+    if n <= window:
+        return []
+    sym = list(closes[-n:])
+    ben = list(benchmark_closes[-n:])
+    with localcontext() as ctx:
+        ctx.prec = PREC
+        out = []
+        for i in range(window, n):
+            if sym[i - window] == 0 or ben[i - window] == 0:
+                continue
+            r_sym = sym[i] / sym[i - window] - Decimal(1)
+            r_ben = ben[i] / ben[i - window] - Decimal(1)
+            out.append(_q(r_sym - r_ben))
+        return out
+
+
+def standing_for_symbol(
+    symbol: str,
+    bars: Sequence[TechBar],
+    *,
+    benchmark_bars: Sequence[TechBar],
+    benchmark_symbol: str | None,
+) -> Standing:
+    """The full standing for one symbol on the last session in ``bars``.
+
+    Pure: no clock, no connection. ``bars`` and ``benchmark_bars`` are adjusted
+    OHLCV, oldest → newest. The ATR ratio is dimensionless, so computing it in
+    adjusted space gives the same answer as on today's tape and needs no
+    rescaling — unlike the absolute levels `technicals.to_price_space` moves.
+    """
+    closes = [b.c for b in bars]
+    rsi = rsi_series(closes)
+    macd = macd_hist_series(closes)
+    adx = adx_series(bars)
+
+    atr = atr_series(bars)
+    atr_pct: list[Decimal] = []
+    if atr:
+        aligned = closes[len(closes) - len(atr):]
+        with localcontext() as ctx:
+            ctx.prec = PREC
+            atr_pct = [_q(a / c) for a, c in zip(atr, aligned, strict=True) if c != 0]
+
+    rel: list[Decimal] = []
+    if benchmark_symbol and benchmark_bars:
+        rel = rel_strength_series(closes, [b.c for b in benchmark_bars])
+
+    return Standing(
+        symbol=symbol,
+        rsi14=_last(rsi),
+        rsi14_pctile=percentile(rsi),
+        macd_hist=_last(macd),
+        macd_hist_pctile=percentile(macd),
+        adx14=_last(adx),
+        adx14_pctile=percentile(adx),
+        atr_pct=_last(atr_pct),
+        atr_pct_pctile=percentile(atr_pct),
+        rel_strength=_last(rel),
+        rel_strength_pctile=percentile(rel),
+        rel_strength_benchmark=benchmark_symbol if rel else None,
+        divergence=None,  # Task 3 fills this in.
+    )
