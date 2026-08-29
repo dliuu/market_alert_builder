@@ -9,14 +9,17 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from contracts.brief import BriefObject, Row, Section
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
+from worker.assemble import _standing as _standing_section
 from worker.assemble_shared import to_contract_json
 from worker.catalysts import CatalystItem
-from worker.compute import Lot, Price, compute
+from worker.compute import Lot, PositionMetrics, Price, compute
+from worker.oscillators import Standing
 from worker.tape import TapeMetrics
 from worker.technicals import Technicals, Zone
 
@@ -102,18 +105,30 @@ def test_both_movers_are_full_none_suppressed() -> None:
 def _mixed() -> BriefObject:
     # C is deliberately a *small* position (~4.6%): since the weight floor, only a
     # name under _ALWAYS_SHOW_WEIGHT can be suppressed at all, so a fat quiet name
-    # would no longer exercise the roll-up line this fixture exists to cover.
-    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "1", "100")]
+    # would no longer exercise the roll-up line this fixture exists to cover. D is
+    # a second small, quiet, suppressed name added solely so the standing section
+    # below has four qualifying names to cap at three and demonstrate the overflow
+    # note in the canonical fixture (M20 fix round 2) -- with only three held
+    # names, qualifying can never exceed _STANDING_CAP and the note stays null.
+    lots = [
+        _lot("A", "10", "90"), _lot("B", "20", "40"),
+        _lot("C", "1", "100"), _lot("D", "1", "50"),
+    ]
     prices = {
         "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10.0% → full
         "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),  # -0.5%  → brief
         "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),  # +0.1%  → suppressed
+        "D": Price(c=Decimal("50.05"), prev_c=Decimal("50")),  # +0.1%  → suppressed
     }
-    closes = {"A": Decimal("110"), "B": Decimal("49.75"), "C": Decimal("100.1")}
+    closes = {
+        "A": Decimal("110"), "B": Decimal("49.75"),
+        "C": Decimal("100.1"), "D": Decimal("50.05"),
+    }
     tape = {
         "A": _tape("A", "2", "0.8"),
         "B": _tape("B", "1.2", "0.5"),
         "C": _tape("C", "1", "0.5"),
+        "D": _tape("D", "1", "0.5"),
     }
     result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
     technicals = {
@@ -121,9 +136,54 @@ def _mixed() -> BriefObject:
         "B": _tech("B"),
         "C": _tech("C", ma_200=None, ma_stack=None, resistance=None),
     }
+    # Four qualifying standings so the cap (3) actually caps: A leads (most
+    # stretched, and the row the fixture uses to round-trip all eleven M20
+    # fields -- non-null throughout, a real benchmark ticker, and a divergence),
+    # B and C also qualify and land full-tier, D is the overflow -> brief-tier,
+    # named in the note. Every field on every row is filled so the fixture
+    # exercises the whole row shape, not just the fields that happen to matter
+    # for gating.
+    standing = {
+        "A": _standing(
+            "A",
+            rsi14=Decimal("78.4"), rsi14_pctile=Decimal("97"),
+            macd_hist=Decimal("0.62"), macd_hist_pctile=Decimal("55"),
+            adx14=Decimal("34.1"), adx14_pctile=Decimal("48"),
+            atr_pct=Decimal("0.052"), atr_pct_pctile=Decimal("60"),
+            rel_strength=Decimal("0.081"), rel_strength_pctile=Decimal("52"),
+            rel_strength_benchmark="SPY", divergence="bullish",
+        ),
+        "B": _standing(
+            "B",
+            rsi14=Decimal("41.2"), rsi14_pctile=Decimal("38"),
+            macd_hist=Decimal("-0.18"), macd_hist_pctile=Decimal("6"),
+            adx14=Decimal("18.4"), adx14_pctile=Decimal("44"),
+            atr_pct=Decimal("0.021"), atr_pct_pctile=Decimal("35"),
+            rel_strength=Decimal("-0.012"), rel_strength_pctile=Decimal("40"),
+            rel_strength_benchmark="SPY", divergence=None,
+        ),
+        "C": _standing(
+            "C",
+            rsi14=Decimal("55.7"), rsi14_pctile=Decimal("58"),
+            macd_hist=Decimal("0.05"), macd_hist_pctile=Decimal("53"),
+            adx14=Decimal("22.9"), adx14_pctile=Decimal("93"),
+            atr_pct=Decimal("0.018"), atr_pct_pctile=Decimal("47"),
+            rel_strength=Decimal("0.004"), rel_strength_pctile=Decimal("50"),
+            rel_strength_benchmark="XLK", divergence=None,
+        ),
+        "D": _standing(
+            "D",
+            rsi14=Decimal("48.9"), rsi14_pctile=Decimal("52"),
+            macd_hist=Decimal("-0.02"), macd_hist_pctile=Decimal("49"),
+            adx14=Decimal("15.6"), adx14_pctile=Decimal("33"),
+            atr_pct=Decimal("0.009"), atr_pct_pctile=Decimal("9"),
+            rel_strength=Decimal("-0.031"), rel_strength_pctile=Decimal("45"),
+            rel_strength_benchmark="SPY", divergence=None,
+        ),
+    }
     return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
                     kind="close", generated_at=_GENERATED_AT,
-                    catalysts=_catalysts(), technicals=technicals)
+                    catalysts=_catalysts(), technicals=technicals, standing=standing)
 
 
 def _catalysts() -> list[CatalystItem]:
@@ -149,9 +209,10 @@ def test_tiers_partition_every_name() -> None:
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     tiers = {r.symbol: _tier_of(r) for r in attribution.rows}
     assert tiers == {"A": "full", "B": "brief"}
-    assert obj.suppressed == ["C"]
+    # D (M20 fix round 2) is a second small, quiet holding — suppressed like C.
+    assert obj.suppressed == ["C", "D"]
     # No name is lost: shown ∪ suppressed == every held symbol.
-    assert set(tiers) | set(obj.suppressed) == {"A", "B", "C"}
+    assert set(tiers) | set(obj.suppressed) == {"A", "B", "C", "D"}
 
 
 def _tape_section(obj: BriefObject) -> Section:
@@ -178,7 +239,8 @@ def test_tape_quality_covers_every_owned_name() -> None:
     # snapshot of "every owned stock" has to include the quiet ones — a name
     # sitting on its support is exactly the one that did not move today.
     tape = _tape_section(_mixed())
-    assert [r.symbol for r in tape.rows] == ["A", "B", "C"]  # C is suppressed elsewhere
+    # C and D are suppressed elsewhere; D is M20 fix round 2's second quiet name.
+    assert [r.symbol for r in tape.rows] == ["A", "B", "C", "D"]
     assert tape.rows[0].rvol == 2.0
     assert tape.rows[0].range_position == 0.8
 
@@ -265,12 +327,12 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_eight() -> None:
+def test_schema_version_is_nine() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
     # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
     # `open_cn`/`close_cn` kinds and optional `currency`; v8 = M19's §4
-    # technical snapshot (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 8
+    # technical snapshot; v9 = M20's gated §5 `standing` section (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 9
 
 
 def test_material_residual_predicate() -> None:
@@ -496,3 +558,194 @@ def test_open_cn_is_not_gated_by_the_close_skip_check() -> None:
     obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
                    kind="open_cn", generated_at=_GENERATED_AT, currency="CNY")
     assert close_brief_should_skip(obj) is False
+
+
+# --- M20 (v9): the gated §5 `standing` section -----------------------------
+
+
+def _standing(symbol: str, **kw: object) -> Standing:
+    base: dict[str, object] = dict(
+        rsi14=Decimal("50"), rsi14_pctile=Decimal("50"),
+        macd_hist=Decimal("0"), macd_hist_pctile=Decimal("50"),
+        adx14=Decimal("20"), adx14_pctile=Decimal("50"),
+        atr_pct=Decimal("0.03"), atr_pct_pctile=Decimal("50"),
+        rel_strength=Decimal("0.01"), rel_strength_pctile=Decimal("50"),
+        rel_strength_benchmark="SPY", divergence=None,
+    )
+    base.update(kw)
+    return Standing(symbol=symbol, **base)  # type: ignore[arg-type]
+
+
+def _section(obj: BriefObject, section_id: str) -> Section:
+    return next(s for s in obj.sections if s.id.value == section_id)
+
+
+def _full(obj: BriefObject) -> list[str]:
+    """Symbols the EMAIL will show — full-tier rows only. Brief-tier rows exist
+    for every other owned name and are the archive's business."""
+    return [
+        r.symbol
+        for r in _section(obj, "standing").rows
+        if _tier_of(r) == "full" and r.symbol is not None
+    ]
+
+
+def _technicals_with_breakout(symbol: str) -> Technicals:
+    return _tech(symbol, breakout="up")
+
+
+def _assemble_with(
+    standing: dict[str, Standing] | None = None,
+    technicals: dict[str, Technicals] | None = None,
+) -> BriefObject:
+    """A minimal book carrying exactly the symbols under test, so §5's gate can
+    be exercised without dragging in the M5 tiering fixtures."""
+    standing = standing or {}
+    symbols = sorted({*standing, *(technicals or {})}) or ["A"]
+    lots = [_lot(s, "10", "90") for s in symbols]
+    prices = {s: Price(c=Decimal("110"), prev_c=Decimal("100")) for s in symbols}
+    closes = {s: Decimal("110") for s in symbols}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT,
+                    standing=standing, technicals=technicals)
+
+
+def test_standing_section_is_present_and_empty_when_nothing_is_stretched() -> None:
+    """An empty section with a note, NOT an omitted section — a renderer treats
+    an absent section as 'not computed' and says nothing at all."""
+    obj = _assemble_with(standing={"ASTS": _standing("ASTS")})
+    section = _section(obj, "standing")
+    assert _full(obj) == []
+    assert [r.tier.value if r.tier else None for r in section.rows] == ["brief"]
+    assert section.note is not None
+
+
+def test_percentile_above_90_qualifies_and_exactly_90_does_not() -> None:
+    """The strict boundary, matching assemble._RVOL_SPIKE's strict `>`."""
+    at = _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("90"))})
+    assert _full(at) == []
+    over = _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("90.1"))})
+    assert _full(over) == ["A"]
+
+
+def test_percentile_below_10_qualifies_and_exactly_10_does_not() -> None:
+    at = _assemble_with(standing={"A": _standing("A", atr_pct_pctile=Decimal("10"))})
+    assert _full(at) == []
+    under = _assemble_with(standing={"A": _standing("A", atr_pct_pctile=Decimal("9.9"))})
+    assert _full(under) == ["A"]
+
+
+def test_divergence_alone_qualifies_a_mid_range_name() -> None:
+    obj = _assemble_with(standing={"A": _standing("A", divergence="bearish")})
+    assert _full(obj) == ["A"]
+
+
+def test_breakout_from_section_4_qualifies_a_mid_range_name() -> None:
+    """Proves the gate arms are OR'd and that §5 reads §4's decision rather
+    than recomputing a breakout of its own."""
+    obj = _assemble_with(
+        standing={"A": _standing("A")},
+        technicals={"A": _technicals_with_breakout("A")},
+    )
+    assert _full(obj) == ["A"]
+
+
+def test_more_than_three_qualifying_names_are_capped_and_the_rest_noted() -> None:
+    stretched = {
+        s: _standing(s, rsi14_pctile=Decimal(p))
+        for s, p in (("A", "99"), ("B", "98"), ("C", "97"), ("D", "96"), ("E", "95"))
+    }
+    obj = _assemble_with(standing=stretched)
+    section = _section(obj, "standing")
+    assert _full(obj) == ["A", "B", "C"]
+    # The capped names are still carried, as brief-tier rows for the archive.
+    brief_symbols = sorted(
+        r.symbol for r in section.rows if _tier_of(r) == "brief" and r.symbol is not None
+    )
+    assert brief_symbols == ["D", "E"]
+    assert section.note is not None
+    assert "D" in section.note and "E" in section.note
+
+
+def _position(symbol: str) -> PositionMetrics:
+    return PositionMetrics(
+        symbol=symbol, day_return=None, value_cents=0, prior_value_cents=0,
+        day_pnl_cents=0, total_pnl_cents=0, total_cost_cents=0,
+        contribution_bps=None, weight=None,
+    )
+
+
+def test_cap_ties_break_by_symbol_for_determinism() -> None:
+    """Exercised directly against `_standing`, with `positions` fed in a
+    shuffled (non-alphabetical) order. `compute()` always returns positions
+    pre-sorted by symbol, and `_assemble_with`'s book does too — going through
+    either would make a tiebreak that silently rides on input order look
+    identical to one that ranks on `symbol`, for a book that never has that
+    order to begin with."""
+    shuffled = ["E", "C", "A", "D", "B"]
+    positions = [_position(s) for s in shuffled]
+    tied = {s: _standing(s, rsi14_pctile=Decimal("99")) for s in shuffled}
+    section = _standing_section(positions, tied, {})
+    rows = cast("list[dict[str, object]]", section["rows"])
+    full = [r["symbol"] for r in rows if r["tier"] == "full"]
+    brief = [r["symbol"] for r in rows if r["tier"] == "brief"]
+    assert full == ["A", "B", "C"]
+    assert brief == ["D", "E"]
+
+
+def test_null_percentiles_never_qualify_a_name() -> None:
+    obj = _assemble_with(standing={"A": _standing("A", rsi14_pctile=None, atr_pct_pctile=None)})
+    assert _full(obj) == []
+
+
+def test_all_null_percentiles_with_a_divergence_still_ranks() -> None:
+    """A short-baseline symbol can have every percentile null (below a full
+    year of history) and still qualify via `divergence` alone — reachable in
+    production. `_stretch`'s ranking key has to survive an all-None Standing
+    without raising on `None - 50`, not just return the right symbol."""
+    obj = _assemble_with(standing={
+        "A": _standing(
+            "A",
+            rsi14_pctile=None, macd_hist_pctile=None, adx14_pctile=None,
+            atr_pct_pctile=None, rel_strength_pctile=None,
+            divergence="bearish",
+        )
+    })
+    assert _full(obj) == ["A"]
+
+
+def test_section_4_output_is_unchanged_by_this_milestone() -> None:
+    """§5 adds a section; it never edits one. This is the guard."""
+    without = _section(_assemble_with(standing={}), "tape_quality")
+    with_standing = _section(
+        _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("99"))}),
+        "tape_quality",
+    )
+    assert without.model_dump() == with_standing.model_dump()
+
+
+def test_standing_section_omitted_when_not_computed() -> None:
+    """CN-shaped call: `assemble()` invoked with no `standing=` keyword at all,
+    mirroring `worker_cn.assemble.assemble_cn_close_and_store`'s call shape.
+    `None` means "not computed" and the section must be absent entirely — the
+    same reasoning `worker_cn/assemble.py` already applies to §4's technicals,
+    so a CN brief never states "nothing stretched" about names it never
+    measured."""
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                   kind="close", generated_at=_GENERATED_AT)
+    assert all(s.id.value != "standing" for s in obj.sections)
+
+
+def test_standing_section_present_with_note_when_computed_and_empty() -> None:
+    """A US call that DID compute standing (an explicit `{}` — nothing was
+    measurable, e.g. no held symbol had a bar on the session) still emits the
+    section, with a note. `{}` is real information; `None` is its absence,
+    which the previous test covers."""
+    obj = _assemble_with(standing={})
+    section = _section(obj, "standing")
+    assert section.note is not None

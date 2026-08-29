@@ -22,10 +22,11 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 | 1 | The one thing | Single highlighted paragraph explaining the session. |
 | 2 | Session scorecard | Day %, day $, vs SPY in bps, book value, unrealised P&L. |
 | 3 | Attribution | Per name: close, day %, day P&L, contribution bps, total P&L. **Plus a book totals row.** |
-| 4 | How they traded | Technical snapshot, every owned name: RVOL, weekly/monthly volume multiples, close-in-range bar, distance from the 20/50/200-day averages and their stack, nearest support and resistance with touch counts, the 52-week range, and a confirmed breakout marker (M19). *`vs sector` is still unbuilt — `rel_strength` remains a declared, unpopulated field.* |
-| 5 | Sector rotation | Per sector: day move, breadth (`n of m up`), bar vs benchmark. |
-| 6 | After hours | Earnings prints and extended-hours moves, with the implied effect on tomorrow's open in bps. |
-| 7 | Yesterday's flag, resolved | The accountability loop. Always last. |
+| 4 | How they traded | Technical snapshot, every owned name: RVOL, weekly/monthly volume multiples, close-in-range bar, distance from the 20/50/200-day averages and their stack, nearest support and resistance with touch counts, the 52-week range, and a confirmed breakout marker (M19). |
+| 5 | Where they stand | Per-stock indicator standing, gated and capped at three (M20): RSI, MACD histogram and ADX each paired with their own-history percentile, ATR% and its percentile (volatility regime), relative strength vs the sector benchmark (or SPY) and its percentile, and a divergence badge. Only names with a percentile past the decile, a divergence, or a §4 breakout appear; overflow names are named in the section note. Absent entirely when `standing` was never computed (CN). |
+| 6 | Sector rotation | Per sector: day move, breadth (`n of m up`), bar vs benchmark. |
+| 7 | After hours | Earnings prints and extended-hours moves, with the implied effect on tomorrow's open in bps. |
+| 8 | Yesterday's flag, resolved | The accountability loop. Always last. |
 
 ## The five mechanisms
 
@@ -33,7 +34,7 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 |---|---|---|---|
 | Position risk | Stage ③, thresholded in ④ | `fundamentals`, `flags` | Open brief, §6 |
 | Correlation flag | ③ rolling window; ④ threshold + rate limit | `flags` (`last_seen`) | Open brief §6 + dashboard, **max 1×/week** |
-| Accountability loop | ④ emits; the *next* brief's ④ resolves | `claims` | Close brief, §7 |
+| Accountability loop | ④ emits; the *next* brief's ④ resolves | `claims` | Close brief, §8 |
 | Suppression | ④ sets `section.tier` | `briefs.body.suppressed` | By absence + the roll-up line |
 | Tape quality | ③ from daily OHLCV | `metrics` | Close brief, §4 |
 

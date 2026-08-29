@@ -170,12 +170,68 @@ dimensionless and are deliberately *not* rescaled.
 last 7 calendar days (`scheduler.py`, "history already stored"), so a symbol
 added to the book today starts with a handful of bars and its levels, 200-day
 average and 52-week pair all render as `—` until enough history accumulates.
-Run `uv run -m worker.cli backfill --days 400` after adding a holding — one
+Run `uv run -m worker.cli backfill --days 500` after adding a holding — one
 Tiingo request per symbol regardless of window width, so it is cheap against the
-free tier's 50/hour. The snapshot degrades honestly in the meantime rather than
-inventing a level, but it does stay blank.
+free tier's 50/hour. **500, not 400:** M20's percentiles need 286 sessions
+(252 baseline + today + MACD's 33-bar warmup), and 400 calendar days is only
+≈275 sessions. The same applies to a new **sector benchmark**: without its own
+full window, every holding in that sector renders `rel_strength` as `—`. The
+snapshot degrades honestly in the meantime rather than inventing a level, but
+it does stay blank.
 
 `ma_stack`, `breakout` and the two `*_last_touch` dates are **not** in `metrics`
 — `metrics.value` is `numeric`, and coercing an enum or a date into it to avoid
 a migration would be the wrong trade. Assembly reads them off the returned
 dataclass instead.
+
+### M20 indicator standing
+
+§5 adds five paired indicators, each shipped as a value plus a percentile
+against that same symbol's own trailing 252 sessions of that same indicator —
+eleven `row` fields in all (`rel_strength` existed since M5; the other four
+value/percentile pairs plus `rel_strength_pctile`, `rel_strength_benchmark`
+and `divergence` are new).
+
+| Field | Percentile field | Definition |
+|---|---|---|
+| `rsi14` | `rsi14_pctile` | Wilder's RSI, 14 sessions, on `adj_c` |
+| `macd_hist` | `macd_hist_pctile` | EMA12 − EMA26, less its EMA9 signal. Histogram only — the line and the signal are two more numbers saying the same thing |
+| `adx14` | `adx14_pctile` | Wilder's ADX(14) from `adj_h`/`adj_l`/`adj_c`. Ships with no "> 25 = trending" label — the percentile is the comparison this section exists to make |
+| `atr_pct` | `atr_pct_pctile` | `atr14 / close`. The existing `atr14` is a raw price and is not comparable between an $8 and an $800 name |
+| `rel_strength` | `rel_strength_pctile` | 21-session return less the benchmark's over the same window |
+| `rel_strength_benchmark` | — | Which benchmark `rel_strength` was measured against: the holding's sector `benchmark_symbol`, falling back to SPY |
+| `divergence` | — | `bullish` \| `bearish` \| `null`, from the last two swing pivots (RSI vs price) |
+
+**The percentile rule:** `pctile(x, history) = 100 * |{h in history : h < x}| / |history|`,
+ranked against the **252 sessions BEFORE today** — the measured session is
+never in its own baseline, the same denominator discipline `vol_vs_5d`/`vol_vs_21d`
+already apply. Strict `<`, so a value tied with its whole history scores 0,
+not 50 — ties are common on ADX and a midpoint convention would invent
+movement. Below a full 252-session baseline the raw value is still computed
+and carried in the object (`Standing` populates it, `metrics` stores it) with
+a null percentile, but neither renderer shows it without its percentile — a
+field presented as a 1-year percentile that is really a 40-observation
+percentile is the same lie `high_52w` refuses to tell by staying null below a
+full year.
+
+`READ_DEPTH = 252 + 1 + 33 = 286` sessions — MACD's histogram has the longest
+warmup (EMA26 seeded by SMA26, its EMA9 signal seeded by SMA9). This is its
+own query at its own depth, not a change to §4's 252-session read.
+
+**The benchmark threshold is strict and asymmetric.** A sector benchmark needs
+the *full* 286-session window or `rel_strength`/`rel_strength_benchmark` are
+both null for every holding under it — it does **not** silently fall back to
+SPY, because that would change what the number claims without changing its
+label. A holding with a short window degrades gracefully (values are still
+carried in the object with percentiles null, though neither renderer shows
+them without their percentile); a benchmark with a short window goes dark for the whole
+sector. This is deliberate and also an open question worth revisiting: a
+newly-added sector benchmark makes every holding under it lose `rel_strength`
+until its own backfill completes, with no signal in the brief that this is
+why. It is live right now — the dev database's SPY sits at 285 bars, one
+short of 286, so `rel_strength` renders blank across the book until SPY is
+backfilled deeper. See D36.
+
+`divergence` (an enum) and `rel_strength_benchmark` (a string) are **not**
+stored in `metrics`, for the same reason `ma_stack`/`breakout` are not (M19):
+`metrics.value` is `numeric`. Assembly reads them off the returned dataclass.

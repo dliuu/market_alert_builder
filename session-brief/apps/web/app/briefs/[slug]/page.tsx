@@ -39,6 +39,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
+  const standing = brief.sections.find((s) => s.id === "standing");
   const overnightTape = brief.sections.find((s) => s.id === "overnight_tape");
   // Same key as the email template: `assemble_open` appends this exact string
   // to `data_quality.stale` while `constants.PREMARKET_FEED_IS_SYNTHETIC` is
@@ -457,6 +458,65 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </section>
       )}
 
+      {/* Where they stand (M20) — every name, full and brief tier alike. The
+          email caps at three full-tier rows; the archive has no such limit,
+          so it simply ignores the tier assembly assigned. The sparkline the
+          spec calls for needs the 252-session price series, which the
+          BriefObject doesn't carry (docs/02's single-contract rule) — deferred. */}
+      {standing && (
+        <section style={S.card}>
+          <h2 style={S.h2}>
+            Where they stand
+            <span style={S.sectionNote}> · against each name's own year</span>
+          </h2>
+          {standing.rows.length === 0 ? (
+            <p style={S.muted}>{standing.note}</p>
+          ) : (
+            <>
+              <table style={S.table}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>Symbol</th>
+                    <th style={S.thR}>RSI(14)</th>
+                    <th style={S.thR}>MACD hist</th>
+                    <th style={S.thR}>ADX(14)</th>
+                    <th style={S.thR}>ATR %</th>
+                    <th style={S.thR}>vs benchmark 21d</th>
+                    <th style={S.th}>Divergence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {standing.rows.map((r: Row) => (
+                    <tr key={r.symbol}>
+                      <td style={S.td}>{r.symbol}</td>
+                      <ValueAndPctile value={r.rsi14} pctile={r.rsi14_pctile} places={1} />
+                      <ValueAndPctile value={r.macd_hist} pctile={r.macd_hist_pctile} places={2} />
+                      <ValueAndPctile value={r.adx14} pctile={r.adx14_pctile} places={1} />
+                      <ValueAndPctile value={r.atr_pct} pctile={r.atr_pct_pctile} unsignedPercent />
+                      <ValueAndPctile
+                        value={r.rel_strength}
+                        pctile={r.rel_strength_pctile}
+                        percent
+                        suffix={r.rel_strength_benchmark ? ` vs ${r.rel_strength_benchmark}` : ""}
+                      />
+                      <td style={S.td}>{r.divergence ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {/* The overflow note ("… also stretched — see the archive") tells
+                  the email reader where to find the rest; the archive already
+                  shows every row, so pointing it back at itself is nonsense
+                  here. Any other note (e.g. "no name cleared the decile") is
+                  still real information and renders as normal. */}
+              {standing.note && !standing.note.endsWith("— see the archive") && (
+                <p style={S.muted}>{standing.note}</p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {/* Yesterday's flag, resolved — the accountability loop */}
       {brief.resolved_claims.length > 0 && (
         <section style={S.card}>
@@ -553,6 +613,11 @@ function pct(fraction: number): string {
   const sign = fraction >= 0 ? "+" : "−";
   return `${sign}${Math.abs(fraction * 100).toFixed(2)}%`;
 }
+// ATR% is a magnitude (average true range as a percent of price), never
+// negative — unlike rel_strength, it has no direction to sign.
+function unsignedPct(fraction: number): string {
+  return `${(fraction * 100).toFixed(2)}%`;
+}
 // The figures for one catalyst row. Every number comes from the object; a null
 // renders as "size unknown" rather than dropping the row, because an unknown
 // size is information and a missing row is not (open question 4).
@@ -569,6 +634,36 @@ function catalystDetail(r: Row, currencySymbol: string): string {
   if (r.days_to_event != null) parts.push(`${r.days_to_event} sessions pre-earnings`);
   if (r.days_outstanding != null) parts.push(`${r.days_outstanding} days outstanding`);
   return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+// A value is only ever shown beside its percentile — the pair is the unit, and
+// a bare oscillator value is what docs/01 was right to call soup. When the
+// percentile is null (an incomplete baseline), the value goes dark too rather
+// than showing a number with no comparison attached.
+function ValueAndPctile({
+  value,
+  pctile,
+  places = 2,
+  percent = false,
+  unsignedPercent = false,
+  suffix = "",
+}: {
+  value: number | null | undefined;
+  pctile: number | null | undefined;
+  places?: number;
+  percent?: boolean;
+  unsignedPercent?: boolean;
+  suffix?: string;
+}) {
+  if (value == null || pctile == null) return <td style={S.tdR}>—</td>;
+  const shown = unsignedPercent ? unsignedPct(value) : percent ? pct(value) : value.toFixed(places);
+  return (
+    <td style={S.tdR}>
+      {shown}
+      {suffix}
+      <span style={S.muted}> · {Math.round(pctile)}th</span>
+    </td>
+  );
 }
 
 function pctOrDash(fraction: number | null | undefined): string {

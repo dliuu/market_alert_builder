@@ -39,14 +39,18 @@ def validator() -> Draft202012Validator:
         "close_brief_v2.json",
         "close_brief_v6.json",
         "close_brief_v7.json",
+        "close_brief_v8.json",
         "open_brief.json",
         "open_brief_v3.json",
         "open_brief_v6.json",
         "open_brief_v7.json",
+        "open_brief_v8.json",
         "../cn/fixtures/cn_close_brief.json",
         "../cn/fixtures/cn_close_brief_v7.json",
+        "../cn/fixtures/cn_close_brief_v8.json",
         "../cn/fixtures/cn_open_brief.json",
         "../cn/fixtures/cn_open_brief_v7.json",
+        "../cn/fixtures/cn_open_brief_v8.json",
     ],
 )
 def test_fixture_validates_against_the_canonical_schema(

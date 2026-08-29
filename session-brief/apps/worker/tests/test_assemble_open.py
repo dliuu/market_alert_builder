@@ -13,7 +13,10 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from contracts.brief import BriefObject, Section
+from worker import config
 from worker.assemble_open import (
     SectorSetup,
     assemble_open,
@@ -241,10 +244,21 @@ def test_a_failed_calendar_endpoint_lands_in_data_quality_missing() -> None:
     assert obj.data_quality.missing == ["calendar.economic"]
 
 
-def test_matches_frozen_fixture() -> None:
+def test_matches_frozen_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     """M15: the snapshot now carries a populated §2 and §3 — one tape read, one
     name gapping pre-market (SNDK, clears the threshold) and one flat (RKLB,
-    rolls up into suppressed[]) — plus the horizon-0 claim SNDK's gap emits."""
+    rolls up into suppressed[]) — plus the horizon-0 claim SNDK's gap emits.
+
+    The fixture was frozen key-less (`data_quality.stale` carries
+    `overnight_tape.synthetic`), and this has already regressed twice from a
+    developer running the suite with `FDN_API_KEY` set in `.env` (M19, and
+    again in M20's fix round 3) — `config.premarket_feed_is_synthetic()` is
+    read live by `assemble_open`, so the snapshot silently drifted with
+    whoever ran it. Pinned here so the test passes or fails identically
+    regardless of the developer's environment, the same way CI's key-less run
+    always would.
+    """
+    monkeypatch.setattr(config, "FDN_API_KEY", "")
     premarket = [
         _pm("SNDK", "49.26", "47.32"),
         _pm("RKLB", "24.98", "25.00"),

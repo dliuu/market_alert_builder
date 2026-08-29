@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 8,
   "brief_id": "00000000-0000-0000-0000-0000000000c2-2026-08-14-open_cn",
   "user_id": "00000000-0000-0000-0000-0000000000c2",
   "session_date": "2026-08-14",
@@ -75,18 +75,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": "SMH",
@@ -148,18 +137,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
     },
@@ -228,18 +206,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": "300750.SZ",
@@ -301,18 +268,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
     },
@@ -381,18 +337,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": null,
@@ -454,18 +399,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
     }

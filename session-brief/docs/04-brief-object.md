@@ -102,6 +102,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 6 | M17 | close brief `catalysts` section and its row fields |
 | 7 | CN-M1 | `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD) |
 | 8 | M19 | §4 technical snapshot row fields: `ma20_dist`/`ma50_dist`/`ma200_dist`, `ma_stack`, `vol_vs_5d`/`vol_vs_21d`, `atr14`, `support`/`resistance` with `*_touches` and `*_last_touch`, `high_52w`/`low_52w`, `breakout` |
+| 9 | M20 | §5 standing row fields: `rsi14`/`macd_hist`/`adx14`/`atr_pct`/`rel_strength` with their `*_pctile` pairs, `rel_strength_benchmark`, `divergence`; new section id `standing` |
 
 ## Narration contract
 
