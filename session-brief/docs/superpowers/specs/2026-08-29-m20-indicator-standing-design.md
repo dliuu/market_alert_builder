@@ -233,9 +233,20 @@ A name qualifies when **any** of:
 Comparison at the boundary is **strict** in the same direction M19 chose for
 `rvol > 1.5`: exactly 90 does not qualify. One boundary convention in the brief.
 
-More than three qualify → keep the three largest `|pctile - 50|`, ties broken by
-symbol so the output is deterministic. The rest go into `section.note`
-("QS, MU also stretched — see the archive").
+**The section carries a row per owned name; the cap is expressed as a tier, not
+as a deletion.** The three most stretched qualifying names get `tier: "full"`;
+every other name gets `tier: "brief"`. The email renders full-tier rows only;
+the archive renders all of them.
+
+This reuses the existing `row.tier` mechanism (M5) rather than reinventing it,
+and it is what lets the archive be ungated while the email is capped — without
+assembly emitting two row sets, and without the renderer making the decision
+itself (D16). Ordering among qualifying names is by descending `|pctile - 50|`,
+ties broken by symbol so the output is deterministic; the rest follow in symbol
+order.
+
+Overflow qualifying names are still named in `section.note`, because a reader of
+the *email* cannot see the brief-tier rows.
 
 Zero qualify → the section renders an absence note, the pattern
 `catalysts?.note` already establishes. Absence is information and it is cheap.
@@ -264,15 +275,18 @@ Sits immediately after §4. §4's own markup is untouched.
 
 ### Web archive
 
-All owned names, no gate, plus the two things that cannot exist in email:
+All owned names — the archive renders every row in the section, full-tier and
+brief-tier alike, so the gate applies to the email only. It carries the full
+value + percentile grid for all five indicators.
 
-- a 252-session inline SVG sparkline per name, with the M19 support/resistance
-  zones drawn as **bands**. Those zones are computed today and only ever
-  described in prose; a band is what a zone actually is.
-- the full value + percentile grid for all five indicators.
-
-SVG is ~1–2KB per name here and is stripped by Gmail, which is why it is
-archive-only. `docs/06`'s 80KB email budget is unaffected.
+**The sparkline is deferred, correcting an earlier draft of this spec.** A
+252-session price line with the M19 zones drawn as bands needs the price
+*series*, and the BriefObject carries the levels but not the bars. The archive
+page could query `bars_daily` directly — it already uses Drizzle for `briefs` —
+but the README is explicit that the BriefObject is *"the single contract both
+the email and the web archive render from"*, and an archive rendering from two
+sources changes that contract rather than a rendering detail. It is a real
+feature that needs its own decision; it is not smuggled in under M20.
 
 ---
 
