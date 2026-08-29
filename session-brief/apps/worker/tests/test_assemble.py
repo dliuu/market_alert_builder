@@ -105,18 +105,30 @@ def test_both_movers_are_full_none_suppressed() -> None:
 def _mixed() -> BriefObject:
     # C is deliberately a *small* position (~4.6%): since the weight floor, only a
     # name under _ALWAYS_SHOW_WEIGHT can be suppressed at all, so a fat quiet name
-    # would no longer exercise the roll-up line this fixture exists to cover.
-    lots = [_lot("A", "10", "90"), _lot("B", "20", "40"), _lot("C", "1", "100")]
+    # would no longer exercise the roll-up line this fixture exists to cover. D is
+    # a second small, quiet, suppressed name added solely so the standing section
+    # below has four qualifying names to cap at three and demonstrate the overflow
+    # note in the canonical fixture (M20 fix round 2) -- with only three held
+    # names, qualifying can never exceed _STANDING_CAP and the note stays null.
+    lots = [
+        _lot("A", "10", "90"), _lot("B", "20", "40"),
+        _lot("C", "1", "100"), _lot("D", "1", "50"),
+    ]
     prices = {
         "A": Price(c=Decimal("110"), prev_c=Decimal("100")),  # +10.0% → full
         "B": Price(c=Decimal("49.75"), prev_c=Decimal("50")),  # -0.5%  → brief
         "C": Price(c=Decimal("100.1"), prev_c=Decimal("100")),  # +0.1%  → suppressed
+        "D": Price(c=Decimal("50.05"), prev_c=Decimal("50")),  # +0.1%  → suppressed
     }
-    closes = {"A": Decimal("110"), "B": Decimal("49.75"), "C": Decimal("100.1")}
+    closes = {
+        "A": Decimal("110"), "B": Decimal("49.75"),
+        "C": Decimal("100.1"), "D": Decimal("50.05"),
+    }
     tape = {
         "A": _tape("A", "2", "0.8"),
         "B": _tape("B", "1.2", "0.5"),
         "C": _tape("C", "1", "0.5"),
+        "D": _tape("D", "1", "0.5"),
     }
     result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
     technicals = {
@@ -124,9 +136,54 @@ def _mixed() -> BriefObject:
         "B": _tech("B"),
         "C": _tech("C", ma_200=None, ma_stack=None, resistance=None),
     }
+    # Four qualifying standings so the cap (3) actually caps: A leads (most
+    # stretched, and the row the fixture uses to round-trip all eleven M20
+    # fields -- non-null throughout, a real benchmark ticker, and a divergence),
+    # B and C also qualify and land full-tier, D is the overflow -> brief-tier,
+    # named in the note. Every field on every row is filled so the fixture
+    # exercises the whole row shape, not just the fields that happen to matter
+    # for gating.
+    standing = {
+        "A": _standing(
+            "A",
+            rsi14=Decimal("78.4"), rsi14_pctile=Decimal("97"),
+            macd_hist=Decimal("0.62"), macd_hist_pctile=Decimal("55"),
+            adx14=Decimal("34.1"), adx14_pctile=Decimal("48"),
+            atr_pct=Decimal("0.052"), atr_pct_pctile=Decimal("60"),
+            rel_strength=Decimal("0.081"), rel_strength_pctile=Decimal("52"),
+            rel_strength_benchmark="SPY", divergence="bullish",
+        ),
+        "B": _standing(
+            "B",
+            rsi14=Decimal("41.2"), rsi14_pctile=Decimal("38"),
+            macd_hist=Decimal("-0.18"), macd_hist_pctile=Decimal("6"),
+            adx14=Decimal("18.4"), adx14_pctile=Decimal("44"),
+            atr_pct=Decimal("0.021"), atr_pct_pctile=Decimal("35"),
+            rel_strength=Decimal("-0.012"), rel_strength_pctile=Decimal("40"),
+            rel_strength_benchmark="SPY", divergence=None,
+        ),
+        "C": _standing(
+            "C",
+            rsi14=Decimal("55.7"), rsi14_pctile=Decimal("58"),
+            macd_hist=Decimal("0.05"), macd_hist_pctile=Decimal("53"),
+            adx14=Decimal("22.9"), adx14_pctile=Decimal("93"),
+            atr_pct=Decimal("0.018"), atr_pct_pctile=Decimal("47"),
+            rel_strength=Decimal("0.004"), rel_strength_pctile=Decimal("50"),
+            rel_strength_benchmark="XLK", divergence=None,
+        ),
+        "D": _standing(
+            "D",
+            rsi14=Decimal("48.9"), rsi14_pctile=Decimal("52"),
+            macd_hist=Decimal("-0.02"), macd_hist_pctile=Decimal("49"),
+            adx14=Decimal("15.6"), adx14_pctile=Decimal("33"),
+            atr_pct=Decimal("0.009"), atr_pct_pctile=Decimal("9"),
+            rel_strength=Decimal("-0.031"), rel_strength_pctile=Decimal("45"),
+            rel_strength_benchmark="SPY", divergence=None,
+        ),
+    }
     return assemble(result, closes, tape, user_id=_USER, session_date=_SESSION,
                     kind="close", generated_at=_GENERATED_AT,
-                    catalysts=_catalysts(), technicals=technicals)
+                    catalysts=_catalysts(), technicals=technicals, standing=standing)
 
 
 def _catalysts() -> list[CatalystItem]:
@@ -152,9 +209,10 @@ def test_tiers_partition_every_name() -> None:
     attribution = next(s for s in obj.sections if s.id.value == "attribution")
     tiers = {r.symbol: _tier_of(r) for r in attribution.rows}
     assert tiers == {"A": "full", "B": "brief"}
-    assert obj.suppressed == ["C"]
+    # D (M20 fix round 2) is a second small, quiet holding — suppressed like C.
+    assert obj.suppressed == ["C", "D"]
     # No name is lost: shown ∪ suppressed == every held symbol.
-    assert set(tiers) | set(obj.suppressed) == {"A", "B", "C"}
+    assert set(tiers) | set(obj.suppressed) == {"A", "B", "C", "D"}
 
 
 def _tape_section(obj: BriefObject) -> Section:
@@ -181,7 +239,8 @@ def test_tape_quality_covers_every_owned_name() -> None:
     # snapshot of "every owned stock" has to include the quiet ones — a name
     # sitting on its support is exactly the one that did not move today.
     tape = _tape_section(_mixed())
-    assert [r.symbol for r in tape.rows] == ["A", "B", "C"]  # C is suppressed elsewhere
+    # C and D are suppressed elsewhere; D is M20 fix round 2's second quiet name.
+    assert [r.symbol for r in tape.rows] == ["A", "B", "C", "D"]
     assert tape.rows[0].rvol == 2.0
     assert tape.rows[0].range_position == 0.8
 
