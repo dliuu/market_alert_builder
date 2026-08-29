@@ -23,8 +23,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, localcontext
 
+from sqlalchemy import RowMapping, text
+from sqlalchemy.engine import Connection
+
+from worker.constants import BENCHMARK_SYMBOL
 from worker.technicals import PIVOT_K, TechBar, swing_pivots
 
 PREC = 28
@@ -416,3 +421,176 @@ def divergence(
         if is_divergent(first.price, second.price, r1, r2):
             return "bearish" if kind == "high" else "bullish"
     return None
+
+
+# --- Database layer -------------------------------------------------------
+
+_STORE_SCALE = Decimal("0.0000000001")
+
+# The `technicals._READ_BARS` shape at this module's own depth. Deliberately a
+# second constant rather than a parameter on the first: the two modules have
+# different window requirements and coupling them means one change silently
+# moves the other's baseline.
+_READ_BARS = text("""
+    SELECT symbol, session_date, adj_c, adj_h, adj_l, adj_v FROM (
+        SELECT symbol, session_date, adj_c, adj_h, adj_l, adj_v,
+               row_number() OVER (
+                   PARTITION BY symbol ORDER BY session_date DESC
+               ) AS rn
+        FROM bars_daily
+        WHERE symbol = ANY(:symbols) AND session_date <= :session_date
+    ) ranked
+    WHERE rn <= :depth
+    ORDER BY symbol, session_date
+""")
+
+_READ_BENCHMARKS = text("""
+    SELECT h.symbol AS symbol, s.benchmark_symbol AS benchmark
+    FROM holdings h
+    LEFT JOIN sectors s ON s.id = h.sector_id
+    WHERE h.user_id = :user_id AND h.symbol = ANY(:symbols)
+""")
+
+_UPSERT = text("""
+    INSERT INTO metrics (user_id, symbol, session_date, metric, value)
+    VALUES (:user_id, :symbol, :session_date, :metric, :value)
+    ON CONFLICT (user_id, symbol, session_date, metric)
+    DO UPDATE SET value = EXCLUDED.value
+""")
+
+
+def compute_and_store_standing(
+    conn: Connection,
+    user_id: str,
+    symbols: list[str],
+    session_date: date,
+) -> dict[str, Standing]:
+    """Indicator standing for ``symbols`` on ``session_date``, persisted to
+    ``metrics`` and returned keyed by symbol.
+
+    A symbol is absent from the result when it has no bar on the session, or
+    when any bar in its 286-session window lacks the adjusted series. That
+    second guard is M19's and it is the important one: a null ``adj_h`` means
+    the row predates the adjusted-bar replay, and computing an indicator from
+    the raw column would produce a confident wrong number rather than a null.
+    """
+    if not symbols:
+        return {}
+
+    benchmark_of = _benchmarks(conn, user_id, symbols)
+    # BENCHMARK_SYMBOL (SPY) is always wanted, not just the explicit overrides:
+    # any symbol whose sector has no benchmark_symbol on record falls back to
+    # it, and that fallback is only decided per-symbol below — this can't tell
+    # in advance which symbols will need SPY's window, so it always fetches it.
+    wanted = sorted({*symbols, BENCHMARK_SYMBOL, *(b for b in benchmark_of.values() if b)})
+    windows = _read_windows(conn, wanted, session_date)
+
+    out: dict[str, Standing] = {}
+    for symbol in symbols:
+        bars = windows.get(symbol)
+        if bars is None or bars[-1].session_date != session_date:
+            continue
+        benchmark = benchmark_of.get(symbol) or BENCHMARK_SYMBOL
+        benchmark_bars = windows.get(benchmark) or []
+        # A benchmark whose own window is incomplete yields no relative
+        # strength. Silently falling back to SPY would change what the number
+        # claims without changing how it is labelled. "Complete" means the
+        # full READ_DEPTH window, matching what every window is read at below
+        # — anything short of that lets `rel_strength_series` quietly compute
+        # over a shorter shared tail instead of the intended full history.
+        usable = benchmark_bars and len(benchmark_bars) >= READ_DEPTH
+        out[symbol] = standing_for_symbol(
+            symbol,
+            bars,
+            benchmark_bars=benchmark_bars if usable else [],
+            benchmark_symbol=benchmark if usable else None,
+        )
+
+    _store(conn, user_id, session_date, out)
+    return out
+
+
+def _benchmarks(conn: Connection, user_id: str, symbols: list[str]) -> dict[str, str | None]:
+    return {
+        str(r["symbol"]): (str(r["benchmark"]) if r["benchmark"] else None)
+        for r in conn.execute(
+            _READ_BENCHMARKS, {"user_id": user_id, "symbols": symbols}
+        ).mappings()
+    }
+
+
+def _read_windows(
+    conn: Connection, symbols: list[str], session_date: date
+) -> dict[str, list[TechBar]]:
+    rows: dict[str, list[RowMapping]] = {}
+    for row in conn.execute(
+        _READ_BARS,
+        {"symbols": symbols, "session_date": session_date, "depth": READ_DEPTH},
+    ).mappings():
+        rows.setdefault(str(row["symbol"]), []).append(row)
+
+    out: dict[str, list[TechBar]] = {}
+    for symbol, symbol_rows in rows.items():
+        bars = _bars(symbol_rows)
+        if bars is not None:
+            out[symbol] = bars
+    return out
+
+
+def _bars(rows: Sequence[RowMapping]) -> list[TechBar] | None:
+    """Adjusted bars for one symbol, or ``None`` when any bar in the window is
+    missing part of the adjusted series (the M19 rule)."""
+    out = []
+    for row in rows:
+        adj_c, adj_h, adj_l, adj_v = (
+            row["adj_c"], row["adj_h"], row["adj_l"], row["adj_v"],
+        )
+        if adj_c is None or adj_h is None or adj_l is None or adj_v is None:
+            return None
+        session_date = row["session_date"]
+        assert isinstance(session_date, date)
+        out.append(
+            TechBar(
+                session_date=session_date,
+                h=Decimal(str(adj_h)),
+                l=Decimal(str(adj_l)),
+                c=Decimal(str(adj_c)),
+                v=int(adj_v),
+            )
+        )
+    return out
+
+
+def _store(
+    conn: Connection, user_id: str, session_date: date, standing: dict[str, Standing]
+) -> None:
+    """Persist the numeric metrics only. ``divergence`` and
+    ``rel_strength_benchmark`` are deliberately absent for M19's reason:
+    ``metrics.value`` is ``numeric``, and coercing an enum or a ticker into it
+    to save a migration would be the wrong trade."""
+    for s in standing.values():
+        values: dict[str, Decimal | None] = {
+            "rsi14": s.rsi14,
+            "rsi14_pctile": s.rsi14_pctile,
+            "macd_hist": s.macd_hist,
+            "macd_hist_pctile": s.macd_hist_pctile,
+            "adx14": s.adx14,
+            "adx14_pctile": s.adx14_pctile,
+            "atr_pct": s.atr_pct,
+            "atr_pct_pctile": s.atr_pct_pctile,
+            "rel_strength": s.rel_strength,
+            "rel_strength_pctile": s.rel_strength_pctile,
+        }
+        for metric, value in values.items():
+            if value is None:
+                continue
+            conn.execute(
+                _UPSERT,
+                {
+                    "user_id": user_id,
+                    "symbol": s.symbol,
+                    "session_date": session_date,
+                    "metric": metric,
+                    "value": value.quantize(_STORE_SCALE),
+                },
+            )
