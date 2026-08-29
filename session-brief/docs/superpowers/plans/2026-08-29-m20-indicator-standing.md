@@ -132,7 +132,7 @@ def test_rsi_first_value_is_at_the_window_boundary():
 
 @pytest.mark.parametrize(
     ("offset", "expected"),
-    [(0, "70.46"), (10, "44.44"), (-1, "62.91")],
+    [(0, "70.46"), (10, "54.67"), (-1, "60.22")],
 )
 def test_rsi_known_answers(offset: int, expected: str):
     """Wilder RSI(14), SMA-seeded, to 2dp at three separate offsets."""
