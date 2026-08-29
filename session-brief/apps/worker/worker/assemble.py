@@ -50,6 +50,7 @@ from worker.claims import (
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
 from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, CATALYST_MODEL_VERSION
 from worker.narrate import Narrator, narrate_and_apply
+from worker.oscillators import Standing, compute_and_store_standing
 from worker.tape import TapeMetrics, compute_and_store_tape
 from worker.technicals import Technicals, Zone, compute_and_store_technicals
 
@@ -66,8 +67,10 @@ from worker.technicals import Technicals, Zone, compute_and_store_technicals
 # (D32): `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD,
 # so v6 bodies keep validating). v8 = M19: the §4 technical snapshot — MA
 # distances and stack, the 5d/21d volume ratios, ATR, the support/resistance
-# zones with their touch evidence, the 52-week pair, and `breakout`.
-SCHEMA_VERSION = 8
+# zones with their touch evidence, the 52-week pair, and `breakout`. v9 = M20:
+# the gated §5 `standing` section — RSI/MACD/ADX/ATR-pct/relative-strength,
+# each paired with its own 252-session percentile, plus `divergence`.
+SCHEMA_VERSION = 9
 
 _BPS_PER_UNIT = 10_000
 
@@ -108,6 +111,7 @@ def assemble(
     catalysts: list[CatalystItem] | None = None,
     currency: str = "USD",
     technicals: dict[str, Technicals] | None = None,
+    standing: dict[str, Standing] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -137,6 +141,7 @@ def assemble(
     sections: list[dict[str, object]] = [
         _attribution(shown, closes, decomp),
         _tape_quality(result.positions, closes, tape, technicals or {}),
+        _standing(result.positions, standing or {}, technicals or {}),
     ]
     # Catalysts is post-close data — Form 4s and 144s land after the bell — so
     # it belongs to the close brief only. The open brief is assembled elsewhere
@@ -368,6 +373,114 @@ def _zone_fields(prefix: str, zone: Zone | None) -> dict[str, object]:
     }
 
 
+# The decile is the gate. A percentile at exactly 90 does not qualify — the
+# same strict comparison `_RVOL_SPIKE` already uses, so the brief has one
+# boundary convention rather than two that can drift apart.
+_STRETCHED_HIGH = Decimal("90")
+_STRETCHED_LOW = Decimal("10")
+
+# Three blocks is what the email can carry beside a §4 that already lists every
+# name. The rest are named in the note and rendered in full on the archive.
+_STANDING_CAP = 3
+
+_PCTILE_FIELDS = (
+    "rsi14_pctile", "macd_hist_pctile", "adx14_pctile",
+    "atr_pct_pctile", "rel_strength_pctile",
+)
+
+
+def _stretch(s: Standing) -> Decimal:
+    """How far this name's most extreme percentile sits from the middle. The
+    ranking key for the cap; 0 when nothing is measurable."""
+    distances = [
+        abs(value - Decimal(50))
+        for name in _PCTILE_FIELDS
+        if (value := getattr(s, name)) is not None
+    ]
+    return max(distances, default=Decimal(0))
+
+
+def _qualifies(s: Standing, breakout: str | None) -> bool:
+    """Three OR'd arms: a percentile past either decile, a divergence, or §4's
+    already-decided breakout. §5 reads that decision — it never recomputes a
+    breakout of its own, which would be a second volume threshold."""
+    if breakout is not None or s.divergence is not None:
+        return True
+    return any(
+        value > _STRETCHED_HIGH or value < _STRETCHED_LOW
+        for name in _PCTILE_FIELDS
+        if (value := getattr(s, name)) is not None
+    )
+
+
+def _standing(
+    positions: list[PositionMetrics],
+    standing: dict[str, Standing],
+    technicals: dict[str, Technicals],
+) -> dict[str, object]:
+    """§5 "Where they stand" — the indicator standing for names that are
+    actually stretched.
+
+    Unlike §4, this section IS gated. §4 answers "where does each position
+    stand" and every name has an answer; §5 answers "is any of that unusual for
+    this name", and on most sessions for most names the answer is no. A second
+    untiered per-name section would say every name twice in one email.
+
+    The section is emitted even when empty: an absent section reads to a
+    renderer as "not computed", and "nothing is stretched" is information.
+    """
+    present = [s for p in positions if (s := standing.get(p.symbol)) is not None]
+    qualifying = sorted(
+        (
+            s
+            for s in present
+            if _qualifies(s, technicals[s.symbol].breakout if s.symbol in technicals else None)
+        ),
+        key=lambda s: (-_stretch(s), s.symbol),
+    )
+    shown, overflow = qualifying[:_STANDING_CAP], qualifying[_STANDING_CAP:]
+    full = {s.symbol for s in shown}
+
+    if not qualifying:
+        note = "Nothing stretched — every name inside its own 10-90th percentile band"
+    elif overflow:
+        note = f"{', '.join(sorted(s.symbol for s in overflow))} also stretched — see the archive"
+    else:
+        note = None
+
+    # Every name with a standing gets a row; the cap is expressed as a tier so
+    # the archive can be ungated while the email is capped, without assembly
+    # emitting two row sets or the renderer deciding anything (D16). The
+    # full-tier rows lead, in gate order; the rest follow by symbol, because a
+    # reference list is scanned by name.
+    rows = [_standing_row(s, "full") for s in shown]
+    rows += [
+        _standing_row(s, "brief")
+        for s in sorted(present, key=lambda s: s.symbol)
+        if s.symbol not in full
+    ]
+    return {"id": "standing", "tier": "full", "note": note, "rows": rows}
+
+
+def _standing_row(s: Standing, tier: str) -> dict[str, object]:
+    return {
+        "symbol": s.symbol,
+        "tier": tier,
+        "rsi14": _ratio(s.rsi14),
+        "rsi14_pctile": _ratio(s.rsi14_pctile),
+        "macd_hist": _ratio(s.macd_hist),
+        "macd_hist_pctile": _ratio(s.macd_hist_pctile),
+        "adx14": _ratio(s.adx14),
+        "adx14_pctile": _ratio(s.adx14_pctile),
+        "atr_pct": _ratio(s.atr_pct),
+        "atr_pct_pctile": _ratio(s.atr_pct_pctile),
+        "rel_strength": _ratio(s.rel_strength),
+        "rel_strength_pctile": _ratio(s.rel_strength_pctile),
+        "rel_strength_benchmark": s.rel_strength_benchmark,
+        "divergence": s.divergence,
+    }
+
+
 def _distance(close: Decimal | None, level: Fraction | None) -> float | None:
     """Signed distance of the close from a level, as a fraction. Distances are
     comparable across names in a way the raw averages are not."""
@@ -376,7 +489,7 @@ def _distance(close: Decimal | None, level: Fraction | None) -> float | None:
     return float(Fraction(close) / level - 1)
 
 
-def _ratio(value: Fraction | None) -> float | None:
+def _ratio(value: Fraction | Decimal | None) -> float | None:
     return None if value is None else float(value)
 
 
@@ -445,6 +558,9 @@ def assemble_and_store(
         session_date,
         rvol={sym: metrics.rvol for sym, metrics in tape.items()},
     )
+    # §5's indicator standing (M20). Its own 286-session read: MACD's warmup
+    # needs more history than §4's 252-session window provides.
+    standing = compute_and_store_standing(conn, user_id, symbols, session_date)
     decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
@@ -480,6 +596,7 @@ def assemble_and_store(
         decomp=decomp,
         catalysts=catalysts,
         technicals=technicals,
+        standing=standing,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above) but emits none.

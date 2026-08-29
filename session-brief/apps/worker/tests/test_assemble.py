@@ -17,6 +17,7 @@ from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
 from worker.assemble_shared import to_contract_json
 from worker.catalysts import CatalystItem
 from worker.compute import Lot, Price, compute
+from worker.oscillators import Standing
 from worker.tape import TapeMetrics
 from worker.technicals import Technicals, Zone
 
@@ -265,12 +266,12 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_eight() -> None:
+def test_schema_version_is_nine() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
     # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
     # `open_cn`/`close_cn` kinds and optional `currency`; v8 = M19's §4
-    # technical snapshot (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 8
+    # technical snapshot; v9 = M20's gated §5 `standing` section (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 9
 
 
 def test_material_residual_predicate() -> None:
@@ -496,3 +497,131 @@ def test_open_cn_is_not_gated_by_the_close_skip_check() -> None:
     obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
                    kind="open_cn", generated_at=_GENERATED_AT, currency="CNY")
     assert close_brief_should_skip(obj) is False
+
+
+# --- M20 (v9): the gated §5 `standing` section -----------------------------
+
+
+def _standing(symbol: str, **kw: object) -> Standing:
+    base: dict[str, object] = dict(
+        rsi14=Decimal("50"), rsi14_pctile=Decimal("50"),
+        macd_hist=Decimal("0"), macd_hist_pctile=Decimal("50"),
+        adx14=Decimal("20"), adx14_pctile=Decimal("50"),
+        atr_pct=Decimal("0.03"), atr_pct_pctile=Decimal("50"),
+        rel_strength=Decimal("0.01"), rel_strength_pctile=Decimal("50"),
+        rel_strength_benchmark="SPY", divergence=None,
+    )
+    base.update(kw)
+    return Standing(symbol=symbol, **base)  # type: ignore[arg-type]
+
+
+def _section(obj: BriefObject, section_id: str) -> Section:
+    return next(s for s in obj.sections if s.id.value == section_id)
+
+
+def _full(obj: BriefObject) -> list[str]:
+    """Symbols the EMAIL will show — full-tier rows only. Brief-tier rows exist
+    for every other owned name and are the archive's business."""
+    return [
+        r.symbol
+        for r in _section(obj, "standing").rows
+        if _tier_of(r) == "full" and r.symbol is not None
+    ]
+
+
+def _technicals_with_breakout(symbol: str) -> Technicals:
+    return _tech(symbol, breakout="up")
+
+
+def _assemble_with(
+    standing: dict[str, Standing] | None = None,
+    technicals: dict[str, Technicals] | None = None,
+) -> BriefObject:
+    """A minimal book carrying exactly the symbols under test, so §5's gate can
+    be exercised without dragging in the M5 tiering fixtures."""
+    standing = standing or {}
+    symbols = sorted({*standing, *(technicals or {})}) or ["A"]
+    lots = [_lot(s, "10", "90") for s in symbols]
+    prices = {s: Price(c=Decimal("110"), prev_c=Decimal("100")) for s in symbols}
+    closes = {s: Decimal("110") for s in symbols}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    return assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                    kind="close", generated_at=_GENERATED_AT,
+                    standing=standing, technicals=technicals)
+
+
+def test_standing_section_is_present_and_empty_when_nothing_is_stretched() -> None:
+    """An empty section with a note, NOT an omitted section — a renderer treats
+    an absent section as 'not computed' and says nothing at all."""
+    obj = _assemble_with(standing={"ASTS": _standing("ASTS")})
+    section = _section(obj, "standing")
+    assert _full(obj) == []
+    assert [r.tier.value if r.tier else None for r in section.rows] == ["brief"]
+    assert section.note is not None
+
+
+def test_percentile_above_90_qualifies_and_exactly_90_does_not() -> None:
+    """The strict boundary, matching assemble._RVOL_SPIKE's strict `>`."""
+    at = _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("90"))})
+    assert _full(at) == []
+    over = _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("90.1"))})
+    assert _full(over) == ["A"]
+
+
+def test_percentile_below_10_qualifies_and_exactly_10_does_not() -> None:
+    at = _assemble_with(standing={"A": _standing("A", atr_pct_pctile=Decimal("10"))})
+    assert _full(at) == []
+    under = _assemble_with(standing={"A": _standing("A", atr_pct_pctile=Decimal("9.9"))})
+    assert _full(under) == ["A"]
+
+
+def test_divergence_alone_qualifies_a_mid_range_name() -> None:
+    obj = _assemble_with(standing={"A": _standing("A", divergence="bearish")})
+    assert _full(obj) == ["A"]
+
+
+def test_breakout_from_section_4_qualifies_a_mid_range_name() -> None:
+    """Proves the gate arms are OR'd and that §5 reads §4's decision rather
+    than recomputing a breakout of its own."""
+    obj = _assemble_with(
+        standing={"A": _standing("A")},
+        technicals={"A": _technicals_with_breakout("A")},
+    )
+    assert _full(obj) == ["A"]
+
+
+def test_more_than_three_qualifying_names_are_capped_and_the_rest_noted() -> None:
+    stretched = {
+        s: _standing(s, rsi14_pctile=Decimal(p))
+        for s, p in (("A", "99"), ("B", "98"), ("C", "97"), ("D", "96"), ("E", "95"))
+    }
+    obj = _assemble_with(standing=stretched)
+    section = _section(obj, "standing")
+    assert _full(obj) == ["A", "B", "C"]
+    # The capped names are still carried, as brief-tier rows for the archive.
+    brief_symbols = sorted(
+        r.symbol for r in section.rows if _tier_of(r) == "brief" and r.symbol is not None
+    )
+    assert brief_symbols == ["D", "E"]
+    assert section.note is not None
+    assert "D" in section.note and "E" in section.note
+
+
+def test_cap_ties_break_by_symbol_for_determinism() -> None:
+    tied = {s: _standing(s, rsi14_pctile=Decimal("99")) for s in ("E", "D", "C", "B", "A")}
+    assert _full(_assemble_with(standing=tied)) == ["A", "B", "C"]
+
+
+def test_null_percentiles_never_qualify_a_name() -> None:
+    obj = _assemble_with(standing={"A": _standing("A", rsi14_pctile=None, atr_pct_pctile=None)})
+    assert _full(obj) == []
+
+
+def test_section_4_output_is_unchanged_by_this_milestone() -> None:
+    """§5 adds a section; it never edits one. This is the guard."""
+    without = _section(_assemble_with(standing={}), "tape_quality")
+    with_standing = _section(
+        _assemble_with(standing={"A": _standing("A", rsi14_pctile=Decimal("99"))}),
+        "tape_quality",
+    )
+    assert without.model_dump() == with_standing.model_dump()

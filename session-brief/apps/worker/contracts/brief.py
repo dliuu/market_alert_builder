@@ -66,6 +66,7 @@ class Id(Enum):
     after_hours = 'after_hours'
     accountability = 'accountability'
     catalysts = 'catalysts'
+    standing = 'standing'
 
 
 class Tier(Enum):
@@ -112,6 +113,11 @@ class Breakout(Enum):
     down = 'down'
 
 
+class Divergence(Enum):
+    bullish = 'bullish'
+    bearish = 'bearish'
+
+
 class Row(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -132,7 +138,10 @@ class Row(BaseModel):
     total_pct: float | None = None
     rvol: float | None = None
     range_position: confloat(ge=0.0, le=1.0) | None = None
-    rel_strength: float | None = None
+    rel_strength: float | None = Field(
+        None,
+        description="Close brief §5: the symbol's 21-session return less its benchmark's over the same window, as a fraction. Declared since M5 and unpopulated until M20.",
+    )
     why: str | None = Field(
         None, description='LLM-written. Prose only — must contain no figures.'
     )
@@ -320,6 +329,50 @@ class Row(BaseModel):
     breakout: Breakout | None = Field(
         None,
         description="Close brief §4: `up` or `down` when the close went through a zone the prior close was on the other side of, the zone had at least two touches, AND the session's `rvol` exceeded the 1.5 spike threshold. An event, not a level; without the volume clause it fires on every drift across a line (M19).",
+    )
+    rsi14: float | None = Field(
+        None,
+        description="Close brief §5: Wilder's RSI(14) on the adjusted close. Never rendered without `rsi14_pctile` — a bare oscillator value is the indicator soup docs/01 forbids, and the percentile is what makes it a comparison (M20).",
+    )
+    rsi14_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description="Close brief §5: where `rsi14` sits in this symbol's own trailing 252 sessions of RSI, 0-100. The 252 sessions BEFORE today — the measured session is never in its own baseline. Null below a full baseline rather than computed over a partial year (M20).",
+    )
+    macd_hist: float | None = Field(
+        None,
+        description='Close brief §5: MACD(12,26,9) histogram — the line less its signal. The line and signal are deliberately not carried; they are two more numbers saying what the histogram says (M20).',
+    )
+    macd_hist_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description="Close brief §5: `macd_hist` against its own 252-session history. MACD's 33-bar warmup is what sets the 286-session read depth (M20).",
+    )
+    adx14: float | None = Field(
+        None,
+        description="Close brief §5: Wilder's ADX(14) — trend strength irrespective of direction. Carried with no '>25 = trending' label: the percentile is the comparison this section exists to make, and a hardcoded 25 would be an unearned opinion beside an earned one (M20).",
+    )
+    adx14_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description='Close brief §5: `adx14` against its own 252-session history (M20).',
+    )
+    atr_pct: float | None = Field(
+        None,
+        description='Close brief §5: `atr14` as a fraction of the close. The absolute `atr14` is a price and is not comparable between an $8 and an $800 name; this is. Dimensionless, so it is computed in adjusted space and needs no rescaling (M20).',
+    )
+    atr_pct_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description='Close brief §5: `atr_pct` against its own 252-session history — the volatility-regime read. A bottom-decile reading is compression; a top-decile one is expansion (M20).',
+    )
+    rel_strength_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description='Close brief §5: `rel_strength` against its own 252-session history (M20).',
+    )
+    rel_strength_benchmark: str | None = Field(
+        None,
+        description="Close brief §5: which benchmark `rel_strength` was measured against — the holding's sector `benchmark_symbol`, or SPY when the sector has none. Carried because '+6.1% vs XLC' and '+6.1% vs SPY' are different claims and the number alone cannot distinguish them. Null whenever `rel_strength` is null (M20).",
+    )
+    divergence: Divergence | None = Field(
+        None,
+        description='Close brief §5: `bearish` when the last two swing highs made a higher high on a lower RSI, `bullish` on the mirror. Pivots are k=3, so a divergence is confirmed at least three sessions after the fact and the renderer says so (M20).',
     )
 
 

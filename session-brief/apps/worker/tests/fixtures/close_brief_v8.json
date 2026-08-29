@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 8,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-11-close",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-11",
@@ -81,18 +81,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": "B",
@@ -154,18 +143,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
     },
@@ -234,18 +212,7 @@
           "resistance_last_touch": "2026-07-01",
           "high_52w": 150.0,
           "low_52w": 50.0,
-          "breakout": "up",
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": "up"
         },
         {
           "symbol": "B",
@@ -307,18 +274,7 @@
           "resistance_last_touch": "2026-07-01",
           "high_52w": 150.0,
           "low_52w": 50.0,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": "C",
@@ -380,26 +336,9 @@
           "resistance_last_touch": null,
           "high_52w": 150.0,
           "low_52w": 50.0,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
-    },
-    {
-      "id": "standing",
-      "tier": "full",
-      "note": "Nothing stretched \u2014 every name inside its own 10-90th percentile band",
-      "rows": []
     },
     {
       "id": "catalysts",
@@ -466,18 +405,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         },
         {
           "symbol": "B",
@@ -539,18 +467,7 @@
           "resistance_last_touch": null,
           "high_52w": null,
           "low_52w": null,
-          "breakout": null,
-          "rsi14": null,
-          "rsi14_pctile": null,
-          "macd_hist": null,
-          "macd_hist_pctile": null,
-          "adx14": null,
-          "adx14_pctile": null,
-          "atr_pct": null,
-          "atr_pct_pctile": null,
-          "rel_strength_pctile": null,
-          "rel_strength_benchmark": null,
-          "divergence": null
+          "breakout": null
         }
       ]
     }
