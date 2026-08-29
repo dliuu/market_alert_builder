@@ -975,7 +975,7 @@ git commit -m "feat(m20): RSI divergence off the existing swing pivots"
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `apps/worker/tests/test_oscillators_db.py`. Read `apps/worker/tests/test_technicals_db.py` first and use the same fixtures and seeding helpers it uses (`conftest.py` provides the connection fixture).
+Create `apps/worker/tests/test_oscillators_db.py`. Read `apps/worker/tests/test_technicals_db.py` first and follow its style. The fixture is `db_conn` (`tests/conftest.py`), it wraps each test in a rolled-back transaction, and it **skips when `DATABASE_URL` is unset**. It talks to a real remote Postgres, so every seed must be a single `executemany` round trip — never a per-row insert loop.
 
 ```python
 """M20 DB layer. Mirrors test_technicals_db.py's seeding style."""
@@ -993,29 +993,34 @@ USER = "00000000-0000-0000-0000-000000000001"
 def _seed_bars(conn, symbol: str, n: int, *, adjusted: bool = True, start: str = "100") -> date:
     """n consecutive weekday bars ending today; returns the last session_date."""
     day = date(2026, 1, 5)
-    last = day
     price = Decimal(start)
+    rows = []
     for i in range(n):
-        last = day + timedelta(days=i)
         price = price + Decimal(i % 7) / Decimal(4) + Decimal("0.1")
         span = (price * Decimal("0.005")).quantize(Decimal("0.01"))
-        conn.execute(
-            text("""
-                INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v,
-                                        adj_c, adj_o, adj_h, adj_l, adj_v)
-                VALUES (:s, :d, :c, :h, :l, :c, :v, :adj_c, :adj_o, :adj_h, :adj_l, :adj_v)
-            """),
+        rows.append(
             {
-                "s": symbol, "d": last, "c": price, "h": price + span, "l": price - span,
-                "v": 1_000_000,
+                "s": symbol, "d": day + timedelta(days=i),
+                "c": price, "h": price + span, "l": price - span, "v": 1_000_000,
                 "adj_c": price if adjusted else None,
                 "adj_o": price if adjusted else None,
                 "adj_h": (price + span) if adjusted else None,
                 "adj_l": (price - span) if adjusted else None,
                 "adj_v": 1_000_000 if adjusted else None,
-            },
+            }
         )
-    return last
+    # ONE round trip. The db_conn fixture talks to a real remote Postgres —
+    # tests/test_technicals_db.py takes 49s for five tests — and a loop of 286
+    # single-row inserts per symbol would put this file into the minutes.
+    conn.execute(
+        text("""
+            INSERT INTO bars_daily (symbol, session_date, o, h, l, c, v,
+                                    adj_c, adj_o, adj_h, adj_l, adj_v)
+            VALUES (:s, :d, :c, :h, :l, :c, :v, :adj_c, :adj_o, :adj_h, :adj_l, :adj_v)
+        """),
+        rows,
+    )
+    return rows[-1]["d"]
 
 
 def test_full_window_yields_a_standing_with_percentiles(db_conn):
