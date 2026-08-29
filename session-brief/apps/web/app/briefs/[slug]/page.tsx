@@ -492,7 +492,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                       <ValueAndPctile value={r.rsi14} pctile={r.rsi14_pctile} places={1} />
                       <ValueAndPctile value={r.macd_hist} pctile={r.macd_hist_pctile} places={2} />
                       <ValueAndPctile value={r.adx14} pctile={r.adx14_pctile} places={1} />
-                      <ValueAndPctile value={r.atr_pct} pctile={r.atr_pct_pctile} percent />
+                      <ValueAndPctile value={r.atr_pct} pctile={r.atr_pct_pctile} unsignedPercent />
                       <ValueAndPctile
                         value={r.rel_strength}
                         pctile={r.rel_strength_pctile}
@@ -613,6 +613,11 @@ function pct(fraction: number): string {
   const sign = fraction >= 0 ? "+" : "−";
   return `${sign}${Math.abs(fraction * 100).toFixed(2)}%`;
 }
+// ATR% is a magnitude (average true range as a percent of price), never
+// negative — unlike rel_strength, it has no direction to sign.
+function unsignedPct(fraction: number): string {
+  return `${(fraction * 100).toFixed(2)}%`;
+}
 // The figures for one catalyst row. Every number comes from the object; a null
 // renders as "size unknown" rather than dropping the row, because an unknown
 // size is information and a missing row is not (open question 4).
@@ -640,16 +645,18 @@ function ValueAndPctile({
   pctile,
   places = 2,
   percent = false,
+  unsignedPercent = false,
   suffix = "",
 }: {
   value: number | null | undefined;
   pctile: number | null | undefined;
   places?: number;
   percent?: boolean;
+  unsignedPercent?: boolean;
   suffix?: string;
 }) {
   if (value == null || pctile == null) return <td style={S.tdR}>—</td>;
-  const shown = percent ? pct(value) : value.toFixed(places);
+  const shown = unsignedPercent ? unsignedPct(value) : percent ? pct(value) : value.toFixed(places);
   return (
     <td style={S.tdR}>
       {shown}
