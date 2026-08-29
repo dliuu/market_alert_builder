@@ -21,11 +21,11 @@ seeded-but-meaningless value by index.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
-from worker.technicals import TechBar
+from worker.technicals import PIVOT_K, TechBar, swing_pivots
 
 PREC = 28
 QUANT = Decimal("0.0000000001")
@@ -355,5 +355,64 @@ def standing_for_symbol(
         rel_strength=_last(rel),
         rel_strength_pctile=percentile(rel),
         rel_strength_benchmark=benchmark_symbol if rel else None,
-        divergence=None,  # Task 3 fills this in.
+        divergence=divergence(bars, rsi),
     )
+
+
+# Two pivots closer than this are noise; further apart than this is archaeology.
+DIVERGENCE_MIN_GAP = 5
+DIVERGENCE_MAX_GAP = 60
+
+
+def divergence(
+    bars: Sequence[TechBar],
+    rsi: Sequence[Decimal],
+    *,
+    _rsi_at: dict[int, Decimal] | None = None,
+) -> str | None:
+    """``bearish`` when the last two swing highs made a higher high on a lower
+    RSI; ``bullish`` on the mirror. ``None`` otherwise.
+
+    Pivots come from ``technicals.swing_pivots`` at the existing ``PIVOT_K``
+    rather than a second pivot detector — it is already tested, and already
+    strict-extrema so a flat top does not emit two pivots at one price.
+
+    The honest consequence of k=3 is that the most recent three bars can never
+    be pivots, so a divergence is confirmed at least ``PIVOT_K`` sessions after
+    the fact. The renderer says so rather than presenting it as today's news.
+
+    ``_rsi_at`` is a test seam for pinning RSI at specific bar indices; it is
+    never passed in production.
+    """
+    if len(rsi) == 0 and _rsi_at is None:
+        return None
+
+    offset = len(bars) - len(rsi)
+
+    def rsi_at(index: int) -> Decimal | None:
+        if _rsi_at is not None and index in _rsi_at:
+            return _rsi_at[index]
+        i = index - offset
+        return rsi[i] if 0 <= i < len(rsi) else None
+
+    index_of = {b.session_date: i for i, b in enumerate(bars)}
+    pivots = swing_pivots(bars, k=PIVOT_K)
+
+    checks: list[tuple[str, Callable[[Decimal, Decimal, Decimal, Decimal], bool]]] = [
+        ("high", lambda p1, p2, r1, r2: p2 > p1 and r2 < r1),
+        ("low", lambda p1, p2, r1, r2: p2 < p1 and r2 > r1),
+    ]
+    for kind, is_divergent in checks:
+        same = [p for p in pivots if p.kind == kind]
+        if len(same) < 2:
+            continue
+        first, second = same[-2], same[-1]
+        i1, i2 = index_of[first.session_date], index_of[second.session_date]
+        if not DIVERGENCE_MIN_GAP <= i2 - i1 <= DIVERGENCE_MAX_GAP:
+            continue
+        r1, r2 = rsi_at(i1), rsi_at(i2)
+        if r1 is None or r2 is None:
+            continue
+        if is_divergent(first.price, second.price, r1, r2):
+            return "bearish" if kind == "high" else "bullish"
+    return None

@@ -271,3 +271,84 @@ def test_standing_without_a_benchmark_nulls_both_relative_fields():
     assert s.rel_strength is None
     assert s.rel_strength_pctile is None
     assert s.rel_strength_benchmark is None
+
+
+from worker.oscillators import DIVERGENCE_MAX_GAP, DIVERGENCE_MIN_GAP, divergence
+
+
+def _bars_from(pairs: list[tuple[str, str, str]]) -> list[TechBar]:
+    """(high, low, close) triples -> bars on consecutive days."""
+    day = date(2026, 1, 5)
+    return [
+        TechBar(day + timedelta(days=i), Decimal(h), Decimal(l), Decimal(c), 1_000_000)
+        for i, (h, l, c) in enumerate(pairs)
+    ]
+
+
+def _peak_series(first_peak: str, second_peak: str, gap: int) -> list[TechBar]:
+    """A trough-peak-trough-peak shape with two clean k=3 swing highs `gap`
+    sessions apart, padded so both pivots are confirmable."""
+    pairs: list[tuple[str, str, str]] = []
+
+    def flat(n: int, level: str) -> None:
+        for _ in range(n):
+            pairs.append((level, level, level))
+
+    flat(6, "100")
+    pairs.append((first_peak, first_peak, first_peak))
+    flat(gap - 1, "100")
+    pairs.append((second_peak, second_peak, second_peak))
+    flat(6, "100")
+    return _bars_from(pairs)
+
+
+def test_bearish_divergence_fires_on_higher_high_with_lower_rsi():
+    bars = _peak_series("130", "135", 20)
+    rsi = rsi_series([b.c for b in bars])
+    # Force the second peak's RSI below the first's — the definition under test.
+    assert divergence(bars, rsi, _rsi_at={6: Decimal("80"), 26: Decimal("60")}) == "bearish"
+
+
+def test_higher_high_with_higher_rsi_fires_nothing():
+    """The load-bearing negative. A detector that always fires passes the
+    positive test above; only this one distinguishes it from a real one."""
+    bars = _peak_series("130", "135", 20)
+    rsi = rsi_series([b.c for b in bars])
+    assert divergence(bars, rsi, _rsi_at={6: Decimal("60"), 26: Decimal("80")}) is None
+
+
+def test_bullish_divergence_fires_on_lower_low_with_higher_rsi():
+    pairs: list[tuple[str, str, str]] = []
+    for _ in range(6):
+        pairs.append(("100", "100", "100"))
+    pairs.append(("70", "70", "70"))
+    for _ in range(19):
+        pairs.append(("100", "100", "100"))
+    pairs.append(("65", "65", "65"))
+    for _ in range(6):
+        pairs.append(("100", "100", "100"))
+    bars = _bars_from(pairs)
+    rsi = rsi_series([b.c for b in bars])
+    assert divergence(bars, rsi, _rsi_at={6: Decimal("20"), 26: Decimal("35")}) == "bullish"
+
+
+def test_pivots_closer_than_the_minimum_gap_fire_nothing():
+    bars = _peak_series("130", "135", DIVERGENCE_MIN_GAP - 2)
+    rsi = rsi_series([b.c for b in bars])
+    assert divergence(bars, rsi) is None
+
+
+def test_pivots_further_than_the_maximum_gap_fire_nothing():
+    bars = _peak_series("130", "135", DIVERGENCE_MAX_GAP + 5)
+    rsi = rsi_series([b.c for b in bars])
+    assert divergence(bars, rsi) is None
+
+
+def test_fewer_than_two_pivots_fires_nothing():
+    assert divergence(_bars_from([("100", "100", "100")] * 20), []) is None
+
+
+def test_standing_carries_the_divergence():
+    bars = _peak_series("130", "135", 20)
+    s = standing_for_symbol("X", bars, benchmark_bars=[], benchmark_symbol=None)
+    assert s.divergence in (None, "bullish", "bearish")
