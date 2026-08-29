@@ -141,8 +141,16 @@ def assemble(
     sections: list[dict[str, object]] = [
         _attribution(shown, closes, decomp),
         _tape_quality(result.positions, closes, tape, technicals or {}),
-        _standing(result.positions, standing or {}, technicals or {}),
     ]
+    # `standing is None` (CN, which passes no `standing=` keyword) means "not
+    # computed" and omits the section entirely — the same reasoning
+    # worker_cn/assemble.py already applies to §4's technicals: a CN name's
+    # bars are still partly synthetic, so a §5 that said "nothing stretched"
+    # would be confidently wrong rather than absent. An explicit `{}` (every
+    # US name computed, nobody qualified) is real information and still
+    # renders, empty, with a note.
+    if standing is not None:
+        sections.append(_standing(result.positions, standing, technicals or {}))
     # Catalysts is post-close data — Form 4s and 144s land after the bell — so
     # it belongs to the close brief only. The open brief is assembled elsewhere
     # (assemble_open.py) and never carries it.

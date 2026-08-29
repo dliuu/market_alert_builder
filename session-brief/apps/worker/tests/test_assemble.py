@@ -9,14 +9,16 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from contracts.brief import BriefObject, Row, Section
 from worker.assemble import SCHEMA_VERSION, assemble, close_brief_should_skip
+from worker.assemble import _standing as _standing_section
 from worker.assemble_shared import to_contract_json
 from worker.catalysts import CatalystItem
-from worker.compute import Lot, Price, compute
+from worker.compute import Lot, PositionMetrics, Price, compute
 from worker.oscillators import Standing
 from worker.tape import TapeMetrics
 from worker.technicals import Technicals, Zone
@@ -607,14 +609,51 @@ def test_more_than_three_qualifying_names_are_capped_and_the_rest_noted() -> Non
     assert "D" in section.note and "E" in section.note
 
 
+def _position(symbol: str) -> PositionMetrics:
+    return PositionMetrics(
+        symbol=symbol, day_return=None, value_cents=0, prior_value_cents=0,
+        day_pnl_cents=0, total_pnl_cents=0, total_cost_cents=0,
+        contribution_bps=None, weight=None,
+    )
+
+
 def test_cap_ties_break_by_symbol_for_determinism() -> None:
-    tied = {s: _standing(s, rsi14_pctile=Decimal("99")) for s in ("E", "D", "C", "B", "A")}
-    assert _full(_assemble_with(standing=tied)) == ["A", "B", "C"]
+    """Exercised directly against `_standing`, with `positions` fed in a
+    shuffled (non-alphabetical) order. `compute()` always returns positions
+    pre-sorted by symbol, and `_assemble_with`'s book does too — going through
+    either would make a tiebreak that silently rides on input order look
+    identical to one that ranks on `symbol`, for a book that never has that
+    order to begin with."""
+    shuffled = ["E", "C", "A", "D", "B"]
+    positions = [_position(s) for s in shuffled]
+    tied = {s: _standing(s, rsi14_pctile=Decimal("99")) for s in shuffled}
+    section = _standing_section(positions, tied, {})
+    rows = cast("list[dict[str, object]]", section["rows"])
+    full = [r["symbol"] for r in rows if r["tier"] == "full"]
+    brief = [r["symbol"] for r in rows if r["tier"] == "brief"]
+    assert full == ["A", "B", "C"]
+    assert brief == ["D", "E"]
 
 
 def test_null_percentiles_never_qualify_a_name() -> None:
     obj = _assemble_with(standing={"A": _standing("A", rsi14_pctile=None, atr_pct_pctile=None)})
     assert _full(obj) == []
+
+
+def test_all_null_percentiles_with_a_divergence_still_ranks() -> None:
+    """A short-baseline symbol can have every percentile null (below a full
+    year of history) and still qualify via `divergence` alone — reachable in
+    production. `_stretch`'s ranking key has to survive an all-None Standing
+    without raising on `None - 50`, not just return the right symbol."""
+    obj = _assemble_with(standing={
+        "A": _standing(
+            "A",
+            rsi14_pctile=None, macd_hist_pctile=None, adx14_pctile=None,
+            atr_pct_pctile=None, rel_strength_pctile=None,
+            divergence="bearish",
+        )
+    })
+    assert _full(obj) == ["A"]
 
 
 def test_section_4_output_is_unchanged_by_this_milestone() -> None:
@@ -625,3 +664,28 @@ def test_section_4_output_is_unchanged_by_this_milestone() -> None:
         "tape_quality",
     )
     assert without.model_dump() == with_standing.model_dump()
+
+
+def test_standing_section_omitted_when_not_computed() -> None:
+    """CN-shaped call: `assemble()` invoked with no `standing=` keyword at all,
+    mirroring `worker_cn.assemble.assemble_cn_close_and_store`'s call shape.
+    `None` means "not computed" and the section must be absent entirely — the
+    same reasoning `worker_cn/assemble.py` already applies to §4's technicals,
+    so a CN brief never states "nothing stretched" about names it never
+    measured."""
+    lots = [_lot("A", "10", "90")]
+    prices = {"A": Price(c=Decimal("110"), prev_c=Decimal("100"))}
+    closes = {"A": Decimal("110")}
+    result = compute(_SESSION, lots, prices, benchmark_return=Fraction(1, 100))
+    obj = assemble(result, closes, {}, user_id=_USER, session_date=_SESSION,
+                   kind="close", generated_at=_GENERATED_AT)
+    assert all(s.id.value != "standing" for s in obj.sections)
+
+
+def test_standing_section_present_with_note_when_computed_and_empty() -> None:
+    """A US call that DID compute standing (an explicit `{}` — every held name
+    measured, nobody qualified) still emits the section, with a note. `{}` is
+    real information; `None` is its absence, which the previous test covers."""
+    obj = _assemble_with(standing={})
+    section = _section(obj, "standing")
+    assert section.note is not None
