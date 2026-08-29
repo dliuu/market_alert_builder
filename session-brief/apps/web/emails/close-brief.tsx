@@ -410,7 +410,7 @@ function Standing({ row }: { row: Row }) {
     ["RSI(14)", numberOrDash(row.rsi14, 1), row.rsi14_pctile],
     ["MACD hist", numberOrDash(row.macd_hist, 2), row.macd_hist_pctile],
     ["ADX(14)", numberOrDash(row.adx14, 1), row.adx14_pctile],
-    ["ATR %", pctOrDash(row.atr_pct), row.atr_pct_pctile],
+    ["ATR %", unsignedPctOrDash(row.atr_pct), row.atr_pct_pctile],
     [
       row.rel_strength_benchmark ? `vs ${row.rel_strength_benchmark} 21d` : "vs benchmark",
       pctOrDash(row.rel_strength),
@@ -435,7 +435,7 @@ function Standing({ row }: { row: Row }) {
                 <span style={mut}>—</span>
               ) : (
                 <>
-                  <RangeBar position={pctile / 100} />
+                  <RangeBar position={pctile / 100} neutral />
                   <span style={levelLine}>{ordinal(Math.round(pctile))}</span>
                 </>
               )}
@@ -571,10 +571,20 @@ function shortDate(iso: string): string {
 
 // Range bar as a two-cell table (email-safe): a proportional fill, pine when the
 // close sits in the top half of the day's range, oxblood when in the bottom.
-function RangeBar({ position }: { position: number | null | undefined }) {
+// `neutral` opts out of that good/bad colouring for callers where the position
+// carries no such judgment (e.g. §5's percentile, where a high reading isn't
+// inherently "good" — an ATR% in the 95th percentile is a risk signal, not
+// strength) — a single navy accent instead. §4's own colouring is untouched.
+function RangeBar({
+  position,
+  neutral,
+}: {
+  position: number | null | undefined;
+  neutral?: boolean;
+}) {
   if (position == null) return <span style={mut}>—</span>;
   const pct = Math.max(0, Math.min(100, Math.round(position * 100)));
-  const fill = position >= 0.5 ? palette.pine : palette.ox;
+  const fill = neutral ? palette.navy : position >= 0.5 ? palette.pine : palette.ox;
   return (
     <table
       role="presentation"
@@ -664,6 +674,11 @@ function signedPct(pct: number): string {
 }
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : signedPct(fraction * 100);
+}
+// ATR% is a magnitude (average true range as a percent of price) — it has no
+// direction to sign, unlike day_return / ma_dist / rel_strength.
+function unsignedPctOrDash(fraction: number | null | undefined): string {
+  return fraction == null ? "—" : `${(fraction * 100).toFixed(2)}%`;
 }
 
 function multiple(v: number | null | undefined): string {

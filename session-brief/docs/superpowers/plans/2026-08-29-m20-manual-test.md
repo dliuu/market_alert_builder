@@ -62,23 +62,43 @@ predicate looked correct and scored ASTS at 61 touches in 276 sessions on
 real data, and only a real-book read caught it. A percentile mechanism is the
 same kind of "looks right, isn't" risk.
 
-```sql
-SELECT session_date, value
-FROM metrics
-WHERE user_id = '<user_id>' AND symbol = 'SYM' AND metric = 'rsi14'
-  AND session_date <= '<sess>'
-ORDER BY session_date DESC
-LIMIT 253;
+`metrics` is not a usable source for this: `compute_and_store_standing` runs
+once per assembled brief and gains one `rsi14` row per session going
+forward, and check 2 ran with `--dry-run`, which rolls its transaction back
+and stores nothing at all — on day one this table has 0-1 rows for `SYM`,
+not 253. Percentile history is deliberately not stored (`docs/03`); it
+recomputes from `bars_daily` on every run, so the audit has to as well. Pull
+`adj_c` directly and recompute the RSI series the way `worker/oscillators.py`
+does (Wilder's, SMA-seeded), then rank today against the 252 prior values —
+run from `apps/worker`:
+
+```bash
+uv run python -c "
+from worker.db import get_engine
+from worker.oscillators import rsi_series, percentile, READ_DEPTH
+from sqlalchemy import text
+from decimal import Decimal
+
+SYM, SESS = 'SYM', '<sess>'
+with get_engine().connect() as conn:
+    rows = conn.execute(text('''
+        SELECT adj_c FROM bars_daily
+        WHERE symbol = :sym AND session_date <= :sess AND adj_c IS NOT NULL
+        ORDER BY session_date DESC LIMIT :depth
+    '''), {'sym': SYM, 'sess': SESS, 'depth': READ_DEPTH}).all()
+
+closes = [Decimal(str(r[0])) for r in reversed(rows)]  # oldest -> newest
+rsi = rsi_series(closes)
+print('rsi14 today:', rsi[-1] if rsi else None)
+print('pctile:', percentile(rsi))
+"
 ```
 
-Take the most recent value as today's `rsi14`, and the other 252 as the
-baseline. Count how many of the 252 are **strictly less than** today's value,
-multiply by `100 / 252`, and round.
-
-**Expected:** this hand-computed ordinal matches the `rsi14_pctile` value
-printed in check 2's output for `SYM`, to within rounding. If fewer than 253
-rows come back, that symbol shouldn't have shown a percentile at all in
-check 2 — go back and confirm it rendered `—` there.
+**Expected:** the printed `pctile` matches the `rsi14_pctile` value printed
+in check 2's output for `SYM`, to within rounding. If `rows` comes back
+shorter than 253 sessions, `percentile()` returns `None` by design — that
+means `SYM` correctly should **not** have shown a percentile in check 2
+(confirm it rendered `—` there); it is not a bug to report.
 
 ---
 
@@ -107,9 +127,8 @@ check 2 — go back and confirm it rendered `—` there.
    tells you what to expect here).
 2. Re-run: `uv run -m worker.cli brief --kind close --date <sess> --dry-run`.
 3. **Expected:** the `standing` section renders with **zero rows** and its
-   `note` reads `"Nothing stretched — every name inside its own 10-90th
-   percentile band"` (unless a divergence or breakout still qualifies a name,
-   per the caveat above).
+   `note` reads `"No name cleared the decile"` (unless a divergence or
+   breakout still qualifies a name, per the caveat above).
 4. **Restore** `_STRETCHED_HIGH = Decimal("90")` and re-run to confirm the
    brief matches check 2's output again.
 
@@ -126,12 +145,15 @@ uv run -m worker.cli backfill --symbols <SYM> --days 90
 uv run -m worker.cli brief --kind close --date <sess> --dry-run
 ```
 
-**Expected:** the short-history symbol's §5 row (visible on the web archive,
-or in the dry-run's full `standing.rows`, not necessarily the capped email
-blocks) shows populated `rsi14`/`macd_hist`/`adx14`/`atr_pct` values but `—`
-for every one of their `*_pctile` fields, and the symbol never appears among
-the email's capped/qualifying blocks — a short baseline cannot clear the gate
-because the gate reads only the percentile fields, which are all null.
+**Expected:** the short-history symbol's §5 row, in the dry-run's full
+`standing.rows`, carries populated `rsi14`/`macd_hist`/`adx14`/`atr_pct`
+values with `null` for every one of their `*_pctile` fields — the value is in
+the object. Neither renderer shows it that way: the web archive and the
+email both render `—` for those fields rather than the bare value, because a
+value is never shown without its percentile. The symbol never appears among
+the email's capped/qualifying blocks either — a short baseline cannot clear
+the gate because the gate reads only the percentile fields, which are all
+null.
 
 ---
 

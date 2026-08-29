@@ -450,7 +450,7 @@ def _standing(
     full = {s.symbol for s in shown}
 
     if not qualifying:
-        note = "Nothing stretched — every name inside its own 10-90th percentile band"
+        note = "No name cleared the decile"
     elif overflow:
         note = f"{', '.join(sorted(s.symbol for s in overflow))} also stretched — see the archive"
     else:

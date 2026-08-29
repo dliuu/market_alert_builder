@@ -742,9 +742,10 @@ def test_standing_section_omitted_when_not_computed() -> None:
 
 
 def test_standing_section_present_with_note_when_computed_and_empty() -> None:
-    """A US call that DID compute standing (an explicit `{}` — every held name
-    measured, nobody qualified) still emits the section, with a note. `{}` is
-    real information; `None` is its absence, which the previous test covers."""
+    """A US call that DID compute standing (an explicit `{}` — nothing was
+    measurable, e.g. no held symbol had a bar on the session) still emits the
+    section, with a note. `{}` is real information; `None` is its absence,
+    which the previous test covers."""
     obj = _assemble_with(standing={})
     section = _section(obj, "standing")
     assert section.note is not None

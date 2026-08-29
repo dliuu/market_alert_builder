@@ -207,10 +207,12 @@ ranked against the **252 sessions BEFORE today** — the measured session is
 never in its own baseline, the same denominator discipline `vol_vs_5d`/`vol_vs_21d`
 already apply. Strict `<`, so a value tied with its whole history scores 0,
 not 50 — ties are common on ADX and a midpoint convention would invent
-movement. Below a full 252-session baseline the raw value still renders and
-the percentile renders `—`: a field presented as a 1-year percentile that is
-really a 40-observation percentile is the same lie `high_52w` refuses to tell
-by staying null below a full year.
+movement. Below a full 252-session baseline the raw value is still computed
+and carried in the object (`Standing` populates it, `metrics` stores it) with
+a null percentile, but neither renderer shows it without its percentile — a
+field presented as a 1-year percentile that is really a 40-observation
+percentile is the same lie `high_52w` refuses to tell by staying null below a
+full year.
 
 `READ_DEPTH = 252 + 1 + 33 = 286` sessions — MACD's histogram has the longest
 warmup (EMA26 seeded by SMA26, its EMA9 signal seeded by SMA9). This is its
@@ -220,8 +222,9 @@ own query at its own depth, not a change to §4's 252-session read.
 the *full* 286-session window or `rel_strength`/`rel_strength_benchmark` are
 both null for every holding under it — it does **not** silently fall back to
 SPY, because that would change what the number claims without changing its
-label. A holding with a short window degrades gracefully (values render,
-percentiles null); a benchmark with a short window goes dark for the whole
+label. A holding with a short window degrades gracefully (values are still
+carried in the object with percentiles null, though neither renderer shows
+them without their percentile); a benchmark with a short window goes dark for the whole
 sector. This is deliberate and also an open question worth revisiting: a
 newly-added sector benchmark makes every holding under it lose `rel_strength`
 until its own backfill completes, with no signal in the brief that this is

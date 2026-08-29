@@ -465,7 +465,10 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
           BriefObject doesn't carry (docs/02's single-contract rule) — deferred. */}
       {standing && (
         <section style={S.card}>
-          <h2 style={S.h2}>Where they stand</h2>
+          <h2 style={S.h2}>
+            Where they stand
+            <span style={S.sectionNote}> · against each name's own year</span>
+          </h2>
           {standing.rows.length === 0 ? (
             <p style={S.muted}>{standing.note}</p>
           ) : (
@@ -501,7 +504,14 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                   ))}
                 </tbody>
               </table>
-              {standing.note && <p style={S.muted}>{standing.note}</p>}
+              {/* The overflow note ("… also stretched — see the archive") tells
+                  the email reader where to find the rest; the archive already
+                  shows every row, so pointing it back at itself is nonsense
+                  here. Any other note (e.g. "no name cleared the decile") is
+                  still real information and renders as normal. */}
+              {standing.note && !standing.note.endsWith("— see the archive") && (
+                <p style={S.muted}>{standing.note}</p>
+              )}
             </>
           )}
         </section>

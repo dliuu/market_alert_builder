@@ -751,8 +751,9 @@ benchmark needs the *full* 286-session window or `rel_strength` and
 `rel_strength_benchmark` are both null for every holding under it — it does
 **not** silently fall back to SPY, because that would change what the number
 claims without changing its label. A holding with a short window degrades
-gracefully (values render, percentiles null); a benchmark with a short window
-takes the whole sector dark. The dev database's SPY sits at 285 bars, one
+gracefully (values are still carried in the object with percentiles null,
+though neither renderer shows them without their percentile); a benchmark
+with a short window takes the whole sector dark. The dev database's SPY sits at 285 bars, one
 short of 286 — `rel_strength` renders blank across the book until it is
 backfilled deeper, which is why `docs/03`'s `--days 500` is a **prerequisite**
 for §5 showing relative strength at all, not housekeeping. Open question: a
