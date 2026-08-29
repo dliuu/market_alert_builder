@@ -704,3 +704,143 @@ def test_run_reconcile_job_flips_revised_through_scheduled_path(db_conn: Connect
     assert row["revised"] is True
     assert row["provisional"] is False
     assert row["synthetic"] is False
+
+
+# --- a crashed close retries like a deferral (2026-08-28) --------------------
+
+
+def test_next_after_outcome_retries_a_crashed_close() -> None:
+    """A close that raised is recoverable: the failure that cost 2026-08-28's
+    brief was a dead pooled socket, gone by the next fire. Before this, any
+    exception fell straight through to tomorrow and the brief was simply lost."""
+    now = datetime(2026, 9, 4, 20, 46, tzinfo=UTC)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "crashed", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert kind == "close"
+    assert nxt == datetime(2026, 9, 4, 21, 16, tzinfo=UTC)
+
+
+def test_next_after_outcome_gives_up_on_a_crashed_close_past_the_deadline() -> None:
+    """The retry chain is bounded by the same same-day deadline as a deferral —
+    a crash must never walk a close past midnight onto the wrong session."""
+    now = datetime(2026, 9, 5, 3, 50, tzinfo=UTC)  # 23:50 ET
+    nxt, kind = scheduler.next_after_outcome(
+        now, "crashed", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert (nxt, kind) == scheduler.next_kind_fire(now, _DELAY)
+
+
+def test_outcome_after_crash_only_asks_the_close_to_retry() -> None:
+    """`tick` reports a bare sentinel for every kind but the close, so the crash
+    outcome has to be kind-aware. If an open reported 'crashed' it would schedule
+    a close retry off the back of a morning failure."""
+    assert scheduler.outcome_after_crash("close") == "crashed"
+    assert scheduler.outcome_after_crash("open") == "failed"
+    assert scheduler.outcome_after_crash("open_cn") == "failed"
+    assert scheduler.outcome_after_crash("close_cn") == "failed"
+
+
+def test_the_neutral_sentinel_never_schedules_a_retry() -> None:
+    """`tick` initialises `outcome` to this and only the close branch overwrites
+    it, so a *successful* open run reports it too. It must stay inert."""
+    now = datetime(2026, 9, 4, 20, 46, tzinfo=UTC)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "failed", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    assert (nxt, kind) == scheduler.next_kind_fire(now, _DELAY)
+
+
+def test_a_crashed_close_retry_never_displaces_the_next_open_brief() -> None:
+    now = datetime(2026, 9, 4, 20, 46, tzinfo=UTC)
+    nxt_regular, _ = scheduler.next_kind_fire(now, _DELAY)
+    nxt, kind = scheduler.next_after_outcome(
+        now, "crashed", session_date=date(2026, 9, 4), delay=_DELAY
+    )
+    # Both halves matter: a retry *is* scheduled (not silently dropped), and it
+    # lands before the next real fire. Asserting only the second passes trivially
+    # if the crash path degrades to no retry at all.
+    assert kind == "close"
+    assert nxt <= nxt_regular
+
+
+def test_a_crashed_close_yields_when_its_retry_would_land_past_the_next_fire() -> None:
+    """The displacement guard, exercised on the crash path rather than inferred
+    from the deferral's. One `brief` job id means a retry placed after the next
+    fire would *replace* it, so the retry has to lose — even with retry budget
+    left on the clock, which is what separates this from the deadline case."""
+    now = datetime(2026, 9, 3, 0, 50, tzinfo=UTC)
+    session_date = date(2026, 9, 2)
+    # Budget remains — so anything but a retry here is the guard, not the deadline.
+    assert scheduler.retry_fire_time(now, session_date) is not None
+
+    nxt, kind = scheduler.next_after_outcome(now, "crashed", session_date, _DELAY)
+    assert (nxt, kind) == scheduler.next_kind_fire(now, _DELAY)
+    assert nxt < scheduler.retry_fire_time(now, session_date)  # type: ignore[operator]
+
+
+# --- run_kind: the crash outcome is actually wired to the job ----------------
+#
+# `outcome_after_crash` being right is worth nothing if nothing calls it. These
+# drive the seam the blocking loop delegates to, so deleting the call from
+# `run_kind` turns a test red instead of silently reverting the fix.
+
+
+def test_run_kind_reports_crashed_when_the_close_job_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("consuming input failed: SSL error: unexpected eof")
+
+    monkeypatch.setattr(scheduler, "run_session_job", _boom)
+    outcome = scheduler.run_kind(
+        object(),  # type: ignore[arg-type]
+        "close",
+        now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
+    )
+    assert outcome == "crashed"
+
+
+def test_run_kind_does_not_ask_for_a_retry_when_the_open_job_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(scheduler, "run_open_session_job", _boom)
+    outcome = scheduler.run_kind(
+        object(),  # type: ignore[arg-type]
+        "open",
+        now_utc=datetime(2026, 9, 4, 12, 15, tzinfo=UTC),
+    )
+    assert outcome == "failed"
+    # …and that sentinel must not schedule a close retry.
+    nxt = scheduler.next_after_outcome(
+        datetime(2026, 9, 4, 12, 15, tzinfo=UTC), outcome, date(2026, 9, 4), _DELAY
+    )
+    assert nxt == scheduler.next_kind_fire(datetime(2026, 9, 4, 12, 15, tzinfo=UTC), _DELAY)
+
+
+def test_run_kind_passes_the_close_outcome_through_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deferral must keep its own outcome — a crash is not the only retry."""
+    monkeypatch.setattr(scheduler, "run_session_job", lambda *a, **k: "deferred-no-bars")
+    outcome = scheduler.run_kind(
+        object(),  # type: ignore[arg-type]
+        "close",
+        now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
+    )
+    assert outcome == "deferred-no-bars"
+
+
+def test_run_kind_reports_the_sentinel_when_a_non_close_kind_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scheduler, "run_open_session_job", lambda *a, **k: None)
+    outcome = scheduler.run_kind(
+        object(),  # type: ignore[arg-type]
+        "open",
+        now_utc=datetime(2026, 9, 4, 12, 15, tzinfo=UTC),
+    )
+    assert outcome == "failed"

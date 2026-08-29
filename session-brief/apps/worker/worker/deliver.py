@@ -111,11 +111,69 @@ def _fallback_text(obj: BriefObject, session_date: date, kind: str) -> str:
     return "\n".join(lines)
 
 
+# Resend answers 409 three ways, and only this one means the mail is already out.
+# `concurrent_idempotent_requests` and `resource_locked` both mean "in progress,
+# retry later" — nothing may have been sent.
+_ALREADY_SENT_ERROR = "invalid_idempotent_request"
+
+
+def _resend_error_name(resp: httpx.Response) -> str | None:
+    """Resend's machine-readable error code, or ``None`` if the body isn't one."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    return body.get("name") if isinstance(body, dict) else None
+
+
+class AlreadySent(Exception):
+    """Resend refused the POST because this idempotency key was already used.
+
+    Not a failure: it is the provider telling us the email is *already out*, and
+    the only authority that actually knows. Raised rather than returned so it can
+    never be mistaken for a message id.
+    """
+
+
 def send_via_resend(
-    *, sender: str, recipient: str, subject: str, html: str | None, text_part: str
+    *,
+    sender: str,
+    recipient: str,
+    subject: str,
+    html: str | None,
+    text_part: str,
+    idempotency_key: str | None = None,
 ) -> str:
     """POST to Resend, retrying 5xx up to 3× with backoff. Returns the provider
-    message id. 4xx raises immediately (a bad payload won't fix itself)."""
+    message id. 4xx raises immediately (a bad payload won't fix itself).
+
+    ``idempotency_key`` closes two duplicate-send windows, both of which end with
+    a message Resend has accepted and a caller that thinks it failed:
+
+    - the 5xx retry directly below — a 502 returned *after* the message was
+      queued, or a read timeout on a request that landed, is retried blind;
+    - the caller's, which is wider: ``deliver_brief`` marks the row sent but its
+      caller commits, so a connection death between Resend's 2xx and that commit
+      rolls back every trace of the send while the email is gone. That is the
+      failure the crashed-close retry re-fires on (D20, amended 2026-08-29), so
+      without a key the retry would send a second copy.
+
+    Resend keeps a key for 24 hours — comfortably longer than the retry chain,
+    which is bounded to the session's own ET date. A replay with an *identical*
+    payload returns the original response and sends nothing; a replay with a
+    changed payload answers 409 ``invalid_idempotent_request``, which is the
+    likely shape here because a retry re-runs narration and LLM prose is never
+    byte-identical. Both mean the mail is out, so that one becomes ``AlreadySent``.
+
+    Only that one. Resend's other two 409s — ``concurrent_idempotent_requests``
+    and ``resource_locked`` — mean "in progress, retry later", and nothing may
+    have been sent. Reading those as sent would mark the brief delivered and ping
+    the dead-man's switch *green* over a brief that never went out, which is worse
+    than the duplicate this key prevents: a duplicate is at least visible. So an
+    unrecognised or unparseable 409 falls through to the error path and goes red;
+    the crashed-close retry re-attempts 30 minutes later, by which time the
+    in-flight request has resolved and the replay answers cleanly.
+    """
     payload: dict[str, object] = {
         "from": sender,
         "to": [recipient],
@@ -130,9 +188,17 @@ def send_via_resend(
         payload["html"] = html
 
     headers = {"Authorization": f"Bearer {config.RESEND_API_KEY}"}
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
     resp: httpx.Response | None = None
     for attempt in range(3):
         resp = httpx.post(RESEND_ENDPOINT, json=payload, headers=headers, timeout=30.0)
+        if (
+            resp.status_code == 409
+            and idempotency_key is not None
+            and _resend_error_name(resp) == _ALREADY_SENT_ERROR
+        ):
+            raise AlreadySent(f"Resend replayed idempotency key {idempotency_key!r}")
         if resp.status_code < 500:
             resp.raise_for_status()  # 2xx returns; 4xx raises, no retry
             msg_id = resp.json()["id"]
@@ -194,6 +260,18 @@ def deliver_brief(
             subject=brief.subject,
             html=html,
             text_part=text_part,
+            idempotency_key=f"{brief.id}:{recipient}",
+        )
+    except AlreadySent:
+        # The email is out; only our record of it was lost. Write the row the
+        # rolled-back attempt failed to leave, so the *next* run short-circuits
+        # on it rather than leaning on the provider a second time.
+        conn.execute(_MARK_SENT, {"brief_id": brief.id, "recipient": recipient, "mid": None})
+        return DeliveryResult(
+            status="skipped",
+            recipient=recipient,
+            html_bytes=html_bytes,
+            detail="already sent (idempotency key replayed)",
         )
     except Exception as exc:
         conn.execute(

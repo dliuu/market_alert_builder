@@ -205,19 +205,73 @@ def next_after_outcome(
 ) -> tuple[datetime, str]:
     """Where the self-rescheduling one-shot points after a run of ``outcome``.
 
-    Every outcome but a deferral resumes the ordinary open/close rotation. A
-    deferral inserts one close retry ahead of it — but never *past* the next
-    scheduled fire: the scheduler keeps a single ``brief`` job id (D20), so a
+    Every outcome but a deferral or a crash resumes the ordinary open/close
+    rotation. Those two insert one close retry ahead of it — but never *past* the
+    next scheduled fire: the scheduler keeps a single ``brief`` job id (D20), so a
     retry placed after the next open would silently replace it and cost a
     morning brief. Deferring a close must never cost a different send.
+
+    A crash earns the same retry as a deferral because what reaches here is
+    overwhelmingly transient: on 2026-08-28 a pooled connection the database had
+    closed during the eight-hour gap between the open and the close raised
+    ``consuming input failed: SSL error: unexpected eof while reading``, and the
+    brief was lost outright because *any* exception fell straight through to the
+    next day. The socket was fine seconds later. Re-running is safe to repeat —
+    briefs upsert on ``(user_id, session_date, kind)`` and sends are idempotent on
+    ``(brief_id, recipient)`` (invariant 6) — and a genuinely broken run simply
+    re-fails, keeps the check red, and stops at the same-day deadline.
     """
-    if outcome == "deferred-no-bars":
+    if outcome in ("deferred-no-bars", "crashed"):
         retry_at = retry_fire_time(now_utc, session_date)
         regular = next_kind_fire(now_utc, delay)
         if retry_at is not None and retry_at < regular[0]:
             return retry_at, "close"
         return regular
     return next_kind_fire(now_utc, delay)
+
+
+# The sentinel ``tick`` starts every run with: inert as far as
+# ``next_after_outcome`` is concerned, so a kind that never reports an outcome
+# resumes the ordinary rotation.
+_NO_RETRY = "failed"
+
+
+def outcome_after_crash(kind: str) -> str:
+    """What a job that raised reports to ``next_after_outcome``.
+
+    Kind-aware because ``tick`` only ever learns a real outcome from the close —
+    every other kind leaves the bare sentinel in place, success or not. A blanket
+    "crashed" would therefore let a *failed morning* schedule a close retry, and
+    the single ``brief`` job id means that retry would displace a real fire. Only
+    the close has a same-day retry window (``retry_deadline``) to retry into.
+    """
+    return "crashed" if kind == "close" else _NO_RETRY
+
+
+def run_kind(engine: Engine, kind: str, *, now_utc: datetime) -> str:
+    """Run one brief kind and report the outcome ``next_after_outcome`` needs.
+
+    Extracted from the blocking loop so the retry decision is reachable by a test:
+    the loop itself can only be exercised live, and a wiring mistake there —
+    dropping the crash outcome on the floor, say — would otherwise revert the
+    retry silently with every unit test still green.
+
+    Swallowing the exception is deliberate (the loop must survive a bad day); the
+    crash is logged and converted, not propagated.
+    """
+    try:
+        if kind == "open":
+            run_open_session_job(engine, now_utc=now_utc)
+        elif kind == "close":
+            return run_session_job(engine, now_utc=now_utc)
+        elif kind == "open_cn":
+            cn_scheduler.run_cn_open_session_job(engine, now_utc=now_utc)
+        else:  # close_cn
+            cn_scheduler.run_cn_close_session_job(engine, now_utc=now_utc)
+    except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
+        print(f"scheduler: {kind} run failed: {exc!r}")
+        return outcome_after_crash(kind)
+    return _NO_RETRY
 
 
 def next_open_fire(now_utc: datetime) -> datetime:
@@ -865,19 +919,9 @@ def run_scheduler(engine: Engine) -> None:  # pragma: no cover - exercised live,
     sched = BlockingScheduler(timezone="UTC")
 
     def tick(kind: str) -> None:
-        outcome = "failed"
+        outcome = _NO_RETRY
         try:
-            now = datetime.now(UTC)
-            if kind == "open":
-                run_open_session_job(engine, now_utc=now)
-            elif kind == "close":
-                outcome = run_session_job(engine, now_utc=now)
-            elif kind == "open_cn":
-                cn_scheduler.run_cn_open_session_job(engine, now_utc=now)
-            else:  # close_cn
-                cn_scheduler.run_cn_close_session_job(engine, now_utc=now)
-        except Exception as exc:  # noqa: BLE001 — logged; the loop must survive a bad day
-            print(f"scheduler: {kind} run failed: {exc!r}")
+            outcome = run_kind(engine, kind, now_utc=datetime.now(UTC))
         finally:
             after = datetime.now(UTC) + timedelta(seconds=1)
             nxt, nxt_kind = next_after_outcome(after, outcome, calendar.today_et(after), delay)
