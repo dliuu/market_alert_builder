@@ -18,7 +18,14 @@ One person, initially the author. A serious retail investor with a concentrated,
 - **Not a trading terminal.** No live quotes, no charts, no order entry.
 - **Not advice.** The brief never says buy, sell, or hold, and carries no price targets.
 - **No intraday alerts.** A third channel would turn a briefing into a monitor, which is a different product with worse habits attached.
-- **No technical indicator soup.** RSI/MACD/Bollinger across eight names is noise.
+- **No bare technical indicators.** *Amended by M20 (D36).* The original rule
+  read "no indicator soup — RSI/MACD/Bollinger across eight names is noise",
+  and it was right about bare values. §5 carries RSI, MACD and ADX under three
+  conditions that keep the rule's intent: no oscillator is ever shown without
+  its own-history percentile, the set is three orthogonal measures rather than
+  a panel of near-duplicates, and the email section is gated at the decile and
+  capped at three names. Stochastic, Williams %R, CCI and Bollinger %B remain
+  ruled out as restatements of RSI.
 
 ## The two design rules
 

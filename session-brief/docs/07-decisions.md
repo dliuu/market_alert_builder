@@ -684,3 +684,86 @@ render it in full on the web archive and cut the email to names near a level,
 breaking out, or unusual on volume. That is a judgement to make from a real
 brief, not in advance. Round numbers and a `vs sector` column (`rel_strength`
 is still declared and unpopulated) are the two clean later additions.
+
+---
+
+**D36 — M20 indicator standing: percentile-not-value, three orthogonal measures, gated-and-capped, quantized Decimal**
+
+§4 answers *where does each position stand in its price structure*; it cannot
+say whether any of that is unusual *for this name*. An RSI of 71 means one
+thing on a utility and another on ASTS. M20 adds §5, and four choices carry
+the weight — each rules something out.
+
+*A value never ships without its own-history percentile.* Every oscillator is
+a pair: the value, and its rank against that same symbol's trailing 252
+sessions of the same indicator (`pctile(x, history) = 100 * |{h : h < x}| /
+|history|`, strict `<`, today excluded from its own baseline — one denominator
+rule, the same one `vol_vs_5d`/`vol_vs_21d` already apply). Below a full
+baseline the percentile is `None`, never a value computed over a partial year
+— the same refusal `high_52w` makes for a partial 52-week window. This is what
+makes the reversed non-goal (`docs/01`, amended in place) defensible: `RSI 71`
+is soup, `RSI 71 · 88th percentile, 1y` is a comparison already made for the
+reader and auditable against `bars_daily`.
+*Rules out:* rendering any of the five tracked values bare; a percentile
+computed over fewer than 252 prior sessions.
+
+*Three orthogonal measures, not a panel.* RSI, Stochastic %K, Williams %R, CCI
+and Bollinger %B all answer "where is price within its recent range" and their
+percentiles move together — only RSI is carried. MACD histogram (trend
+acceleration) and ADX (trend strength irrespective of direction) measure
+something RSI does not. ADX ships with no "> 25 = trending" label: the
+percentile is the comparison this milestone exists to make, and a hardcoded
+threshold would be an unearned opinion sitting next to an earned one.
+*Rules out:* Stochastic, Williams %R, CCI, Bollinger %B — restatements of RSI,
+not deferred; a labelled ADX threshold.
+
+*Gated-and-capped in the email; the archive is ungated.* A name qualifies when
+any of the five percentiles clears the decile (`> 90` or `< 10`, strict, the
+same boundary convention `rvol > 1.5` uses), `divergence` is non-null, or §4
+already set `breakout` for that symbol — §5 reads that decision, it never
+recomputes a second volume threshold. The email renders the three most
+stretched qualifying names; the rest are named in `section.note`. This reuses
+`row.tier` (M5) rather than inventing a second row set: every name with a
+standing gets a row, the cap is expressed as `full` vs `brief`, the email
+filters on tier, and the archive renders every row regardless. Zero qualifying
+names still render the section, with an absence note — an omitted section
+would read to a renderer as "not computed" (the same reasoning that keeps §4
+untiered, D35, applied here to the opposite default).
+*Rules out:* a second full-value-grid row set alongside the capped one; an
+omitted section for the empty case; the renderer deciding the cap or the gate
+(D16 — assembly decides, the renderer reads).
+
+*`oscillators.py` is quantized `Decimal`, not `technicals.py`'s exact
+`Fraction`.* `technicals.py` stays exact because nothing there needs `sqrt`.
+Oscillators need recursive EMAs, and `Fraction` compounds its denominator by
+13 on every MACD step — over a 286-session window that is a ~1000-bit integer
+carrying no accuracy anyone can use. So this module runs under an explicit
+28-digit `Decimal` context, SMA-seeded, quantized to 10 places at every
+recursion step: deterministic and reproducible across runs and machines, and
+still never `float` (the money rule), which would make the fixture snapshots
+unstable.
+*Rules out:* extending `technicals.py`'s `Fraction` arithmetic to cover
+oscillators; `float` anywhere on this path.
+
+**A fifth thing, discovered rather than decided: the benchmark threshold is
+strict and asymmetric, on purpose, and it is live right now.** A sector
+benchmark needs the *full* 286-session window or `rel_strength` and
+`rel_strength_benchmark` are both null for every holding under it — it does
+**not** silently fall back to SPY, because that would change what the number
+claims without changing its label. A holding with a short window degrades
+gracefully (values render, percentiles null); a benchmark with a short window
+takes the whole sector dark. The dev database's SPY sits at 285 bars, one
+short of 286 — `rel_strength` renders blank across the book until it is
+backfilled deeper, which is why `docs/03`'s `--days 500` is a **prerequisite**
+for §5 showing relative strength at all, not housekeeping. Open question: a
+newly-added sector benchmark going dark for every holding under it, with
+nothing in the brief saying why, is worth revisiting once a real backfill
+cadence exists.
+
+*Rules out:* a silent SPY fallback when a benchmark's window is short; treating
+`--days 500` as an unrelated housekeeping change.
+
+*Reverses if:* after a month of real briefs the gate fires for most names on
+most sessions — that would mean the percentiles are not discriminating, the
+same failure M19 caught when its first touch predicate scored ASTS at 61
+touches in 276 sessions. The fallback is divergence-only.
