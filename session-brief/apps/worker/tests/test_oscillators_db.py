@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -78,29 +80,32 @@ def _seed_bars(
 
 
 def test_full_window_yields_a_standing_with_percentiles(db_conn: Connection) -> None:
-    last = _seed_bars(db_conn, "ASTS", READ_DEPTH)
+    last = _seed_bars(db_conn, "ZQZA", READ_DEPTH)
     _seed_bars(db_conn, "SPY", READ_DEPTH, start="400")
-    out = compute_and_store_standing(db_conn, USER, ["ASTS"], last)
-    assert "ASTS" in out
-    assert out["ASTS"].rsi14_pctile is not None
+    out = compute_and_store_standing(db_conn, USER, ["ZQZA"], last)
+    assert "ZQZA" in out
+    assert out["ZQZA"].rsi14_pctile is not None
+    # ZQZA has no holdings row for this user, so it falls back to SPY — assert
+    # it, so the SPY seed line above is exercised rather than dead weight.
+    assert out["ZQZA"].rel_strength_benchmark == "SPY"
 
 
 def test_null_adjusted_bar_anywhere_in_the_window_skips_the_symbol(db_conn: Connection) -> None:
     """The M19 skip rule, re-asserted here because this module has its own
     query and can regress independently of technicals.py."""
-    last = _seed_bars(db_conn, "ASTS", READ_DEPTH - 1)
+    last = _seed_bars(db_conn, "ZQZA", READ_DEPTH - 1)
     # The one bad bar must precede the good window, not restart at the same
     # day-zero _seed_bars defaults to — otherwise it collides on
     # (symbol, session_date) with the first good bar and the INSERT fails.
-    _seed_bars(db_conn, "ASTS", 1, adjusted=False, end=_EPOCH - timedelta(days=1))
-    out = compute_and_store_standing(db_conn, USER, ["ASTS"], last)
-    assert "ASTS" not in out
+    _seed_bars(db_conn, "ZQZA", 1, adjusted=False, end=_EPOCH - timedelta(days=1))
+    out = compute_and_store_standing(db_conn, USER, ["ZQZA"], last)
+    assert "ZQZA" not in out
 
 
 def test_symbol_with_no_bar_on_the_session_is_absent(db_conn: Connection) -> None:
-    last = _seed_bars(db_conn, "ASTS", READ_DEPTH)
-    out = compute_and_store_standing(db_conn, USER, ["ASTS"], last + timedelta(days=3))
-    assert "ASTS" not in out
+    last = _seed_bars(db_conn, "ZQZA", READ_DEPTH)
+    out = compute_and_store_standing(db_conn, USER, ["ZQZA"], last + timedelta(days=3))
+    assert "ZQZA" not in out
 
 
 # `holdings` has a UNIQUE(user_id, symbol) constraint, and the real dev tenant
@@ -163,12 +168,14 @@ def test_incomplete_benchmark_window_nulls_both_relative_fields(db_conn: Connect
 
 
 def test_numeric_metrics_are_stored_and_enums_are_not(db_conn: Connection) -> None:
-    last = _seed_bars(db_conn, "ASTS", READ_DEPTH)
-    _seed_bars(db_conn, "SPY", READ_DEPTH, start="400")
-    compute_and_store_standing(db_conn, USER, ["ASTS"], last)
+    # No SPY seed: this test is about which metric names land in `metrics`,
+    # none of which depend on benchmark resolution — a SPY window here would
+    # be dead weight that implies a benchmark check this test doesn't make.
+    last = _seed_bars(db_conn, "ZQZA", READ_DEPTH)
+    compute_and_store_standing(db_conn, USER, ["ZQZA"], last)
     stored = {
         r[0] for r in db_conn.execute(
-            text("SELECT metric FROM metrics WHERE user_id = :u AND symbol = 'ASTS' "
+            text("SELECT metric FROM metrics WHERE user_id = :u AND symbol = 'ZQZA' "
                  "AND session_date = :d"),
             {"u": USER, "d": last},
         )
@@ -179,17 +186,27 @@ def test_numeric_metrics_are_stored_and_enums_are_not(db_conn: Connection) -> No
 
 
 def test_recomputation_is_idempotent(db_conn: Connection) -> None:
-    last = _seed_bars(db_conn, "ASTS", READ_DEPTH)
-    _seed_bars(db_conn, "SPY", READ_DEPTH, start="400")
-    compute_and_store_standing(db_conn, USER, ["ASTS"], last)
-    compute_and_store_standing(db_conn, USER, ["ASTS"], last)
+    # No SPY seed, same reasoning as above: idempotency is about the upsert's
+    # ON CONFLICT behavior for `rsi14`, unaffected by benchmark resolution.
+    last = _seed_bars(db_conn, "ZQZA", READ_DEPTH)
+    compute_and_store_standing(db_conn, USER, ["ZQZA"], last)
+    compute_and_store_standing(db_conn, USER, ["ZQZA"], last)
     n = db_conn.execute(
-        text("SELECT count(*) FROM metrics WHERE user_id = :u AND symbol = 'ASTS' "
+        text("SELECT count(*) FROM metrics WHERE user_id = :u AND symbol = 'ZQZA' "
              "AND session_date = :d AND metric = 'rsi14'"),
         {"u": USER, "d": last},
     ).scalar_one()
     assert n == 1
 
 
-def test_empty_symbol_list_is_a_no_op(db_conn: Connection) -> None:
+def test_empty_symbol_list_is_a_no_op(db_conn: Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Asserts the `if not symbols: return {}` guard itself, not just its
+    output — a `for symbol in []: ...` loop over an empty list also produces
+    `{}` with no guard at all, so returning `{}` alone doesn't pin the guard
+    down. Observing that no query reaches the connection is what does: without
+    the guard, `_benchmarks` and `_read_windows` still each issue one query
+    even for an empty symbol list."""
+    spy = MagicMock(wraps=db_conn.execute)
+    monkeypatch.setattr(db_conn, "execute", spy)
     assert compute_and_store_standing(db_conn, USER, [], date(2026, 6, 1)) == {}
+    spy.assert_not_called()
