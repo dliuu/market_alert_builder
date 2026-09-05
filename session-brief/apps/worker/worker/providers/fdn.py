@@ -280,6 +280,28 @@ class FdnPremarketProvider:
             return []
 
 
+class FdnCatalystProvider:
+    """The live ``CatalystProvider`` (M17's seam, D30) over ``FdnClient``.
+
+    Rows are returned vendor-verbatim: invariant 5 stores exactly what came
+    over the wire, and ``worker/catalysts_ingest.normalize_*`` owns every
+    field mapping. ``public_float`` is ``None`` per open question 4's answer —
+    ``large_144``'s denominator stays the conservative
+    ``fundamentals.shares_out`` read (``book_floats``)."""
+
+    def __init__(self, client: FdnClient) -> None:
+        self._client = client
+
+    def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        return self._client.fetch("insider-transactions", identifier=symbol, offset=str(offset))
+
+    def proposed_sales(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        return self._client.fetch("proposed-sales", identifier=symbol, offset=str(offset))
+
+    def public_float(self, symbol: str) -> Decimal | None:
+        return None
+
+
 class FdnProvider:
     """The M11 ``MarketDataProvider``-shaped fdn seam. **Not the live feed.**
 
