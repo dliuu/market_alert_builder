@@ -35,6 +35,7 @@ _TYPE_MAP: dict[str, str] = {
     "p": "P", "purchase": "P", "buy": "P", "open market purchase": "P",
     "s": "S", "sale": "S", "sell": "S", "open market sale": "S",
     "m": "M", "exercise": "M", "option exercise": "M",
+    "x": "M", "exercise of in-the-money or at-the-money derivative security": "M",
     "f": "F", "tax": "F", "tax withholding": "F", "payment of exercise price": "F",
     "a": "A", "grant": "A", "award": "A",
     "g": "G", "gift": "G",
@@ -85,22 +86,33 @@ def _decimal(value: object) -> Decimal | None:
 
 def normalize_insider(rows: list[dict[str, Any]]) -> list[InsiderTx]:
     """Vendor shape -> typed rows. Pure. Money lands as integer cents via
-    Decimal, never float: ``3 * 0.10`` is 30 cents, not 30.000000000000004."""
+    Decimal, never float: ``3 * 0.10`` is 30 cents, not 30.000000000000004.
+
+    Field names are the live feed's (probed 2026-09-04): ``trading_symbol``,
+    ``amount_of_securities``, ``price_per_security``,
+    ``securities_owned_following_transaction``, ``relationship_to_issuer``.
+    The vendor sends no filing date, so ``filing_date`` carries the
+    transaction date. Derivative legs are skipped: an exercise arrives as a
+    derivative and a non-derivative row for the same shares, and counting
+    both would double it in cluster and cadence math."""
     out: list[InsiderTx] = []
     for r in rows:
-        shares = _decimal(r.get("shares")) or Decimal(0)
-        price = _decimal(r.get("price")) or Decimal(0)
-        raw_type = str(r.get("transaction_type") or "").strip().lower()
+        if r.get("is_derivatives_transaction"):
+            continue
+        shares = _decimal(r.get("amount_of_securities")) or Decimal(0)
+        price = _decimal(r.get("price_per_security")) or Decimal(0)
+        raw_type = str(r.get("transaction_code") or "").strip().lower()
+        title = r.get("relationship_to_issuer")
         out.append(InsiderTx(
-            symbol=str(r["symbol"]),
+            symbol=str(r["trading_symbol"]),
             insider_name=str(r.get("insider_name") or "unknown"),
-            insider_title=(str(r["insider_title"]) if r.get("insider_title") else None),
+            insider_title=(str(title) if title else None),
             transaction_date=date.fromisoformat(str(r["transaction_date"])),
-            filing_date=date.fromisoformat(str(r.get("filing_date") or r["transaction_date"])),
+            filing_date=date.fromisoformat(str(r["transaction_date"])),
             transaction_code=_TYPE_MAP.get(raw_type, "?"),
             shares=shares,
             value_cents=int((shares * price * 100).to_integral_value()),
-            shares_after=_decimal(r.get("shares_after")),
+            shares_after=_decimal(r.get("securities_owned_following_transaction")),
             row_id=0,  # assigned by the database on insert
         ))
     return out

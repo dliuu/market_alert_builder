@@ -29,36 +29,68 @@ def test_the_synthetic_provider_is_deterministic() -> None:
     assert a != SyntheticCatalystProvider(_D).insider_transactions("RKLB")
 
 
-def test_the_synthetic_provider_emits_the_documented_shape() -> None:
+def test_the_synthetic_provider_emits_the_vendor_shape() -> None:
     rows = SyntheticCatalystProvider(_D).insider_transactions("SNDK")
 
     assert rows, "a seeded symbol must produce filings or the section can't be developed"
     row = rows[0]
-    assert {"symbol", "insider_name", "transaction_date", "filing_date",
-            "transaction_type", "shares", "price", "shares_after"} <= set(row)
+    assert {"trading_symbol", "insider_name", "relationship_to_issuer",
+            "transaction_date", "transaction_code", "amount_of_securities",
+            "price_per_security", "securities_owned_following_transaction",
+            "is_derivatives_transaction"} <= set(row)
 
 
-def test_normalize_maps_vendor_types_onto_form_4_codes() -> None:
+def test_normalize_parses_the_vendor_record() -> None:
+    """Field names and types are copied from a live 2026-09-04 probe of
+    `insider-transactions identifier=ASTS` — the shape is a fact, not a guess."""
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": "CFO",
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Sale", "shares": "1000", "price": "50.00",
-        "shares_after": "9000",
+        "trading_symbol": "ASTS", "insider_name": "Cisneros Adriana",
+        "relationship_to_issuer": "Director", "transaction_date": "2026-08-31",
+        "transaction_code": "P", "amount_of_securities": 8768,
+        "price_per_security": Decimal("57.0"), "acquired_or_disposed": "A",
+        "securities_owned_following_transaction": 796353,
+        "is_derivatives_transaction": False, "ownership_form": "I",
     }])
 
-    assert txs[0].transaction_code == "S"
-    assert txs[0].value_cents == 5_000_000  # 1000 * $50, integer cents
-    assert txs[0].shares_after == Decimal("9000")
+    t = txs[0]
+    assert t.symbol == "ASTS"
+    assert t.insider_title == "Director"
+    assert t.transaction_code == "P"
+    assert t.value_cents == 49_977_600  # 8768 * $57.00, integer cents
+    assert t.shares_after == Decimal(796353)
+    assert t.filing_date == t.transaction_date  # vendor sends no filing date
+
+
+def test_normalize_skips_derivative_legs_and_maps_x_to_exercise() -> None:
+    """An option exercise arrives as two rows: a derivative leg (skipped —
+    counting both would double every exercise) and a non-derivative leg whose
+    code X is mechanical, like M — a direction-less transaction."""
+    txs = normalize_insider([
+        {"trading_symbol": "ASTS", "insider_name": "Yao Huiwen",
+         "relationship_to_issuer": "Chief Technology Officer",
+         "transaction_date": "2026-08-19", "transaction_code": "X",
+         "amount_of_securities": 40000, "price_per_security": Decimal("0.0"),
+         "is_derivatives_transaction": True},
+        {"trading_symbol": "ASTS", "insider_name": "Yao Huiwen",
+         "relationship_to_issuer": "Chief Technology Officer",
+         "transaction_date": "2026-08-19", "transaction_code": "X",
+         "amount_of_securities": 40000, "price_per_security": Decimal("0.0641"),
+         "securities_owned_following_transaction": 74750,
+         "is_derivatives_transaction": False},
+    ])
+
+    assert len(txs) == 1
+    assert txs[0].transaction_code == "M"  # X = exercise, mechanical, no direction
 
 
 def test_an_unrecognised_vendor_type_becomes_the_ambiguous_code() -> None:
     """Open question 2 in the data: we record that we could not classify it
     rather than guessing a direction."""
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": None,
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Something New", "shares": "1000", "price": "50.00",
-        "shares_after": None,
+        "trading_symbol": "SNDK", "insider_name": "Jane Roe", "relationship_to_issuer": None,
+        "transaction_date": "2099-04-06",
+        "transaction_code": "Something New", "amount_of_securities": "1000", "price_per_security": "50.00",
+        "securities_owned_following_transaction": None, "is_derivatives_transaction": False,
     }])
 
     assert txs[0].transaction_code == "?"
@@ -66,10 +98,10 @@ def test_an_unrecognised_vendor_type_becomes_the_ambiguous_code() -> None:
 
 def test_normalize_keeps_money_off_the_float_path() -> None:
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": None,
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Sale", "shares": "3", "price": "0.10",
-        "shares_after": None,
+        "trading_symbol": "SNDK", "insider_name": "Jane Roe", "relationship_to_issuer": None,
+        "transaction_date": "2099-04-06",
+        "transaction_code": "S", "amount_of_securities": "3", "price_per_security": "0.10",
+        "securities_owned_following_transaction": None, "is_derivatives_transaction": False,
     }])
 
     assert txs[0].value_cents == 30  # 3 * 10c exactly, not 30.000000000000004
