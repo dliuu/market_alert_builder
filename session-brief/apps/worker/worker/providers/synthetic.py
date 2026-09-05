@@ -155,12 +155,11 @@ class SyntheticCatalystProvider:
         # `unconverted_144` would never fire on seeded data.
         age = 1 + int(self._unit(symbol, "144age") * 90)
         return [{
-            "symbol": symbol,
-            "insider_name": _INSIDERS[int(self._unit(symbol, "144who") * 5)][0],
-            "filing_date": (self._session - timedelta(days=age)).isoformat(),
-            "shares_proposed": str(shares),
-            "approx_sale_date": None,
-            "broker": "Seeded Securities LLC",
+            "trading_symbol": symbol,
+            "seller_name": _INSIDERS[int(self._unit(symbol, "144who") * 5)][0],
+            "amount_of_securities_to_be_sold": str(shares),
+            "approximate_date_of_sale": (self._session - timedelta(days=age)).isoformat(),
+            "broker_name": "Seeded Securities LLC",
         }][offset:]
 
     def public_float(self, symbol: str) -> Decimal | None:

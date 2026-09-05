@@ -119,20 +119,26 @@ def normalize_insider(rows: list[dict[str, Any]]) -> list[InsiderTx]:
 
 
 def normalize_proposed(rows: list[dict[str, Any]]) -> list[ProposedSale]:
-    return [
-        ProposedSale(
-            symbol=str(r["symbol"]),
-            insider_name=str(r.get("insider_name") or "unknown"),
-            filing_date=date.fromisoformat(str(r["filing_date"])),
-            shares_proposed=_decimal(r.get("shares_proposed")) or Decimal(0),
-            approx_sale_date=(
-                date.fromisoformat(str(r["approx_sale_date"]))
-                if r.get("approx_sale_date") else None
-            ),
+    """Vendor shape -> typed rows. Pure. The vendor exposes no filing date;
+    ``approximate_date_of_sale`` (falling back to ``acquisition_period_end``)
+    anchors the row as both ``filing_date`` and ``approx_sale_date``, which
+    shifts ``unconverted_144``'s clock to "past the stated sale date and still
+    unexecuted" — arguably the more meaningful reading. A record with neither
+    date is skipped: it cannot be keyed, aged, or matched."""
+    out: list[ProposedSale] = []
+    for r in rows:
+        sale_date = r.get("approximate_date_of_sale") or r.get("acquisition_period_end")
+        if not sale_date:
+            continue
+        out.append(ProposedSale(
+            symbol=str(r["trading_symbol"]),
+            insider_name=str(r.get("seller_name") or "unknown"),
+            filing_date=date.fromisoformat(str(sale_date)),
+            shares_proposed=_decimal(r.get("amount_of_securities_to_be_sold")) or Decimal(0),
+            approx_sale_date=date.fromisoformat(str(sale_date)),
             row_id=0,
-        )
-        for r in rows
-    ]
+        ))
+    return out
 
 
 def ingest_catalysts(

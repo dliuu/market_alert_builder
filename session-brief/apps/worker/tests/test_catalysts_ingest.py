@@ -13,7 +13,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from worker.catalysts_ingest import ingest_catalysts, normalize_insider
+from worker.catalysts_ingest import ingest_catalysts, normalize_insider, normalize_proposed
 from worker.providers.synthetic import SyntheticCatalystProvider
 
 _D = date(2099, 4, 6)
@@ -172,3 +172,35 @@ def test_a_recovered_symbol_resets_its_failure_count(db_conn: Connection) -> Non
     ).mappings().one()
     assert row["consecutive_fails"] == 0
     assert row["last_success_at"] is not None
+
+
+def test_normalize_proposed_parses_the_vendor_record() -> None:
+    """Live 2026-09-04 probe of `proposed-sales identifier=ASTS`. The vendor
+    sends no filing date; the approximate sale date anchors the row, so
+    `unconverted_144` reads "past the stated sale date and still unexecuted"."""
+    sales = normalize_proposed([{
+        "trading_symbol": "ASTS", "seller_name": "AA Gables 2, LLC",
+        "relationship_to_issuer": "(1)", "broker_name": "Citigroup Global Markets Inc.",
+        "amount_of_securities_to_be_sold": 2500000,
+        "market_value": Decimal("182975000.0"),
+        "amount_of_securities_outstanding": 298746383,
+        "approximate_date_of_sale": "2026-06-22",
+        "acquisition_period_start": "2026-06-22", "acquisition_period_end": "2026-06-22",
+    }])
+
+    s = sales[0]
+    assert s.symbol == "ASTS"
+    assert s.insider_name == "AA Gables 2, LLC"
+    assert s.shares_proposed == Decimal(2500000)
+    assert s.filing_date == date(2026, 6, 22)
+    assert s.approx_sale_date == date(2026, 6, 22)
+
+
+def test_normalize_proposed_skips_a_record_with_no_date() -> None:
+    """A 144 that can't be dated can't be keyed, aged, or matched to a Form 4 —
+    skipping it is recorded honesty, inventing a date is not."""
+    assert normalize_proposed([{
+        "trading_symbol": "ASTS", "seller_name": "X",
+        "amount_of_securities_to_be_sold": 100,
+        "approximate_date_of_sale": None, "acquisition_period_end": None,
+    }]) == []
