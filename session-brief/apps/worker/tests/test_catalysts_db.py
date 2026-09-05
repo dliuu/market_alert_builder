@@ -156,14 +156,14 @@ def test_rebuild_reproduces_the_same_signals_from_raw_rows(db_conn: Connection) 
     """'Zero API calls' — the detectors read only the raw tables."""
     store_insider_txs(db_conn, [_tx(0, n) for n in ("A", "B", "C")])
 
+    signals_q = text(
+        "SELECT source, kind, ref_date, severity FROM catalyst_signals "
+        "ORDER BY kind, symbol, ref_date, severity"
+    )
     rebuild_signals(db_conn, model_version=_MV)
-    first = db_conn.execute(
-        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind, symbol, ref_date, severity")
-    ).all()
+    first = db_conn.execute(signals_q).all()
     rebuild_signals(db_conn, model_version=_MV)
-    second = db_conn.execute(
-        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind, symbol, ref_date, severity")
-    ).all()
+    second = db_conn.execute(signals_q).all()
 
     assert first == second
     assert ("insider", "cluster", _D, 4) in [tuple(r) for r in first]
