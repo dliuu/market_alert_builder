@@ -158,11 +158,11 @@ def test_rebuild_reproduces_the_same_signals_from_raw_rows(db_conn: Connection) 
 
     rebuild_signals(db_conn, model_version=_MV)
     first = db_conn.execute(
-        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind")
+        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind, symbol, ref_date, severity")
     ).all()
     rebuild_signals(db_conn, model_version=_MV)
     second = db_conn.execute(
-        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind")
+        text("SELECT source, kind, ref_date, severity FROM catalyst_signals ORDER BY kind, symbol, ref_date, severity")
     ).all()
 
     assert first == second
