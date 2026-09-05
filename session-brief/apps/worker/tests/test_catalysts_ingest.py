@@ -174,6 +174,31 @@ def test_a_recovered_symbol_resets_its_failure_count(db_conn: Connection) -> Non
     assert row["last_success_at"] is not None
 
 
+def test_a_malformed_record_fails_one_symbol_not_the_run(db_conn: Connection) -> None:
+    """`store` runs `normalize_*`; a record the mapper cannot parse must land
+    on the watermark like a vendor 500 does, not abort every later symbol."""
+    class _OneBadApple:
+        def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            if symbol == "BAD":
+                return [{"trading_symbol": "BAD"}]  # no transaction_date -> parse error
+            return []
+
+        def proposed_sales(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            return []
+
+        def public_float(self, symbol: str) -> None:
+            return None
+
+    counts = ingest_catalysts(db_conn, _OneBadApple(), ["BAD", "ZOK"], as_of=_D)
+
+    assert counts == {"insider": 0, "proposed": 0}
+    row = db_conn.execute(text(
+        "SELECT consecutive_fails FROM catalyst_watermarks "
+        "WHERE source = 'insider' AND symbol = 'BAD'"
+    )).scalar_one()
+    assert row == 1
+
+
 def test_normalize_proposed_parses_the_vendor_record() -> None:
     """Live 2026-09-04 probe of `proposed-sales identifier=ASTS`. The vendor
     sends no filing date; the approximate sale date anchors the row, so

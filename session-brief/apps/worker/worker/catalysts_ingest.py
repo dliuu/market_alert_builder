@@ -184,16 +184,16 @@ def _ingest_one(
 ) -> int:
     try:
         rows = fetch(symbol)
+        if rows:
+            conn.execute(_INSERT_PAYLOAD, {
+                "endpoint": endpoint, "symbol": symbol, "as_of": as_of,
+                "body": json.dumps(rows, default=str),
+            })
+        stored = int(store(rows) or 0)
     except Exception as exc:  # noqa: BLE001 - one symbol's failure is not the run's
         conn.execute(_MARK_FAIL, {"source": source, "symbol": symbol, "error": str(exc)})
         return 0
 
-    if rows:
-        conn.execute(_INSERT_PAYLOAD, {
-            "endpoint": endpoint, "symbol": symbol, "as_of": as_of,
-            "body": json.dumps(rows, default=str),
-        })
-    stored = int(store(rows) or 0)
     conn.execute(_MARK_OK, {"source": source, "symbol": symbol, "now": now, "as_of": as_of})
     return stored
 
