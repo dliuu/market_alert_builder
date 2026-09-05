@@ -452,6 +452,60 @@ def ensure_todays_bars(
         sleep(interval_s)
 
 
+def _pull_close_catalysts_and_news(
+    engine: Engine, user_id: str, session_date: date
+) -> dict[str, list[str]]:
+    """The pre-assemble catalyst stage the M17 design scheduled and M17 never
+    wired: pull the insider/144 feeds for the held names, rebuild signals, and
+    fetch the week's held-name news. Live-keyed like every fdn surface; without
+    the key it is a no-op and the close brief runs exactly as before.
+
+    Never raises: each half degrades to a log line, because a vendor having a
+    bad afternoon must cost the catalysts section and the news block, not the
+    brief. Returns symbol -> headlines for close narration."""
+    if not config.FDN_API_KEY:
+        return {}
+
+    from worker.catalysts import book_floats, held_symbols, next_earnings, rebuild_signals
+    from worker.catalysts_ingest import ingest_catalysts
+    from worker.constants import CATALYST_MODEL_VERSION
+    from worker.news_fdn import fetch_week_news
+    from worker.providers.fdn import FdnCatalystProvider, FdnClient, store_captured_payloads
+
+    news: dict[str, list[str]] = {}
+    try:
+        client = FdnClient()
+    except Exception as exc:  # noqa: BLE001 - degrade, never kill the close
+        print(f"close {session_date}: catalyst stage skipped ({exc!r})")
+        return news
+    try:
+        try:
+            with engine.begin() as conn:
+                held = held_symbols(conn, user_id)
+                counts = ingest_catalysts(
+                    conn, FdnCatalystProvider(client), held, as_of=session_date
+                )
+                stored = rebuild_signals(
+                    conn, model_version=CATALYST_MODEL_VERSION, as_of=session_date,
+                    earnings=next_earnings(conn), floats=book_floats(conn, session_date),
+                )
+            print(f"close {session_date}: catalysts {counts}, {stored} signals.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"close {session_date}: catalyst ingest degraded ({exc!r})")
+        try:
+            with engine.connect() as conn:
+                held_set = set(book_symbols(conn, user_id))
+            news = fetch_week_news(client, session_date=session_date, held=held_set)
+            with engine.begin() as conn:
+                store_captured_payloads(conn, client, as_of=session_date)
+            print(f"close {session_date}: week news for {sorted(news)}.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"close {session_date}: news fetch degraded ({exc!r})")
+    finally:
+        client.close()
+    return news
+
+
 def run_session_job(
     engine: Engine,
     *,
@@ -519,13 +573,18 @@ def run_session_job(
                 )
                 return "deferred-no-bars"
 
+        # M17's scheduled stage, at last: catalysts + the week's news land
+        # before assemble reads them. Non-fatal by construction.
+        news = _pull_close_catalysts_and_news(engine, user_id, session_date)
+
         # Assemble in its own transaction so the briefs row is committed before
         # delivery reads it back (deliver renders from the persisted body).
         with engine.connect() as conn:
             trans = conn.begin()
             try:
                 obj = assemble_and_store(
-                    conn, user_id, session_date, "close", narrator=default_narrator()
+                    conn, user_id, session_date, "close",
+                    narrator=default_narrator(), news=news,
                 )
                 trans.commit()
             except Exception:

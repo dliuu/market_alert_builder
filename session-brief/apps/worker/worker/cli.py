@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from fractions import Fraction
 
 import httpx
 from sqlalchemy import text
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Engine
 
 from contracts.brief import BriefObject
 from worker import calendar
@@ -237,7 +236,7 @@ def _catalysts(
     """M17 stages. ``ingest`` is the only one that touches a vendor; ``detect``
     and ``rebuild`` read the stored rows alone, which is what makes a rule
     change cost zero API calls."""
-    from worker.catalysts import rebuild_signals
+    from worker.catalysts import book_floats, held_symbols, next_earnings, rebuild_signals
     from worker.catalysts_ingest import ingest_catalysts
     from worker.constants import CATALYST_MODEL_VERSION, DEV_USER_ID
     from worker.providers.synthetic import SyntheticCatalystProvider
@@ -251,7 +250,7 @@ def _catalysts(
         if cat_command == "ingest":
             symbols = (
                 [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
-                if symbols_arg else _book_symbols(conn, DEV_USER_ID)
+                if symbols_arg else held_symbols(conn, DEV_USER_ID)
             )
             # Live when the key is set (M16's switch), synthetic otherwise —
             # the same rule the open job applies to the pre-market feed.
@@ -274,46 +273,15 @@ def _catalysts(
             return
 
         if cat_command in ("detect", "rebuild"):
-            floats = _book_floats(conn, session_date)
+            floats = book_floats(conn, session_date)
             stored = rebuild_signals(
                 conn, model_version=CATALYST_MODEL_VERSION,
-                as_of=session_date, earnings=_next_earnings(conn), floats=floats,
+                as_of=session_date, earnings=next_earnings(conn), floats=floats,
             )
             print(f"catalysts {cat_command} {session_date}: {stored} signals")
             return
 
     raise SystemExit("usage: catalysts {ingest|detect|rebuild} --date YYYY-MM-DD")
-
-
-def _book_symbols(conn: Connection, user_id: str) -> list[str]:
-    rows = conn.execute(
-        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u ORDER BY symbol"),
-        {"u": user_id},
-    ).scalars().all()
-    return [str(s) for s in rows]
-
-
-def _next_earnings(conn: Connection) -> dict[str, date]:
-    """The earnings dates `pre_earnings` measures against, from the `events`
-    table M14 populates. A symbol absent here simply skips the rule."""
-    rows = conn.execute(text(
-        "SELECT symbol, min(occurs_at::date) AS d FROM events "
-        "WHERE event_type = 'earnings' AND symbol IS NOT NULL "
-        "AND occurs_at >= now() GROUP BY symbol"
-    )).mappings().all()
-    return {r["symbol"]: r["d"] for r in rows}
-
-
-def _book_floats(conn: Connection, session_date: date) -> dict[str, Decimal]:
-    """Public float per symbol, from `fundamentals.shares_out` where it exists.
-    Shares outstanding overstates float, so this is an upper bound and
-    `large_144` is correspondingly conservative — open question 4 is whether the
-    vendor exposes a true float."""
-    rows = conn.execute(text(
-        "SELECT DISTINCT ON (symbol) symbol, shares_out FROM fundamentals "
-        "WHERE shares_out IS NOT NULL AND as_of <= :d ORDER BY symbol, as_of DESC"
-    ), {"d": session_date}).mappings().all()
-    return {r["symbol"]: Decimal(str(r["shares_out"])) for r in rows}
 
 
 def _attribution(

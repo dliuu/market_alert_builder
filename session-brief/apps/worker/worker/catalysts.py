@@ -365,6 +365,37 @@ def _clusters(txs: list[InsiderTx]) -> list[CatalystSignal]:
 # --- Database layer -------------------------------------------------------
 
 
+def held_symbols(conn: Connection, user_id: str) -> list[str]:
+    rows = conn.execute(
+        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u ORDER BY symbol"),
+        {"u": user_id},
+    ).scalars().all()
+    return [str(s) for s in rows]
+
+
+def next_earnings(conn: Connection) -> dict[str, date]:
+    """The earnings dates `pre_earnings` measures against, from the `events`
+    table M14 populates. A symbol absent here simply skips the rule."""
+    rows = conn.execute(text(
+        "SELECT symbol, min(occurs_at::date) AS d FROM events "
+        "WHERE event_type = 'earnings' AND symbol IS NOT NULL "
+        "AND occurs_at >= now() GROUP BY symbol"
+    )).mappings().all()
+    return {r["symbol"]: r["d"] for r in rows}
+
+
+def book_floats(conn: Connection, session_date: date) -> dict[str, Decimal]:
+    """Public float per symbol, from `fundamentals.shares_out` where it exists.
+    Shares outstanding overstates float, so this is an upper bound and
+    `large_144` is correspondingly conservative — open question 4 is whether the
+    vendor exposes a true float."""
+    rows = conn.execute(text(
+        "SELECT DISTINCT ON (symbol) symbol, shares_out FROM fundamentals "
+        "WHERE shares_out IS NOT NULL AND as_of <= :d ORDER BY symbol, as_of DESC"
+    ), {"d": session_date}).mappings().all()
+    return {r["symbol"]: Decimal(str(r["shares_out"])) for r in rows}
+
+
 @dataclass(frozen=True)
 class CatalystItem:
     """A signal as the brief will show it: the stored row plus the tier that

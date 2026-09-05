@@ -182,6 +182,22 @@ class _FakeEngine:
         return contextlib.nullcontext(None)
 
 
+class _Tx:
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+
+
+class _TxEngine(_FakeEngine):
+    """connect() must yield a connection whose begin() is a real transaction."""
+
+    def connect(self) -> Any:
+        class _Conn:
+            def begin(self) -> Any:
+                return _Tx()
+
+        return contextlib.nullcontext(_Conn())
+
+
 def test_ensure_todays_bars_polls_until_present(monkeypatch: pytest.MonkeyPatch) -> None:
     from worker import ingest, normalize
 
@@ -438,20 +454,6 @@ def test_run_session_job_proceeds_when_bars_are_present(monkeypatch: pytest.Monk
     monkeypatch.setattr(narrate, "default_narrator", lambda: None)
     monkeypatch.setattr(assemble, "assemble_and_store", lambda *a, **k: None)  # quiet session
 
-    class _Tx:
-        def commit(self) -> None: ...
-        def rollback(self) -> None: ...
-
-    class _TxEngine(_FakeEngine):
-        """connect() must yield a connection whose begin() is a real transaction."""
-
-        def connect(self) -> Any:
-            class _Conn:
-                def begin(self) -> Any:
-                    return _Tx()
-
-            return contextlib.nullcontext(_Conn())
-
     outcome = scheduler.run_session_job(
         _TxEngine(),  # type: ignore[arg-type]
         now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
@@ -459,6 +461,68 @@ def test_run_session_job_proceeds_when_bars_are_present(monkeypatch: pytest.Monk
     )
     assert outcome == "skipped-quiet"
     assert pings == [("ok", "https://hc.example/abc")]
+
+
+def test_close_job_pulls_catalysts_and_hands_news_to_assemble(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The M17 wiring that was never built: the close run pulls the catalyst
+    feeds and the week's news before assemble, and assemble gets the news."""
+    monkeypatch.setattr(scheduler, "ping_success", lambda url: None)
+    monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: None)
+    _stub_poll(monkeypatch, missing=set())
+
+    from worker import assemble, narrate
+
+    monkeypatch.setattr(narrate, "default_narrator", lambda: None)
+    seen: dict[str, Any] = {}
+
+    def fake_assemble(conn, user_id, session_date, kind, *, narrator=None, news=None):
+        seen["news"] = news
+        return None  # quiet session — delivery never runs
+
+    monkeypatch.setattr(assemble, "assemble_and_store", fake_assemble)
+    monkeypatch.setattr(
+        scheduler, "_pull_close_catalysts_and_news",
+        lambda engine, user_id, session_date: {"ASTS": ["Insider buys disclosed"]},
+    )
+
+    outcome = scheduler.run_session_job(
+        _TxEngine(),  # type: ignore[arg-type]
+        now_utc=datetime(2026, 9, 4, 20, 45, tzinfo=UTC),
+        healthcheck_url="",
+    )
+
+    assert outcome == "skipped-quiet"
+    assert seen["news"] == {"ASTS": ["Insider buys disclosed"]}
+
+
+def test_the_catalyst_stage_is_a_noop_without_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "")
+    assert scheduler._pull_close_catalysts_and_news(
+        _FakeEngine(), "u", date(2026, 9, 4)
+    ) == {}
+
+
+def test_the_catalyst_stage_degrades_instead_of_killing_the_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vendor having a bad afternoon costs the catalysts section and the
+    news block — never the brief (docs/02's non-fatal rule)."""
+    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "k")
+
+    class _Boom:
+        def __init__(self) -> None:
+            raise RuntimeError("vendor down")
+
+    import worker.providers.fdn as fdn
+
+    monkeypatch.setattr(fdn, "FdnClient", _Boom)
+    assert scheduler._pull_close_catalysts_and_news(
+        _FakeEngine(), "u", date(2026, 9, 4)
+    ) == {}
 
 
 def test_run_session_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
