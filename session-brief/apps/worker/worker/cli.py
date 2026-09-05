@@ -253,11 +253,23 @@ def _catalysts(
                 [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
                 if symbols_arg else _book_symbols(conn, DEV_USER_ID)
             )
-            # The live FdnProvider swaps in here once M16's FdnClient lands;
-            # nothing above the seam changes (D30).
-            counts = ingest_catalysts(
-                conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
-            )
+            # Live when the key is set (M16's switch), synthetic otherwise —
+            # the same rule the open job applies to the pre-market feed.
+            from worker import config
+            if config.FDN_API_KEY:
+                from worker.providers.fdn import FdnCatalystProvider, FdnClient
+
+                client = FdnClient()
+                try:
+                    counts = ingest_catalysts(
+                        conn, FdnCatalystProvider(client), symbols, as_of=session_date
+                    )
+                finally:
+                    client.close()
+            else:
+                counts = ingest_catalysts(
+                    conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
+                )
             print(f"catalysts ingest {session_date}: {counts}")
             return
 
