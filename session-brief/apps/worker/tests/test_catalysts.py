@@ -20,6 +20,7 @@ from worker.catalysts import (
     detect_proposed,
     render_tier,
 )
+from worker.constants import NOTABLE_BUY_SEVERITY
 
 
 def tx(
@@ -63,6 +64,48 @@ def test_a_clevel_purchase_needs_to_be_a_purchase() -> None:
     signals = detect_insider([tx(title="Chief Executive Officer", code="S")])
 
     assert "clevel_buy" not in kinds(signals)
+
+
+def test_a_directors_large_open_market_buy_is_notable() -> None:
+    """The missed ASTS case, verbatim: Director, code P, ~$500K (2026-08-31).
+    Neither clevel_buy (title) nor cluster (one name) covers it."""
+    t = InsiderTx(
+        symbol="ASTS", insider_name="Cisneros Adriana", insider_title="Director",
+        transaction_date=date(2026, 8, 31), filing_date=date(2026, 8, 31),
+        transaction_code="P", shares=Decimal(8768),
+        value_cents=49_977_600, shares_after=Decimal(796353), row_id=1,
+    )
+
+    signals = detect_insider([t])
+
+    kinds = {s.kind for s in signals}
+    assert "notable_buy" in kinds
+    [sig] = [s for s in signals if s.kind == "notable_buy"]
+    assert sig.severity == NOTABLE_BUY_SEVERITY
+    assert sig.detail == {"insider_count": 1, "total_value_cents": 49_977_600}
+
+
+def test_a_small_buy_and_a_clevel_buy_are_not_notable() -> None:
+    """Below threshold stays quiet; a C-level buy keeps its own (higher)
+    severity rather than double-emitting."""
+    small = InsiderTx(
+        symbol="ASTS", insider_name="Cisneros Adriana", insider_title="Director",
+        transaction_date=date(2026, 8, 31), filing_date=date(2026, 8, 31),
+        transaction_code="P", shares=Decimal(670),
+        value_cents=3_944_290, shares_after=Decimal(797023), row_id=2,
+    )
+    ceo = InsiderTx(
+        symbol="ZC", insider_name="Dana Whitfield", insider_title="Chief Executive Officer",
+        transaction_date=date(2026, 8, 31), filing_date=date(2026, 8, 31),
+        transaction_code="P", shares=Decimal(10000),
+        value_cents=50_000_000, shares_after=Decimal(100000), row_id=3,
+    )
+
+    kinds = [(s.symbol, s.kind) for s in detect_insider([small, ceo])]
+
+    assert ("ASTS", "notable_buy") not in kinds
+    assert ("ZC", "clevel_buy") in kinds
+    assert ("ZC", "notable_buy") not in kinds
 
 
 def test_three_insiders_selling_inside_five_sessions_is_a_cluster() -> None:

@@ -545,13 +545,16 @@ def assemble_and_store(
     kind: str = "close",
     *,
     narrator: Narrator | None = None,
+    news: dict[str, list[str]] | None = None,
 ) -> BriefObject | None:
     """Compute metrics, assemble the object, narrate it, and upsert it into
     ``briefs``. Returns ``None`` (writing nothing) when a close brief is skipped
     because nothing was a full-tier mover. Idempotent on ``(user_id,
     session_date, kind)``: re-running replaces the row rather than duplicating
     it. ``narrator`` is off by default (tables-only); the CLI wires in the
-    Claude-backed one, and narration is non-fatal regardless (M8)."""
+    Claude-backed one, and narration is non-fatal regardless (M8). ``news``
+    (M16) is symbol → held-name headlines, passed through to narration
+    unchanged."""
     result = compute_and_store(conn, user_id, session_date)
     symbols = [p.symbol for p in result.positions]
     closes = _read_closes(conn, symbols, session_date)
@@ -614,7 +617,7 @@ def assemble_and_store(
         return None
     # Stage ⑤: prose is added only to briefs that actually send, and never at
     # the cost of the send — a failed Claude call returns the object unchanged.
-    obj = narrate_and_apply(obj, narrator)
+    obj = narrate_and_apply(obj, narrator, headlines=news)
     _store_brief(conn, obj)
     store_emitted_claims(conn, user_id, obj.brief_id, session_date, emitted, market="US")
     mark_reported(conn, user_id, catalysts, now=datetime.now(UTC))

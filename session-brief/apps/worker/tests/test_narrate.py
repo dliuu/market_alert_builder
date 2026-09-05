@@ -136,6 +136,19 @@ def test_build_prompt_still_lists_all_symbols_for_why() -> None:
     assert "AAA" in prompt and "BBB" in prompt
 
 
+def test_close_prompt_folds_headlines_in_and_omits_the_block_without_them() -> None:
+    """Same contract as the open prompt (M16): headlines are causal context,
+    never a source of figures, and absence means no block at all."""
+    obj = _obj()
+
+    with_news = build_prompt(obj, {"ASTS": ["Insider buys disclosed", "Contract win"]})
+    without = build_prompt(obj)
+
+    assert "ASTS: Insider buys disclosed · Contract win" in with_news
+    assert "News headlines for these names" in with_news
+    assert "News headlines" not in without
+
+
 def test_parse_still_drops_digits() -> None:  # guard unchanged
     obj = _obj_with_attribution([{"symbol": "AAA", "resid_z": 2.0}])
     parsed = parse_narration('{"one_thing":"Up 5% today","why":{}}', obj)

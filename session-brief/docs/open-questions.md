@@ -69,35 +69,23 @@ is inventing a number.
 
 *Test:* `fdn-probe` check on `futures-prices ES (session-dated bar)`.
 
-### Q10 — Does `latest-news` honor a per-symbol filter, or is the news gate decorative?
-
-**Blocks:** §3's `has_news` gate, narration headline block · **Status:** open
-
-`fetch_held_news` pulls 3 pages × 10 market-wide articles and keeps whatever
-mentions a held name. Thirty most-recent market-wide headlines will rarely
-touch any of ~10 holdings, so `has_news` stays `False` and the narration
-headline block stays empty — a feature that reports as working while doing
-nothing.
-
-*If HONOURED* (every returned record mentions the symbol): rework
-`fetch_held_news` to fetch per held symbol instead of paging the market-wide
-feed — one call per name, drop the `_PAGES` loop.
-
-*If IGNORED* (the param was silently dropped): the guess was wrong, not the
-idea — check the vendor docs for the real filter parameter name and re-probe
-via check 7's parameter in `worker/cli.py`. If no per-symbol filter exists at
-any tier, keep market-wide paging and say so rather than leaving a reader to
-assume §3's news threshold is live.
-
-*Test:* either way the failure is silent — verify by eye on the first live
-morning. The job prints `open <date>: N calendar events, news for [...]`; an
-always-empty list there is this finding, not a quiet news day.
-
 ---
 
 ## Catalysts — FinancialData.net (M17/M18)
 
 Design: `docs/superpowers/specs/2026-08-14-m17-catalysts-design.md`.
+
+### Vendor record shapes — probed 2026-09-04
+
+`insider-transactions` and `proposed-sales` use field names disjoint from the
+M17 synthetic guesses (`trading_symbol` not `symbol`, `amount_of_securities`
+not `shares`, `relationship_to_issuer` not `insider_title`, codes already in
+Form 4 letters, **no filing_date on either feed**). `normalize_*` and the
+synthetic provider now speak the vendor shape; Form 144 rows are anchored on
+`approximate_date_of_sale`, so `unconverted_144` measures "past the stated
+sale date and still unexecuted". Q2's accepted false-positive cost is halved:
+derivative legs are now skipped outright, though tax-withholding (`F`) rows
+still count like sales in cluster math.
 
 ### Q7 — Does `index-constituents` cover the Russell family at all?
 
@@ -182,3 +170,19 @@ silent gaps for those listing types (and the 180-day convention is least
 reliable exactly there, so this is also the population where a wrong date
 would have been likeliest). The per-symbol override table remains the manual
 escape hatch if a specific name matters before this reopens.
+
+### Q10 — Does `latest-news` honor a per-symbol filter, or is the news gate decorative?
+
+**Answered 2026-09-04, probed live:** **IGNORED — no per-symbol filter exists
+at any tier.** The vendor docs list only `date`, `offset`, `format`, and the
+probe's `identifier` call returned 10 records, none mentioning the symbol.
+Market-wide paging is the only shape: ~190 records / ~20 pages per day,
+touching only ~27 distinct symbols — the feed skews to large caps, so a quiet
+held name may genuinely have no rows. The close brief now pages the full prior
+week (`fetch_week_news`, throttled — paging flat-out drew 429s even on the
+Premium 30 req/s tier); the open gate keeps its 3-page morning skim.
+
+*Residual guard:* Q10's original by-eye check still applies to the close job's
+`close <date>: week news for [...]` log line — always-empty over a week of
+sessions would now point at held names simply not clearing the feed's
+large-cap skew, which is a data-coverage fact to record, not a bug to fix.

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from fractions import Fraction
 
-import httpx
 from sqlalchemy import text
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Engine
 
 from contracts.brief import BriefObject
 from worker import calendar
@@ -20,7 +18,7 @@ from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID, FDN_TAPE_IDENTIFIERS
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
-from worker.providers.fdn import FEED_ERRORS, FdnClient
+from worker.providers.fdn import FEED_ERRORS, FdnClient, _safe_error
 from worker.providers.tiingo import TiingoProvider
 
 
@@ -237,7 +235,7 @@ def _catalysts(
     """M17 stages. ``ingest`` is the only one that touches a vendor; ``detect``
     and ``rebuild`` read the stored rows alone, which is what makes a rule
     change cost zero API calls."""
-    from worker.catalysts import rebuild_signals
+    from worker.catalysts import book_floats, held_symbols, next_earnings, rebuild_signals
     from worker.catalysts_ingest import ingest_catalysts
     from worker.constants import CATALYST_MODEL_VERSION, DEV_USER_ID
     from worker.providers.synthetic import SyntheticCatalystProvider
@@ -251,57 +249,38 @@ def _catalysts(
         if cat_command == "ingest":
             symbols = (
                 [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
-                if symbols_arg else _book_symbols(conn, DEV_USER_ID)
+                if symbols_arg else held_symbols(conn, DEV_USER_ID)
             )
-            # The live FdnProvider swaps in here once M16's FdnClient lands;
-            # nothing above the seam changes (D30).
-            counts = ingest_catalysts(
-                conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
-            )
+            # Live when the key is set (M16's switch), synthetic otherwise —
+            # the same rule the open job applies to the pre-market feed.
+            from worker import config
+            if config.FDN_API_KEY:
+                from worker.providers.fdn import FdnCatalystProvider, FdnClient
+
+                client = FdnClient()
+                try:
+                    counts = ingest_catalysts(
+                        conn, FdnCatalystProvider(client), symbols, as_of=session_date
+                    )
+                finally:
+                    client.close()
+            else:
+                counts = ingest_catalysts(
+                    conn, SyntheticCatalystProvider(session_date), symbols, as_of=session_date
+                )
             print(f"catalysts ingest {session_date}: {counts}")
             return
 
         if cat_command in ("detect", "rebuild"):
-            floats = _book_floats(conn, session_date)
+            floats = book_floats(conn, session_date)
             stored = rebuild_signals(
                 conn, model_version=CATALYST_MODEL_VERSION,
-                as_of=session_date, earnings=_next_earnings(conn), floats=floats,
+                as_of=session_date, earnings=next_earnings(conn), floats=floats,
             )
             print(f"catalysts {cat_command} {session_date}: {stored} signals")
             return
 
     raise SystemExit("usage: catalysts {ingest|detect|rebuild} --date YYYY-MM-DD")
-
-
-def _book_symbols(conn: Connection, user_id: str) -> list[str]:
-    rows = conn.execute(
-        text("SELECT DISTINCT symbol FROM holdings WHERE user_id = :u ORDER BY symbol"),
-        {"u": user_id},
-    ).scalars().all()
-    return [str(s) for s in rows]
-
-
-def _next_earnings(conn: Connection) -> dict[str, date]:
-    """The earnings dates `pre_earnings` measures against, from the `events`
-    table M14 populates. A symbol absent here simply skips the rule."""
-    rows = conn.execute(text(
-        "SELECT symbol, min(occurs_at::date) AS d FROM events "
-        "WHERE event_type = 'earnings' AND symbol IS NOT NULL "
-        "AND occurs_at >= now() GROUP BY symbol"
-    )).mappings().all()
-    return {r["symbol"]: r["d"] for r in rows}
-
-
-def _book_floats(conn: Connection, session_date: date) -> dict[str, Decimal]:
-    """Public float per symbol, from `fundamentals.shares_out` where it exists.
-    Shares outstanding overstates float, so this is an upper bound and
-    `large_144` is correspondingly conservative — open question 4 is whether the
-    vendor exposes a true float."""
-    rows = conn.execute(text(
-        "SELECT DISTINCT ON (symbol) symbol, shares_out FROM fundamentals "
-        "WHERE shares_out IS NOT NULL AND as_of <= :d ORDER BY symbol, as_of DESC"
-    ), {"d": session_date}).mappings().all()
-    return {r["symbol"]: Decimal(str(r["shares_out"])) for r in rows}
 
 
 def _attribution(
@@ -504,23 +483,6 @@ def _tiingo_cn_probe_cmd(symbols_arg: str | None) -> None:
             "not an error."
         ) from None
     tiingo_cn_probe(provider, symbols=symbols)
-
-
-def _safe_error(exc: Exception) -> str:
-    """Renders a caught FEED_ERRORS exception for a human to read, without
-    ever leaking the vendor key: FdnClient authenticates via a `key` query
-    parameter (never a header — see its docstring's "never log request URLs"),
-    and httpx's own __str__ for HTTPStatusError and most other HTTPError
-    subclasses embeds the full request URL, key included. This diagnostic's
-    entire purpose is to be pasted and screenshotted by a human, so the raw
-    exception text must never reach `print`. Non-httpx members of FEED_ERRORS
-    (ValueError, TypeError, AttributeError, KeyError, ArithmeticError) are our
-    own messages, not the vendor's, and are safe to show as-is."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
-    if isinstance(exc, httpx.HTTPError):
-        return type(exc).__name__
-    return str(exc)
 
 
 def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:

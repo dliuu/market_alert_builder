@@ -64,9 +64,14 @@ class _Narration(BaseModel):
     tape_read: str | None = None
 
 
-def build_prompt(obj: BriefObject) -> str:
+def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None) -> str:
     """The user turn: the computed object as context plus an explicit request for
-    prose-only JSON. The model reads the figures but must not restate them."""
+    prose-only JSON. The model reads the figures but must not restate them.
+
+    ``headlines`` (M16) is symbol → held-name news, folded into the context as
+    plain text — invariant 2 still holds: headlines are prose context the model
+    may draw causal language from, never a source of figures, and the digit
+    guard downstream polices the reply exactly as before."""
     # The close prompt keys off attribution rows specifically — M13's lead and
     # theme framing are about the decomposition. `_narratable_symbols` (used by
     # the parser and the open prompt) is the generalization of the same set.
@@ -80,6 +85,14 @@ def build_prompt(obj: BriefObject) -> str:
     )
     framing = _theme_framing(rows) + _technical_framing(obj)
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
+    news_block = ""
+    if headlines:
+        lines = [f"  {sym}: " + " · ".join(hs) for sym, hs in sorted(headlines.items())]
+        news_block = (
+            "News headlines for these names from the past week (attribute moves "
+            "to causes where they explain them; do not restate figures):\n"
+            + "\n".join(lines) + "\n\n"
+        )
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
         '  "one_thing": one short paragraph (2-3 sentences) naming the single '
@@ -90,6 +103,7 @@ def build_prompt(obj: BriefObject) -> str:
         "point — describe direction and cause in words and let the tables carry "
         "the figures. Do not invent news you were not given.\n\n"
         f"{framing}"
+        f"{news_block}"
         "Session data, for context only — do not restate its figures:\n"
         f"{context}"
     )
@@ -227,14 +241,18 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
     return BriefObject.model_validate(payload)
 
 
-def narrate_and_apply(obj: BriefObject, narrator: Narrator | None) -> BriefObject:
+def narrate_and_apply(
+    obj: BriefObject,
+    narrator: Narrator | None,
+    headlines: dict[str, list[str]] | None = None,
+) -> BriefObject:
     """Stage ⑤. Return ``obj`` with prose merged in, or ``obj`` unchanged when
     narration is unavailable or fails. The broad ``except`` is the feature, not a
     hedge: a brief with no prose is useful; a brief that didn't send is not."""
     if narrator is None:
         return obj
     try:
-        narration = parse_narration(narrator(build_prompt(obj)), obj)
+        narration = parse_narration(narrator(build_prompt(obj, headlines)), obj)
     except Exception:
         return obj  # non-fatal (docs/02): tables-only, still valid and sendable
     return apply_narration(obj, narration)

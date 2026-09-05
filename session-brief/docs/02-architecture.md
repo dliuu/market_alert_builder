@@ -128,7 +128,7 @@ This matters more than any technical decision here. Tiingo's free tier is licens
 |---|---|---|
 | Daily OHLCV (EOD), adjusted close | Tiingo | Free, personal/non-commercial. `close` + `adjClose` map to `bars_daily.c` / `adj_c` |
 | Earnings calendar, ex-div, macro releases | FinancialData.net — wired behind `FDN_API_KEY` (M16); synthetic fallback when unset | `earnings-calendar` / `dividends-calendar` / `economic-calendar`, spoken directly over httpx (`FdnClient`, D29 — not the `fdnpy` SDK). **Premium, $69/mo, personal use only**; redistribution needs Enterprise ($299/mo). With no key, §4 still seeds synthetically (M14). Lockup expiries are not covered by any tier, live or synthetic |
-| Company news | FinancialData.net — wired behind `FDN_API_KEY` (M16); synthetic fallback when unset | `latest-news`, same Premium licensing gate. Turns on §3's `has_news` gate and feeds narration headlines when the key is set; narration ships without it otherwise (M8) |
+| Company news | FinancialData.net — wired behind `FDN_API_KEY` (M16); synthetic fallback when unset | `latest-news`, same Premium licensing gate. Turns on §3's `has_news` gate and feeds narration headlines when the key is set; narration ships without it otherwise (M8). Close brief: `fetch_week_news` pages the prior 7 days market-wide (no per-symbol filter exists — Q10) and feeds held-name headlines to close narration only. |
 | Cash, burn, shares outstanding | SEC EDGAR `companyfacts` | Free, authoritative XBRL, no key. Set a real User-Agent |
 | Benchmark ETFs | Tiingo | Free, same EOD path as equities |
 | Minute bars (deferred) | Massive (ex-Polygon.io) Starter | ~$29/mo — only for gap-fill and VWAP |

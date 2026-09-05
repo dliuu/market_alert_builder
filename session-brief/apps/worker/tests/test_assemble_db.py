@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -125,6 +126,24 @@ def test_assemble_and_store_persists_the_object(db_conn: Connection) -> None:
     rows_by_symbol = {r["symbol"]: r for r in body["sections"][0]["rows"]}
     assert rows_by_symbol["ZZA"]["close"] == 110.0
     assert body["book"]["day_bps"] == 300
+
+
+def test_assemble_and_store_passes_headlines_to_narration(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_book(db_conn)
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_narrate_and_apply(obj: Any, narrator: Any, headlines: Any = None) -> Any:
+        calls.append({"headlines": headlines})
+        return obj
+
+    monkeypatch.setattr("worker.assemble.narrate_and_apply", _fake_narrate_and_apply)
+
+    assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close", news={"ASTS": ["h"]})
+
+    assert calls == [{"headlines": {"ASTS": ["h"]}}]
 
 
 def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:

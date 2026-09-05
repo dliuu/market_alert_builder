@@ -128,19 +128,19 @@ class SyntheticCatalystProvider:
             shares = Decimal(500 + int(self._unit(symbol, f"sh{i}") * 4500))
             on = self._session - timedelta(days=i)
             rows.append({
-                "symbol": symbol,
+                "trading_symbol": symbol,
                 "insider_name": name,
-                "insider_title": title,
+                "relationship_to_issuer": title,
                 "transaction_date": on.isoformat(),
-                "filing_date": on.isoformat(),
-                "transaction_type": _CODES[int(self._unit(symbol, f"code{i}") * len(_CODES))],
-                "shares": str(shares),
-                "price": str(price),
+                "transaction_code": _CODES[int(self._unit(symbol, f"code{i}") * len(_CODES))],
+                "amount_of_securities": str(shares),
+                "price_per_security": str(price),
+                "is_derivatives_transaction": False,
                 # The remaining holding has to *vary*: a fixed multiple would pin
                 # pct_of_holding at one value and `outsized_sale` (>=40%) could
                 # never fire on seeded data, leaving a whole rule undevelopable.
                 # 0.4x-6x spans both sides of the threshold.
-                "shares_after": str(
+                "securities_owned_following_transaction": str(
                     (shares * (Decimal("0.4") + self._unit(symbol, f"after{i}") * 6))
                     .quantize(Decimal("1"))
                 ),
@@ -155,12 +155,11 @@ class SyntheticCatalystProvider:
         # `unconverted_144` would never fire on seeded data.
         age = 1 + int(self._unit(symbol, "144age") * 90)
         return [{
-            "symbol": symbol,
-            "insider_name": _INSIDERS[int(self._unit(symbol, "144who") * 5)][0],
-            "filing_date": (self._session - timedelta(days=age)).isoformat(),
-            "shares_proposed": str(shares),
-            "approx_sale_date": None,
-            "broker": "Seeded Securities LLC",
+            "trading_symbol": symbol,
+            "seller_name": _INSIDERS[int(self._unit(symbol, "144who") * 5)][0],
+            "amount_of_securities_to_be_sold": str(shares),
+            "approximate_date_of_sale": (self._session - timedelta(days=age)).isoformat(),
+            "broker_name": "Seeded Securities LLC",
         }][offset:]
 
     def public_float(self, symbol: str) -> Decimal | None:

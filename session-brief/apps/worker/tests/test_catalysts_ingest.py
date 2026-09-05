@@ -10,10 +10,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from worker.catalysts_ingest import ingest_catalysts, normalize_insider
+from worker.catalysts_ingest import ingest_catalysts, normalize_insider, normalize_proposed
 from worker.providers.synthetic import SyntheticCatalystProvider
 
 _D = date(2099, 4, 6)
@@ -29,36 +30,69 @@ def test_the_synthetic_provider_is_deterministic() -> None:
     assert a != SyntheticCatalystProvider(_D).insider_transactions("RKLB")
 
 
-def test_the_synthetic_provider_emits_the_documented_shape() -> None:
+def test_the_synthetic_provider_emits_the_vendor_shape() -> None:
     rows = SyntheticCatalystProvider(_D).insider_transactions("SNDK")
 
     assert rows, "a seeded symbol must produce filings or the section can't be developed"
     row = rows[0]
-    assert {"symbol", "insider_name", "transaction_date", "filing_date",
-            "transaction_type", "shares", "price", "shares_after"} <= set(row)
+    assert {"trading_symbol", "insider_name", "relationship_to_issuer",
+            "transaction_date", "transaction_code", "amount_of_securities",
+            "price_per_security", "securities_owned_following_transaction",
+            "is_derivatives_transaction"} <= set(row)
 
 
-def test_normalize_maps_vendor_types_onto_form_4_codes() -> None:
+def test_normalize_parses_the_vendor_record() -> None:
+    """Field names and types are copied from a live 2026-09-04 probe of
+    `insider-transactions identifier=ASTS` — the shape is a fact, not a guess."""
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": "CFO",
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Sale", "shares": "1000", "price": "50.00",
-        "shares_after": "9000",
+        "trading_symbol": "ASTS", "insider_name": "Cisneros Adriana",
+        "relationship_to_issuer": "Director", "transaction_date": "2026-08-31",
+        "transaction_code": "P", "amount_of_securities": 8768,
+        "price_per_security": Decimal("57.0"), "acquired_or_disposed": "A",
+        "securities_owned_following_transaction": 796353,
+        "is_derivatives_transaction": False, "ownership_form": "I",
     }])
 
-    assert txs[0].transaction_code == "S"
-    assert txs[0].value_cents == 5_000_000  # 1000 * $50, integer cents
-    assert txs[0].shares_after == Decimal("9000")
+    t = txs[0]
+    assert t.symbol == "ASTS"
+    assert t.insider_title == "Director"
+    assert t.transaction_code == "P"
+    assert t.value_cents == 49_977_600  # 8768 * $57.00, integer cents
+    assert t.shares_after == Decimal(796353)
+    assert t.filing_date == t.transaction_date  # vendor sends no filing date
+
+
+def test_normalize_skips_derivative_legs_and_maps_x_to_exercise() -> None:
+    """An option exercise arrives as two rows: a derivative leg (skipped —
+    counting both would double every exercise) and a non-derivative leg whose
+    code X is mechanical, like M — a direction-less transaction."""
+    txs = normalize_insider([
+        {"trading_symbol": "ASTS", "insider_name": "Yao Huiwen",
+         "relationship_to_issuer": "Chief Technology Officer",
+         "transaction_date": "2026-08-19", "transaction_code": "X",
+         "amount_of_securities": 40000, "price_per_security": Decimal("0.0"),
+         "is_derivatives_transaction": True},
+        {"trading_symbol": "ASTS", "insider_name": "Yao Huiwen",
+         "relationship_to_issuer": "Chief Technology Officer",
+         "transaction_date": "2026-08-19", "transaction_code": "X",
+         "amount_of_securities": 40000, "price_per_security": Decimal("0.0641"),
+         "securities_owned_following_transaction": 74750,
+         "is_derivatives_transaction": False},
+    ])
+
+    assert len(txs) == 1
+    assert txs[0].transaction_code == "M"  # X = exercise, mechanical, no direction
 
 
 def test_an_unrecognised_vendor_type_becomes_the_ambiguous_code() -> None:
     """Open question 2 in the data: we record that we could not classify it
     rather than guessing a direction."""
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": None,
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Something New", "shares": "1000", "price": "50.00",
-        "shares_after": None,
+        "trading_symbol": "SNDK", "insider_name": "Jane Roe", "relationship_to_issuer": None,
+        "transaction_date": "2099-04-06",
+        "transaction_code": "Something New", "amount_of_securities": "1000",
+        "price_per_security": "50.00",
+        "securities_owned_following_transaction": None, "is_derivatives_transaction": False,
     }])
 
     assert txs[0].transaction_code == "?"
@@ -66,10 +100,10 @@ def test_an_unrecognised_vendor_type_becomes_the_ambiguous_code() -> None:
 
 def test_normalize_keeps_money_off_the_float_path() -> None:
     txs = normalize_insider([{
-        "symbol": "SNDK", "insider_name": "Jane Roe", "insider_title": None,
-        "transaction_date": "2099-04-06", "filing_date": "2099-04-06",
-        "transaction_type": "Sale", "shares": "3", "price": "0.10",
-        "shares_after": None,
+        "trading_symbol": "SNDK", "insider_name": "Jane Roe", "relationship_to_issuer": None,
+        "transaction_date": "2099-04-06",
+        "transaction_code": "S", "amount_of_securities": "3", "price_per_security": "0.10",
+        "securities_owned_following_transaction": None, "is_derivatives_transaction": False,
     }])
 
     assert txs[0].value_cents == 30  # 3 * 10c exactly, not 30.000000000000004
@@ -121,6 +155,33 @@ def test_one_symbol_failing_does_not_abort_the_run(db_conn: Connection) -> None:
     assert "vendor 500" in fails["last_error"]
 
 
+def test_a_vendor_http_error_never_leaks_the_key_into_the_watermark(
+    db_conn: Connection,
+) -> None:
+    """FdnClient authenticates via a `key` query param, and httpx's own
+    __str__ for HTTPStatusError embeds the full request URL. `_ingest_one`
+    must render the caught error through `_safe_error`, never `str(exc)`, or
+    the vendor key lands in a DB column (finding 5)."""
+    request = httpx.Request(
+        "GET", "https://api.financialdata.net/insider-transactions?key=SECRETVALUE"
+    )
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
+
+    class Boom(SyntheticCatalystProvider):
+        def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            raise error
+
+    ingest_catalysts(db_conn, Boom(_D), ["ZZKEY"], as_of=_D)
+
+    fails = db_conn.execute(
+        text("SELECT last_error FROM catalyst_watermarks "
+             "WHERE source = 'insider' AND symbol = 'ZZKEY'")
+    ).mappings().one()
+    assert "key=" not in fails["last_error"]
+    assert "SECRETVALUE" not in fails["last_error"]
+
+
 def test_a_recovered_symbol_resets_its_failure_count(db_conn: Connection) -> None:
     class Flaky(SyntheticCatalystProvider):
         broken = True
@@ -140,3 +201,60 @@ def test_a_recovered_symbol_resets_its_failure_count(db_conn: Connection) -> Non
     ).mappings().one()
     assert row["consecutive_fails"] == 0
     assert row["last_success_at"] is not None
+
+
+def test_a_malformed_record_fails_one_symbol_not_the_run(db_conn: Connection) -> None:
+    """`store` runs `normalize_*`; a record the mapper cannot parse must land
+    on the watermark like a vendor 500 does, not abort every later symbol."""
+    class _OneBadApple:
+        def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            if symbol == "BAD":
+                return [{"trading_symbol": "BAD"}]  # no transaction_date -> parse error
+            return []
+
+        def proposed_sales(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            return []
+
+        def public_float(self, symbol: str) -> None:
+            return None
+
+    counts = ingest_catalysts(db_conn, _OneBadApple(), ["BAD", "ZOK"], as_of=_D)
+
+    assert counts == {"insider": 0, "proposed": 0}
+    row = db_conn.execute(text(
+        "SELECT consecutive_fails FROM catalyst_watermarks "
+        "WHERE source = 'insider' AND symbol = 'BAD'"
+    )).scalar_one()
+    assert row == 1
+
+
+def test_normalize_proposed_parses_the_vendor_record() -> None:
+    """Live 2026-09-04 probe of `proposed-sales identifier=ASTS`. The vendor
+    sends no filing date; the approximate sale date anchors the row, so
+    `unconverted_144` reads "past the stated sale date and still unexecuted"."""
+    sales = normalize_proposed([{
+        "trading_symbol": "ASTS", "seller_name": "AA Gables 2, LLC",
+        "relationship_to_issuer": "(1)", "broker_name": "Citigroup Global Markets Inc.",
+        "amount_of_securities_to_be_sold": 2500000,
+        "market_value": Decimal("182975000.0"),
+        "amount_of_securities_outstanding": 298746383,
+        "approximate_date_of_sale": "2026-06-22",
+        "acquisition_period_start": "2026-06-22", "acquisition_period_end": "2026-06-22",
+    }])
+
+    s = sales[0]
+    assert s.symbol == "ASTS"
+    assert s.insider_name == "AA Gables 2, LLC"
+    assert s.shares_proposed == Decimal(2500000)
+    assert s.filing_date == date(2026, 6, 22)
+    assert s.approx_sale_date == date(2026, 6, 22)
+
+
+def test_normalize_proposed_skips_a_record_with_no_date() -> None:
+    """A 144 that can't be dated can't be keyed, aged, or matched to a Form 4 —
+    skipping it is recorded honesty, inventing a date is not."""
+    assert normalize_proposed([{
+        "trading_symbol": "ASTS", "seller_name": "X",
+        "amount_of_securities_to_be_sold": 100,
+        "approximate_date_of_sale": None, "acquisition_period_end": None,
+    }]) == []

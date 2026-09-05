@@ -50,6 +50,24 @@ _FDN_BASE_URL = "https://financialdata.net/api/v1"
 # would catch such a bug instead of a stack trace.
 FEED_ERRORS = (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError, ArithmeticError)
 
+
+def _safe_error(exc: Exception) -> str:
+    """Renders a caught FEED_ERRORS exception for a human to read, without
+    ever leaking the vendor key: FdnClient authenticates via a `key` query
+    parameter (never a header — see its docstring's "never log request URLs"),
+    and httpx's own __str__ for HTTPStatusError and most other HTTPError
+    subclasses embeds the full request URL, key included. This diagnostic's
+    entire purpose is to be pasted and screenshotted by a human, so the raw
+    exception text must never reach `print`. Non-httpx members of FEED_ERRORS
+    (ValueError, TypeError, AttributeError, KeyError, ArithmeticError) are our
+    own messages, not the vendor's, and are safe to show as-is."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+    if isinstance(exc, httpx.HTTPError):
+        return type(exc).__name__
+    return str(exc)
+
+
 _PREMARKET_OPEN_ET = clock_time(4, 0)  # extended-hours open; window end is capture_stamp
 
 
@@ -278,6 +296,28 @@ class FdnPremarketProvider:
             return out
         except FEED_ERRORS:
             return []
+
+
+class FdnCatalystProvider:
+    """The live ``CatalystProvider`` (M17's seam, D30) over ``FdnClient``.
+
+    Rows are returned vendor-verbatim: invariant 5 stores exactly what came
+    over the wire, and ``worker/catalysts_ingest.normalize_*`` owns every
+    field mapping. ``public_float`` is ``None`` per open question 4's answer —
+    ``large_144``'s denominator stays the conservative
+    ``fundamentals.shares_out`` read (``book_floats``)."""
+
+    def __init__(self, client: FdnClient) -> None:
+        self._client = client
+
+    def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        return self._client.fetch("insider-transactions", identifier=symbol, offset=str(offset))
+
+    def proposed_sales(self, symbol: str, *, offset: int = 0) -> list[dict[str, Any]]:
+        return self._client.fetch("proposed-sales", identifier=symbol, offset=str(offset))
+
+    def public_float(self, symbol: str) -> Decimal | None:
+        return None
 
 
 class FdnProvider:
