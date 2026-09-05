@@ -109,6 +109,11 @@ TAPE_SEED_LEVELS: dict[str, Decimal] = {
 
 # §5.1 insider (Form 4)
 CLEVEL_BUY_SEVERITY = 5
+NOTABLE_BUY_SEVERITY = 4
+# Any insider's open-market purchase at or above this commits enough of their
+# own money to be a catalyst whatever the title — the rule that catches a
+# Director's buy, which clevel_buy (title-gated) and cluster (>=3 names) miss.
+NOTABLE_BUY_MIN_CENTS = 10_000_000  # $100k
 CLUSTER_SEVERITY = 4
 CLUSTER_MIN_INSIDERS = 3
 CLUSTER_SESSIONS = 5          # trading days, never calendar days (invariant 7)

@@ -441,6 +441,8 @@ function catalystLine(r: Row, currencySymbol: string): string {
   switch (r.kind) {
     case "clevel_buy":
       return `Officer purchase — ${dollars(r.value_cents ?? 0, currencySymbol)}, ${on}${suffix}`;
+    case "notable_buy":
+      return `Insider purchase — ${dollars(r.value_cents ?? 0, currencySymbol)}, ${on}${suffix}`;
     case "cluster":
       return `Insider cluster — ${r.insider_count ?? 0} insiders, ${dollars(
         r.value_cents ?? 0,

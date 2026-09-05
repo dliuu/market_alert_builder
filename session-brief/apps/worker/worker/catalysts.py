@@ -30,6 +30,8 @@ from worker.constants import (
     CLUSTER_SEVERITY,
     LARGE_144_PCT,
     LARGE_144_SEVERITY,
+    NOTABLE_BUY_MIN_CENTS,
+    NOTABLE_BUY_SEVERITY,
     OUTSIZED_SALE_PCT,
     OUTSIZED_SALE_SEVERITY,
     PRE_EARNINGS_SESSIONS,
@@ -184,9 +186,13 @@ def detect_insider(
         if direction is None:
             continue
 
-        if direction == "buy" and _is_clevel(t.insider_title):
-            signals.append(_emit(t, "clevel_buy", CLEVEL_BUY_SEVERITY,
-                                 {"insider_count": 1, "total_value_cents": t.value_cents}))
+        if direction == "buy":
+            if _is_clevel(t.insider_title):
+                signals.append(_emit(t, "clevel_buy", CLEVEL_BUY_SEVERITY,
+                                     {"insider_count": 1, "total_value_cents": t.value_cents}))
+            elif t.value_cents >= NOTABLE_BUY_MIN_CENTS:
+                signals.append(_emit(t, "notable_buy", NOTABLE_BUY_SEVERITY,
+                                     {"insider_count": 1, "total_value_cents": t.value_cents}))
 
         if direction == "sell":
             signals.extend(_sale_rules(t, txs, earnings))
