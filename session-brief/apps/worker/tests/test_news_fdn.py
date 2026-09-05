@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date
 
 import httpx
+import pytest
 
 from worker import news_fdn
 from worker.news_fdn import fetch_held_news, fetch_week_news
@@ -105,6 +107,37 @@ def test_week_news_pages_a_day_until_the_short_page() -> None:
 
     assert (_SESSION.isoformat(), "20") in calls  # paged past two full pages
     assert "deep" in got["ZHELD"]
+
+
+def test_week_news_stops_when_the_wall_clock_budget_is_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung vendor must delay the unattended close brief by minutes, not the
+    ~105-minute worst case pagination allows: past `_BUDGET_S`, the pages
+    already read are returned and no further request goes out."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.url.params["date"], request.url.params.get("offset", "0")))
+        return httpx.Response(
+            200, text='[{"trading_symbols": ["ZHELD"], "article_headline": "h1"}]'
+        )
+
+    client = FdnClient("k", transport=httpx.MockTransport(handler))
+
+    clock = {"n": 0}
+
+    def fake_monotonic() -> float:
+        clock["n"] += 1
+        # Within budget for the first page's check; past it from then on.
+        return 0.0 if clock["n"] <= 2 else news_fdn._BUDGET_S + 1
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+
+    got = fetch_week_news(client, session_date=_SESSION, held={"ZHELD"})
+
+    assert got == {"ZHELD": ["h1"]}  # the first page's headline survives
+    assert len(calls) == 1  # the budget tripped before a second request went out
 
 
 def test_week_news_a_bad_day_degrades_to_the_other_days() -> None:

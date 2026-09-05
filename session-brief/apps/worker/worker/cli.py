@@ -6,7 +6,6 @@ import argparse
 from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 
-import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -19,7 +18,7 @@ from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID, FDN_TAPE_IDENTIFIERS
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
-from worker.providers.fdn import FEED_ERRORS, FdnClient
+from worker.providers.fdn import FEED_ERRORS, FdnClient, _safe_error
 from worker.providers.tiingo import TiingoProvider
 
 
@@ -484,23 +483,6 @@ def _tiingo_cn_probe_cmd(symbols_arg: str | None) -> None:
             "not an error."
         ) from None
     tiingo_cn_probe(provider, symbols=symbols)
-
-
-def _safe_error(exc: Exception) -> str:
-    """Renders a caught FEED_ERRORS exception for a human to read, without
-    ever leaking the vendor key: FdnClient authenticates via a `key` query
-    parameter (never a header — see its docstring's "never log request URLs"),
-    and httpx's own __str__ for HTTPStatusError and most other HTTPError
-    subclasses embeds the full request URL, key included. This diagnostic's
-    entire purpose is to be pasted and screenshotted by a human, so the raw
-    exception text must never reach `print`. Non-httpx members of FEED_ERRORS
-    (ValueError, TypeError, AttributeError, KeyError, ArithmeticError) are our
-    own messages, not the vendor's, and are safe to show as-is."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        return f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
-    if isinstance(exc, httpx.HTTPError):
-        return type(exc).__name__
-    return str(exc)
 
 
 def _fdn_probe(client: FdnClient, *, symbols: list[str]) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -89,7 +90,8 @@ def test_an_unrecognised_vendor_type_becomes_the_ambiguous_code() -> None:
     txs = normalize_insider([{
         "trading_symbol": "SNDK", "insider_name": "Jane Roe", "relationship_to_issuer": None,
         "transaction_date": "2099-04-06",
-        "transaction_code": "Something New", "amount_of_securities": "1000", "price_per_security": "50.00",
+        "transaction_code": "Something New", "amount_of_securities": "1000",
+        "price_per_security": "50.00",
         "securities_owned_following_transaction": None, "is_derivatives_transaction": False,
     }])
 
@@ -151,6 +153,33 @@ def test_one_symbol_failing_does_not_abort_the_run(db_conn: Connection) -> None:
     ).mappings().one()
     assert fails["consecutive_fails"] == 1
     assert "vendor 500" in fails["last_error"]
+
+
+def test_a_vendor_http_error_never_leaks_the_key_into_the_watermark(
+    db_conn: Connection,
+) -> None:
+    """FdnClient authenticates via a `key` query param, and httpx's own
+    __str__ for HTTPStatusError embeds the full request URL. `_ingest_one`
+    must render the caught error through `_safe_error`, never `str(exc)`, or
+    the vendor key lands in a DB column (finding 5)."""
+    request = httpx.Request(
+        "GET", "https://api.financialdata.net/insider-transactions?key=SECRETVALUE"
+    )
+    response = httpx.Response(500, request=request)
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
+
+    class Boom(SyntheticCatalystProvider):
+        def insider_transactions(self, symbol: str, *, offset: int = 0) -> list[dict[str, object]]:
+            raise error
+
+    ingest_catalysts(db_conn, Boom(_D), ["ZZKEY"], as_of=_D)
+
+    fails = db_conn.execute(
+        text("SELECT last_error FROM catalyst_watermarks "
+             "WHERE source = 'insider' AND symbol = 'ZZKEY'")
+    ).mappings().one()
+    assert "key=" not in fails["last_error"]
+    assert "SECRETVALUE" not in fails["last_error"]
 
 
 def test_a_recovered_symbol_resets_its_failure_count(db_conn: Connection) -> None:

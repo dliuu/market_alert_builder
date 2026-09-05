@@ -27,6 +27,7 @@ from sqlalchemy.engine import Connection
 
 from worker.catalysts import InsiderTx, ProposedSale, store_insider_txs
 from worker.providers.base import CatalystProvider
+from worker.providers.fdn import _safe_error
 
 # Vendor transaction-type strings mapped onto SEC Form 4 codes. Anything not
 # here becomes "?" — recorded as unclassifiable rather than guessed, which is
@@ -191,7 +192,9 @@ def _ingest_one(
             })
         stored = int(store(rows) or 0)
     except Exception as exc:  # noqa: BLE001 - one symbol's failure is not the run's
-        conn.execute(_MARK_FAIL, {"source": source, "symbol": symbol, "error": str(exc)})
+        # str(exc) on a live httpx error embeds the request URL, key included
+        # (FdnClient authenticates via a `key` query param) — _safe_error never does.
+        conn.execute(_MARK_FAIL, {"source": source, "symbol": symbol, "error": _safe_error(exc)})
         return 0
 
     conn.execute(_MARK_OK, {"source": source, "symbol": symbol, "now": now, "as_of": as_of})

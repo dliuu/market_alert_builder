@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from tests.helpers_attribution import seed_bars_for
-from worker import calendar, scheduler
+from worker import calendar, config, scheduler
 from worker.attribution import refit, score
 from worker.constants import ATTRIBUTION_MODEL_VERSION as MV
 from worker.themes_seed import seed_themes
@@ -448,6 +448,9 @@ def test_run_session_job_proceeds_when_bars_are_present(monkeypatch: pytest.Monk
     monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: pings.append(("fail", url)))
     monkeypatch.setattr(scheduler, "ping_log", lambda url, d: pings.append(("log", url)))
     _stub_poll(monkeypatch, missing=set())
+    # Without this, a dev box with FDN_API_KEY in .env would construct a real
+    # FdnClient inside a unit test — this pins the catalyst stage to a no-op.
+    monkeypatch.setattr(config, "FDN_API_KEY", "")
 
     from worker import assemble, narrate
 
@@ -477,7 +480,10 @@ def test_close_job_pulls_catalysts_and_hands_news_to_assemble(
     monkeypatch.setattr(narrate, "default_narrator", lambda: None)
     seen: dict[str, Any] = {}
 
-    def fake_assemble(conn, user_id, session_date, kind, *, narrator=None, news=None):
+    def fake_assemble(
+        conn: Connection, user_id: str, session_date: date, kind: str, *,
+        narrator: object | None = None, news: dict[str, list[str]] | None = None,
+    ) -> None:
         seen["news"] = news
         return None  # quiet session — delivery never runs
 
@@ -500,9 +506,10 @@ def test_close_job_pulls_catalysts_and_hands_news_to_assemble(
 def test_the_catalyst_stage_is_a_noop_without_the_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "")
+    monkeypatch.setattr(config, "FDN_API_KEY", "")
     assert scheduler._pull_close_catalysts_and_news(
-        _FakeEngine(), "u", date(2026, 9, 4)
+        _FakeEngine(),  # type: ignore[arg-type]
+        "u", date(2026, 9, 4)
     ) == {}
 
 
@@ -511,7 +518,7 @@ def test_the_catalyst_stage_degrades_instead_of_killing_the_close(
 ) -> None:
     """A vendor having a bad afternoon costs the catalysts section and the
     news block — never the brief (docs/02's non-fatal rule)."""
-    monkeypatch.setattr(scheduler.config, "FDN_API_KEY", "k")
+    monkeypatch.setattr(config, "FDN_API_KEY", "k")
 
     class _Boom:
         def __init__(self) -> None:
@@ -521,8 +528,48 @@ def test_the_catalyst_stage_degrades_instead_of_killing_the_close(
 
     monkeypatch.setattr(fdn, "FdnClient", _Boom)
     assert scheduler._pull_close_catalysts_and_news(
-        _FakeEngine(), "u", date(2026, 9, 4)
+        _FakeEngine(),  # type: ignore[arg-type]
+        "u", date(2026, 9, 4)
     ) == {}
+
+
+def test_the_catalyst_stage_degrades_each_half_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"Each half degrades to a log line" is the load-bearing property one
+    level in: the catalyst ingest raising must not cost the week's news."""
+    monkeypatch.setattr(config, "FDN_API_KEY", "k")
+
+    class _StubClient:
+        def fetch(self, endpoint: str, **params: object) -> list[dict[str, object]]:
+            return []
+
+        def close(self) -> None: ...
+
+    import worker.catalysts as catalysts
+    import worker.catalysts_ingest as catalysts_ingest
+    import worker.news_fdn as news_fdn
+    import worker.providers.fdn as fdn
+
+    monkeypatch.setattr(fdn, "FdnClient", lambda: _StubClient())
+    monkeypatch.setattr(fdn, "store_captured_payloads", lambda conn, client, *, as_of: 0)
+    monkeypatch.setattr(catalysts, "held_symbols", lambda conn, user_id: ["ASTS"])
+
+    def _boom(*a: object, **k: object) -> int:
+        raise RuntimeError("ingest boom")
+
+    monkeypatch.setattr(catalysts_ingest, "ingest_catalysts", _boom)
+    monkeypatch.setattr(scheduler, "book_symbols", lambda conn, user_id: ["ASTS"])
+    monkeypatch.setattr(
+        news_fdn, "fetch_week_news",
+        lambda client, *, session_date, held: {"ASTS": ["h"]},
+    )
+
+    news = scheduler._pull_close_catalysts_and_news(
+        _FakeEngine(),  # type: ignore[arg-type]
+        "u", date(2026, 9, 4)
+    )
+    assert news == {"ASTS": ["h"]}  # ingest raised; news still came through
 
 
 def test_run_session_job_pings_fail_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:

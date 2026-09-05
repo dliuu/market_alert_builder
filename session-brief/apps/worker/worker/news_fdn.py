@@ -49,6 +49,7 @@ _WEEK_DAYS = 7
 _MAX_PAGES_PER_DAY = 30   # live days ran ~20 pages of 10 (probe 2026-09-04)
 _WEEK_PER_SYMBOL_CAP = 5
 _THROTTLE_S = 0.2         # paging flat-out drew 429s on the live key
+_BUDGET_S = 300.0         # worst case is 7 days * 30 pages * 30s timeouts (~105min)
 
 
 def fetch_week_news(
@@ -61,12 +62,21 @@ def fetch_week_news(
     exhaustion and filtered here. A day that fails mid-page keeps the pages it
     got and the loop moves on — one bad day loses a day, never the week.
     Headlines flow only to close narration; the redistribution surface stays
-    zero (see the module header)."""
+    zero (see the module header).
+
+    Bounded by ``_BUDGET_S`` wall-clock: a hung vendor must delay the
+    unattended close brief by minutes, not the ~105 minutes the pagination
+    worst case allows — past the budget, degrade to the pages already read."""
     out: dict[str, list[str]] = {}
+    start = time.monotonic()
     for back in range(_WEEK_DAYS):
         day = session_date - timedelta(days=back)
         try:
             for page in range(_MAX_PAGES_PER_DAY):
+                if time.monotonic() - start > _BUDGET_S:
+                    # A hung vendor must delay the brief by minutes, not hours —
+                    # degrade to the pages already read.
+                    return out
                 records = client.fetch(
                     "latest-news", date=day.isoformat(), offset=str(page * 10)
                 )
