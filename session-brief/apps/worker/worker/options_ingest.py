@@ -123,12 +123,17 @@ def pull_options(
     indices_failed: dict[str, str] = {}
     raw_rows = 0
 
+    # First capture wins: a re-pull whose raw row already exists derives
+    # nothing, so live rows always match a replay. If derivation fails after
+    # the raw insert, `options rebuild` (rebuild_options) is the recovery path.
     for symbol in symbols:
         try:
             filtered = filter_payload_for_storage(provider.chain(symbol), session_date)
             captured_at = parse_chain(filtered)[0].timestamp
-            raw_rows += _store_raw(conn, CHAIN_ENDPOINT, symbol, session_date, filtered, now)
-            store_chain(conn, filtered, session_date, captured_at)
+            wrote = _store_raw(conn, CHAIN_ENDPOINT, symbol, session_date, filtered, now)
+            raw_rows += wrote
+            if wrote:
+                store_chain(conn, filtered, session_date, captured_at)
         except FEED_ERRORS as exc:
             symbols_failed[symbol] = _safe_error(exc)
             continue
@@ -244,7 +249,9 @@ def _pull_index(
     session_date: date,
     fetched_at: datetime | None,
 ) -> int:
-    """History rows past the watermark, then today's level from the quote."""
+    """History rows from the watermark on, then today's level from the quote.
+    Inclusive: the watermark date usually holds only the quote's provisional
+    close, and the file's official row for it must replace that."""
     raw_rows = 0
     csv_text = provider.index_history(index)
     bars = parse_index_csv(csv_text)
@@ -253,7 +260,7 @@ def _pull_index(
     new = [
         (line, bar)
         for line, bar in zip(lines, bars, strict=True)
-        if mark is None or bar.session_date > mark
+        if mark is None or bar.session_date >= mark
     ]
     if new:
         raw_rows += _store_raw(

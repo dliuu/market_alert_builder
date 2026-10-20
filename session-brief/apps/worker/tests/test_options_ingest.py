@@ -111,3 +111,12 @@ def test_index_failure_is_recorded_not_raised() -> None:
     result, _ = _pull(_conn(), ("VIX", "VIX9D"))  # VIX9D is a 404 here
     assert result.indices_ok == ("VIX",)
     assert result.indices_failed == {"VIX9D": "HTTP 404 Not Found"}
+
+
+def test_existing_raw_row_means_store_chain_is_not_called() -> None:
+    conn = _conn()
+    conn.execute.return_value.rowcount = 0  # every raw row already captured
+    result, store = _pull(conn)
+    assert store.call_count == 0
+    assert result.symbols_ok == ("GOOD",)
+    assert result.raw_rows == 0

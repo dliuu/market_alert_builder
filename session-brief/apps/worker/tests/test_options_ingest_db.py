@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from worker.calendar import previous_session
 from worker.options_ingest import pull_options, rebuild_options
 from worker.providers.synthetic import SyntheticOptionsProvider
 
@@ -148,3 +149,50 @@ def test_rebuild_restores_identical_snapshots_with_no_network(db_conn: Connectio
 
     assert written == len(expected)
     assert _snapshots(db_conn) == expected
+
+
+def test_first_capture_wins_on_a_changed_re_pull(db_conn: Connection) -> None:
+    session = SESSIONS[0]
+    pull_options(db_conn, SyntheticOptionsProvider(CLOSES, session), SYMBOLS, session)
+    first = _snapshots(db_conn)
+    moved = {s: c + Decimal("3.00") for s, c in CLOSES.items()}
+    result = pull_options(db_conn, SyntheticOptionsProvider(moved, session), SYMBOLS, session)
+    assert result.symbols_ok == tuple(SYMBOLS)
+    assert _snapshots(db_conn) == first
+
+    db_conn.execute(text("DELETE FROM option_snapshot WHERE contract LIKE 'ZZOP%'"))
+    rebuild_options(db_conn, session)
+    assert _snapshots(db_conn) == first
+
+
+def test_history_replaces_the_provisional_quote_row(db_conn: Connection) -> None:
+    session = SESSIONS[1]
+    provisional = previous_session(session)
+    db_conn.execute(
+        text("INSERT INTO index_daily (symbol, session_date, c) VALUES ('VIX', :d, 99)"),
+        {"d": provisional},
+    )
+    provider = SyntheticOptionsProvider(CLOSES, session)
+    result = pull_options(db_conn, provider, [], session, indices=("VIX",))
+    assert result.indices_ok == ("VIX",)
+
+    line = next(
+        ln
+        for ln in provider.index_history("VIX").splitlines()
+        if ln.startswith(f"{provisional:%m/%d/%Y},")
+    )
+    level = Decimal(line.split(",")[4])
+    row = db_conn.execute(
+        text("SELECT o, h, l, c FROM index_daily WHERE symbol = 'VIX' AND session_date = :d"),
+        {"d": provisional},
+    ).one()
+    assert tuple(row) == (level, level, level, level)
+    body = db_conn.execute(
+        text("""
+            SELECT body FROM raw_payloads
+            WHERE source = 'cboe' AND endpoint = 'us_indices/daily_prices'
+              AND symbol = 'VIX' AND as_of = :d
+        """),
+        {"d": session},
+    ).scalar_one()
+    assert line in body["rows"]
