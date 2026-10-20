@@ -122,6 +122,12 @@ class CboeClient:
         response.raise_for_status()
         return response.text
 
+    def close(self) -> None:
+        """Release the underlying connection pool. The worker is a long-lived
+        process that builds a fresh client every fire, so a client that is
+        never closed leaks one pool per trading day."""
+        self._client.close()
+
 
 # --- parsing -----------------------------------------------------------------
 

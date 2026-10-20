@@ -155,6 +155,9 @@ def test_client_follows_the_host_redirect_sends_a_user_agent_and_captures() -> N
         ("delayed_quotes/index", "_VIX"),
         ("us_indices/daily_prices", "VIX"),
     ]
+    client.close()
+    with pytest.raises(RuntimeError):
+        client.chain("AAPL")  # a closed client refuses further requests
 
 
 def test_client_rejects_a_chain_without_an_options_array() -> None:
