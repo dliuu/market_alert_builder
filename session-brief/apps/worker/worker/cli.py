@@ -3,23 +3,45 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from fractions import Fraction
+from pathlib import Path
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from contracts.brief import BriefObject
 from worker import calendar
-from worker.assemble import assemble_and_store
+from worker.assemble import _read_closes, assemble_and_store
 from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
-from worker.constants import BENCHMARK_SYMBOL, DEV_USER_ID, FDN_TAPE_IDENTIFIERS
+from worker.constants import (
+    BENCHMARK_SYMBOL,
+    DEV_USER_ID,
+    FDN_TAPE_IDENTIFIERS,
+    OPTIONS_INDICES,
+)
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
+from worker.options_ingest import pull_options, rebuild_options
+from worker.providers.cboe import (
+    FEED_ERRORS as CBOE_FEED_ERRORS,
+)
+from worker.providers.cboe import (
+    STORED_MAX_DTE,
+    CboeClient,
+    filter_payload_for_storage,
+    parse_chain,
+    parse_index_csv,
+)
 from worker.providers.fdn import FEED_ERRORS, FdnClient, _safe_error
+from worker.providers.synthetic import SyntheticOptionsProvider
 from worker.providers.tiingo import TiingoProvider
+from worker.volatility import ExpiryIv, iv30_from_chain, select_strip
 
 
 def main() -> None:
@@ -164,11 +186,45 @@ def main() -> None:
     )
     c_rebuild.add_argument("--date", required=True, help="session date YYYY-MM-DD")
 
+    options = sub.add_parser("options", help="Cboe options chains and IV (M21)")
+    opt_sub = options.add_subparsers(dest="opt_command")
+    o_probe = opt_sub.add_parser(
+        "probe",
+        help="fetch Cboe's delayed chain and index history; print the strip and IV30 (read-only)",
+    )
+    o_probe.add_argument(
+        "--symbols", help="symbols to probe, comma-separated; defaults to the book's held names"
+    )
+    o_probe.add_argument("--file", help="parse a saved chain JSON instead of fetching")
+    o_probe.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest session")
+    o_probe.add_argument(
+        "--indices",
+        default=",".join(OPTIONS_INDICES),
+        help="Cboe index histories to fetch, comma-separated; '' to skip",
+    )
+    o_probe.add_argument("--save", help="directory to write each verbatim chain JSON into")
+    o_pull = opt_sub.add_parser("pull", help="pull, band and store chains and the VIX family")
+    o_pull.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest session")
+    o_pull.add_argument("--symbols", help="comma-separated; defaults to the book")
+    o_rebuild = opt_sub.add_parser("rebuild", help="replay stored chains (no network)")
+    o_rebuild.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest session")
+
     args = parser.parse_args()
 
     if args.command == "catalysts":
         _catalysts(args.cat_command, date_arg=getattr(args, "date", None),
                    symbols_arg=getattr(args, "symbols", None))
+        return
+
+    if args.command == "options":
+        _options(
+            args.opt_command,
+            date_arg=getattr(args, "date", None),
+            symbols_arg=getattr(args, "symbols", None),
+            file_arg=getattr(args, "file", None),
+            indices_arg=getattr(args, "indices", ",".join(OPTIONS_INDICES)),
+            save_dir=getattr(args, "save", None),
+        )
         return
 
     if args.command == "backfill":
@@ -460,6 +516,238 @@ def _fdn_probe_cmd(symbols_arg: str | None) -> None:
             "state, not an error."
         ) from None
     _fdn_probe(client, symbols=symbols)
+
+
+# --- options (M21) ---
+
+
+def _options(
+    opt_command: str | None,
+    *,
+    date_arg: str | None,
+    symbols_arg: str | None,
+    file_arg: str | None = None,
+    indices_arg: str = ",".join(OPTIONS_INDICES),
+    save_dir: str | None = None,
+) -> None:
+    if opt_command == "probe":
+        _options_probe_cmd(
+            symbols_arg=symbols_arg,
+            file_arg=file_arg,
+            date_arg=date_arg,
+            indices_arg=indices_arg,
+            save_dir=save_dir,
+        )
+    elif opt_command == "pull":
+        _options_pull(date_arg=date_arg, symbols_arg=symbols_arg)
+    elif opt_command == "rebuild":
+        _options_rebuild(date_arg=date_arg)
+    else:
+        raise SystemExit("usage: options {probe|pull|rebuild}")
+
+
+def _options_pull(*, date_arg: str | None, symbols_arg: str | None) -> None:
+    """Live Cboe when ``OPTIONS_LIVE`` is set, else the synthetic chain priced
+    off the session's ``bars_daily`` closes. Feed failures are reported on the
+    summary and do not fail the run; a database error raises."""
+    from worker import config
+
+    session_date = _options_session_date(date_arg)
+    engine = get_engine()
+    symbols = _resolve_symbols(symbols_arg, engine)
+    with engine.begin() as conn:
+        if config.OPTIONS_LIVE:
+            client = CboeClient()
+            try:
+                result = pull_options(conn, client, symbols, session_date)
+            finally:
+                client.close()
+        else:
+            closes = _read_closes(conn, symbols, session_date)
+            result = pull_options(
+                conn, SyntheticOptionsProvider(closes, session_date), symbols, session_date
+            )
+    print(
+        f"options pull {session_date}: {len(result.symbols_ok)} symbols ok "
+        f"{list(result.symbols_ok)}, indices ok {list(result.indices_ok)}, "
+        f"{result.raw_rows} raw rows"
+    )
+    for name, reason in {**result.symbols_failed, **result.indices_failed}.items():
+        print(f"✗ {name}: {reason}")
+
+
+def _options_rebuild(*, date_arg: str | None) -> None:
+    session_date = _options_session_date(date_arg)
+    with get_engine().begin() as conn:
+        written = rebuild_options(conn, session_date)
+    print(f"options rebuild {session_date}: {written} snapshot rows")
+
+
+def _options_probe_cmd(
+    symbols_arg: str | None,
+    file_arg: str | None,
+    date_arg: str | None,
+    indices_arg: str,
+    save_dir: str | None,
+) -> None:
+    session_date = _options_session_date(date_arg)
+    if file_arg:
+        text_ = Path(file_arg).read_text()
+        payload = json.loads(text_, parse_float=Decimal)
+        print(f"options probe: file={file_arg} session={session_date}")
+        _options_report_chain(payload, session_date, raw_bytes=len(text_.encode()))
+        return
+    if symbols_arg:
+        symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+    else:
+        symbols = _resolve_symbols(None, get_engine())
+    indices = [s.strip() for s in indices_arg.split(",") if s.strip()]
+    client = CboeClient()
+    try:
+        _options_probe(
+            client,
+            symbols=symbols,
+            indices=indices,
+            session_date=session_date,
+            save_dir=Path(save_dir) if save_dir else None,
+        )
+    finally:
+        client.close()
+
+
+def _options_session_date(date_arg: str | None) -> date:
+    """The session the chain describes: the ET date if it is a session, else
+    the previous one — a Saturday run reads Friday's closing book."""
+    if date_arg:
+        return date.fromisoformat(date_arg)
+    today = calendar.today_et(datetime.now(UTC))
+    return today if calendar.is_session(today) else calendar.previous_session(today)
+
+
+def _options_probe(
+    client: CboeClient,
+    *,
+    symbols: list[str],
+    indices: list[str],
+    session_date: date,
+    save_dir: Path | None = None,
+) -> None:
+    """Day-one verification of the Cboe feed (M21 spike): fetch each held
+    name's chain, print what the strip and IV30 would be, and fetch the index
+    histories. Read-only — no database writes — and every symbol is
+    independently fault-tolerant so one bad chain never stops the rest.
+    Always exits 0; a human reads the ✓/✗ lines."""
+    print(f"options probe: now={datetime.now(UTC).isoformat()} session={session_date}")
+    for symbol in symbols:
+        try:
+            payload = client.chain(symbol)
+        except CBOE_FEED_ERRORS as exc:
+            print(f"✗ {symbol}: {_safe_error(exc)}")
+            continue
+        _endpoint, _symbol, text_ = client.captured[-1]
+        if save_dir is not None:
+            save_dir.mkdir(parents=True, exist_ok=True)
+            (save_dir / f"{symbol}.json").write_text(text_)
+        try:
+            _options_report_chain(payload, session_date, raw_bytes=len(text_.encode()))
+        except CBOE_FEED_ERRORS as exc:
+            print(f"✗ {symbol}: parse failed: {_safe_error(exc)}")
+    for index in indices:
+        try:
+            bars = parse_index_csv(client.index_history(index))
+        except CBOE_FEED_ERRORS as exc:
+            print(f"✗ {index}: {_safe_error(exc)}")
+            continue
+        if not bars:
+            print(f"✗ {index}: empty history")
+            continue
+        print(
+            f"✓ {index}: {len(bars)} rows, {bars[0].session_date} → {bars[-1].session_date}, "
+            f"last close {bars[-1].c}"
+        )
+        # The history file lags the session by a day on the evening of the
+        # session itself (live probe, 2026-10-20: VIX_History ended 10-19 at
+        # 23:15 UTC while VIX9D and VIX3M carried 10-20). The delayed index
+        # quote carries today's level, so the two together are complete.
+        try:
+            quote = client.index_quote(index)
+            level = quote["data"]
+            print(
+                f"  {index} delayed quote: close={level.get('close')} "
+                f"current={level.get('current_price')} snapshot {quote.get('timestamp')} UTC"
+            )
+        except CBOE_FEED_ERRORS as exc:
+            print(f"✗ {index} delayed quote: {_safe_error(exc)}")
+
+
+def _options_report_chain(payload: dict[str, Any], session_date: date, *, raw_bytes: int) -> None:
+    underlying, contracts = parse_chain(payload)
+    expiries = sorted({c.expiry for c in contracts})
+    spot = underlying.close
+    stamp = underlying.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(
+        f"✓ {underlying.symbol}: {len(contracts)} contracts, {len(expiries)} expiries "
+        f"({expiries[0] if expiries else 'none'} → {expiries[-1] if expiries else 'none'}), "
+        f"snapshot {stamp}"
+    )
+    print(
+        f"  spot close={spot} current={underlying.current_price} "
+        f"prev_close={underlying.prev_day_close}   cboe iv30={_vol(underlying.iv30)}"
+    )
+    iv30 = iv30_from_chain(contracts, spot, session_date)
+    drift = (
+        f"{iv30.iv30 - underlying.iv30:+.2f}"
+        if iv30.iv30 is not None and underlying.iv30 is not None
+        else "n/a"
+    )
+    print(
+        f"  IV30 ours={_vol(iv30.iv30)} n={iv30.n} drift vs cboe={drift}  "
+        f"near={_leg(iv30.near)} far={_leg(iv30.far)} dropped={list(iv30.dropped) or '[]'}"
+    )
+    stored = filter_payload_for_storage(payload, session_date)
+    stored_bytes = len(json.dumps(stored, default=str).encode())
+    print(
+        f"  stored payload: {len(stored['data']['options'])} contracts ≤{STORED_MAX_DTE} dte, "
+        f"{stored_bytes / 1024:,.0f} KB of {raw_bytes / 1024:,.0f} KB"
+    )
+    header = (
+        f"  {'tenor':>5} {'dte':>3} {'expiry':<10} {'rule':<5} {'strike':>8} {'money':>7} "
+        f"{'bid':>7} {'ask':>7} {'mid':>7} {'prem%':>6} {'tv%':>6} {'iv':>6} {'delta':>5} "
+        f"{'OI':>6} {'vol':>6}  flags"
+    )
+    print(header)
+    for cell in select_strip(contracts, spot, session_date):
+        c = cell.contract
+        if c is None:
+            print(f"  {cell.tenor:>5} {'—':>3} {'—':<10} {cell.rule:<5}  no two-sided call")
+            continue
+        flags = " ".join(
+            f for f, on in (("MISS", cell.target_miss), ("COLLAPSED", cell.tenor_collapsed)) if on
+        )
+        print(
+            f"  {cell.tenor:>5} {cell.dte:>3} {c.expiry.isoformat():<10} {cell.rule:<5} "
+            f"{c.strike:>8.2f} {_pct_d(cell.moneyness):>7} {c.bid:>7.2f} {c.ask:>7.2f} "
+            f"{c.mid:>7.2f} {_pct_d(cell.premium_pct):>6} {_pct_d(cell.time_value_pct):>6} "
+            f"{_vol(c.iv):>6} {_d(c.delta, 2):>5} {c.open_interest:>6} {c.volume:>6}  {flags}"
+        )
+
+
+def _leg(leg: ExpiryIv | None) -> str:
+    if leg is None:
+        return "none"
+    return f"{leg.expiry}({leg.dte}d iv {leg.iv:.2f} n{leg.n})"
+
+
+def _vol(value: Decimal | None) -> str:
+    return f"{value:.2f}" if value is not None else "n/a"
+
+
+def _d(value: Decimal | None, places: int) -> str:
+    return f"{value:.{places}f}" if value is not None else "n/a"
+
+
+def _pct_d(value: Decimal | None) -> str:
+    return f"{value * 100:+.1f}%" if value is not None else "n/a"
 
 
 def _tiingo_cn_probe_cmd(symbols_arg: str | None) -> None:
