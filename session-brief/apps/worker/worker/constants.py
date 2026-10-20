@@ -143,3 +143,6 @@ CATALYST_LOOKBACK_DAYS = 30
 # Stamped on every signal so a rule change produces a new version alongside the
 # old rather than mutating history — the ATTRIBUTION_MODEL_VERSION pattern (D21).
 CATALYST_MODEL_VERSION = "1"
+
+# The Cboe volatility indices the options sections read (M21).
+OPTIONS_INDICES: tuple[str, ...] = ("VIX", "VIX9D", "VIX3M")
