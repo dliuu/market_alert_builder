@@ -27,6 +27,16 @@ quotes       (symbol, session_date, captured_at, last, prev_close, extended_last
 fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date)
 events       (id, symbol, event_type, occurs_at, payload jsonb)  -- earnings | lockup | macro
 news_items   (id, symbol, headline, url, published_at, source)
+option_contracts (contract PK, symbol, expiration_date, put_or_call, strike, first_seen)
+             -- INDEX (symbol, expiration_date) (M21)
+option_snapshot (contract, session_date, bid, bid_size, ask, ask_size, last, iv, delta, gamma,
+             theta, vega, rho, open_interest, volume, prev_day_close, captured_at)
+             -- PK (contract, session_date); only the contracts the strip and IV30 selected
+option_strip (symbol, session_date, tenor, strike_rule, contract, dte, moneyness, mid,
+             premium_pct, time_value_pct, iv, delta, open_interest, volume, chg_contract_pct,
+             chg_tenor_pct, iv_chg, tenor_collapsed, target_miss)
+             -- PK (symbol, session_date, tenor, strike_rule); strike_rule itm10 | atm | otm10
+index_daily  (symbol, session_date, o, h, l, c)   -- PK (symbol, session_date)
 ```
 
 Market data tables have **no `user_id`** — they're shared across the tenant base and keyed by symbol. This is what makes ingest cost scale with the symbol universe rather than the user count.
@@ -58,6 +68,14 @@ catalyst_reporting_state   (user_id, source, symbol, kind, ref_date, first_repor
 
 Same shape as the rest of this section: **shared, no `user_id`**, keyed by symbol —
 insider filings and index membership are facts about a symbol, not a book.
+
+### Options (M21)
+
+`option_snapshot` holds only the contracts the strip and IV30 selected, about thirty per name per session, not the whole chain. A large-cap chain runs to thousands of contracts, and nothing downstream reads the ones that were never selected; `option_contracts` keeps each selected contract's identity once, and the strip points back at it.
+
+The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside the D38 band of 60 days to expiry and ±25% of the close. Outside that band no strip rule can pick a contract, and a full large-cap chain is about 1.5 MB per session. The band keeps replay possible (invariant 5) without paying for strikes nobody will read.
+
+`index_daily` is separate from `bars_daily` because an index has no adjusted series and no volume worth storing. Folding it in would mean `NOT NULL` columns filled with copies of `c` and zeros, and every reader of `bars_daily` would have to know which rows to distrust.
 
 **`catalyst_reporting_state` is the one exception and does carry `user_id`.** It
 holds the report-once decay curve (full → condensed → suppressed, re-escalating
