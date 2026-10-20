@@ -146,3 +146,30 @@ CATALYST_MODEL_VERSION = "1"
 
 # The Cboe volatility indices the options sections read (M21).
 OPTIONS_INDICES: tuple[str, ...] = ("VIX", "VIX9D", "VIX3M")
+
+# --- Premium (M22) ---
+#
+# The call strip, IV30 and realized-vol rules behind the premium section. They
+# live here rather than in a config layer, the same precedent as the catalysts
+# block above. Expect them to move: the strike grid, the parity tolerance and
+# the percentile cut-offs need weeks of live tuning.
+
+TENORS: tuple[int, ...] = (7, 14, 21, 30)  # strip tenors, calendar days
+STRIKE_RULES: tuple[tuple[str, Decimal], ...] = (
+    ("itm10", Decimal("0.90")),
+    ("atm", Decimal("1.00")),
+    ("otm10", Decimal("1.10")),
+)  # strip strikes as a multiple of spot
+MIN_DTE = 1  # a contract expiring today is a settlement, not a premium
+TARGET_MISS_TOL = Decimal("0.025")  # strike grid too coarse to land within this of target
+IV30_TARGET_DAYS = 30  # constant-maturity target
+IV30_NEAR_MIN_DTE = 7  # expiry-week quotes reflect pinning, not volatility
+IV30_STRIKES_EACH_SIDE = 2  # strikes nearest spot, per side, at each bracketing expiry
+IV30_PARITY_TOL_POINTS = Decimal("3")  # call/put IV gap floor, vol points
+IV30_PARITY_TOL_FRACTION = Decimal("0.10")  # ...or this share of their mean, if larger
+IV30_MIN_CONTRACTS = 4  # fewer contributing contracts than this is not a reliable IV30
+IV30_DRIFT_ALARM_POINTS = Decimal("1")  # own IV30 vs the vendor's, vol points
+PREMIUM_RICH_PCTILE = Decimal("70")  # IV30 percentile at or above this reads rich
+PREMIUM_CHEAP_PCTILE = Decimal("30")  # at or below this reads cheap
+HV_WINDOWS: tuple[int, ...] = (20, 60)  # realized-vol windows, sessions
+PREMIUM_CAP = 3  # most premium names surfaced in one brief
