@@ -137,7 +137,7 @@ export function CloseBrief({
                 .map((r) => (
                   <Premium key={r.symbol} row={r} />
                 ))}
-              {premium.note && <p style={note}>{premium.note}.</p>}
+              {premium.note && <p style={note}>{asSentence(premium.note)}</p>}
             </Section>
           )}
 
@@ -462,6 +462,12 @@ function Standing({ row }: { row: Row }) {
       </tbody>
     </table>
   );
+}
+
+// A narrated §6 note (M24) already ends its sentence; the assembled ones do
+// not. Close it exactly once.
+function asSentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 // The §6 head note, with the same data_quality stamps the open brief puts on
