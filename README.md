@@ -86,6 +86,10 @@ Required: `DATABASE_URL`, `TIINGO_API_KEY`, `RESEND_API_KEY`, `RENDER_SHARED_SEC
 (open), `HEALTHCHECKS_REFIT_URL` / `HEALTHCHECKS_PM_URL` / `HEALTHCHECKS_AM_URL`
 (attribution jobs). See `session-brief/.env.example` for what each is.
 
+Options (M21–M25): after merging, `fly secrets set OPTIONS_LIVE=true -a session-brief-worker`
+turns the live Cboe feed on (unset = the synthetic chain, with the banner shown).
+The `0020_options` migration is applied by the release command's `alembic upgrade head`.
+
 ### Web (Vercel) — automatic
 
 Merging to `main` deploys the web app. Nothing to do unless the change spans the
