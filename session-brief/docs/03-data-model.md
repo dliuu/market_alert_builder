@@ -93,6 +93,12 @@ empty until now) is **populated by M18's index differ** rather than curated by
 hand. Reconstitution days become real contaminated-day fit exclusions for
 attribution.
 
+**Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
+
+A payload is identified by **both ends of the window it covers**, not just where it ends. Keying on `as_of` alone (the response's newest session) made a wider re-fetch look like a duplicate of a narrower one ending the same day, so `ON CONFLICT DO NOTHING` silently discarded the deeper history and a symbol's window could never be extended — which is how SPY sat at 65 sessions while the attribution fit wanted 120 (migration `0014_raw_payload_covers_from`). The dedup still holds for a genuinely repeated window, which the close job's 90-second bar poll depends on. A vendor *revision* inside an identical window still no-ops; closing that needs a content hash, and Postgres will not index one because `body::text` is STABLE rather than IMMUTABLE.
+
+`quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
+
 ### Options (M21)
 
 `option_snapshot` holds only the contracts the strip and IV30 selected, about thirty per name per session, not the whole chain. A large-cap chain runs to thousands of contracts, and nothing downstream reads the ones that were never selected; `option_contracts` keeps each selected contract's identity once, and the strip points back at it.
@@ -103,7 +109,7 @@ The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside t
 
 ### Premium (M22)
 
-`compute_and_store_volatility` rebuilds each name's chain from `option_snapshot` ⋈ `option_contracts`, writes the twelve `option_strip` cells (upsert on the key) and fourteen per-user metrics (below, under *Metric definitions*). Spot is the session's `bars_daily.c`; `iv30_cboe` is read from the stored chain payload in `raw_payloads`.
+`compute_and_store_volatility` rebuilds each name's chain from `option_snapshot` ⋈ `option_contracts`, writes the twelve `option_strip` cells (upsert on the key) and fourteen per-user metrics (below, under *Metric definitions*). Spot is the `close` in the session's stored chain payload in `raw_payloads`, the same print ingest selected the snapshotted contracts against (`bars_daily.c` only when that payload is absent); `iv30_cboe` comes from the same row. A name with snapshots but no bar for the session keeps its reading, with `hv20`/`hv60` and the spread and ratio built on them null; a name is skipped only when it has no snapshots on the session or the one before.
 
 **The percentile rule is M20's, reused.** `iv30_pctile` and `iv_vix_ratio_pctile` rank today against that metric's own stored values for the 252 sessions before today (`oscillators.percentile`: strict `<`, null below a full baseline); `vix_pctile` ranks the VIX close against its own prior 252 rows of `index_daily`. `iv_rank_252` uses the same full-baseline gate, with today inside the min/max so it stays in [0, 1]. Until a name has a year of stored `iv30`, its percentiles stay null; there is no backfill in v1.
 
@@ -111,13 +117,7 @@ The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside t
 
 **Thin.** `iv30_n` counts the contracts that fed IV30. Below 4 the reading is `iv30_thin` and the regime is always `fair`, so a thin name never qualifies. A chain with no two-sided quote at all stores no `iv30`, only `iv30_n = 0`.
 
-**Stale.** A name with no snapshot for the session falls back to the previous session's snapshots, evaluated as of that session (its expiries, its close), and is marked `stale`; with none there either it is skipped. A stale reading's strip carries no changes, since there is no new quote to compare. Realized vol, VIX and the guards are still today's.
-
-**Store raw payloads verbatim, never transform on ingest.** When a vendor changes a field or you find a bug in the RVOL math, you replay from `raw_payloads` instead of re-buying history. A few hundred KB a day.
-
-A payload is identified by **both ends of the window it covers**, not just where it ends. Keying on `as_of` alone (the response's newest session) made a wider re-fetch look like a duplicate of a narrower one ending the same day, so `ON CONFLICT DO NOTHING` silently discarded the deeper history and a symbol's window could never be extended — which is how SPY sat at 65 sessions while the attribution fit wanted 120 (migration `0014_raw_payload_covers_from`). The dedup still holds for a genuinely repeated window, which the close job's 90-second bar poll depends on. A vendor *revision* inside an identical window still no-ops; closing that needs a content hash, and Postgres will not index one because `body::text` is STABLE rather than IMMUTABLE.
-
-`quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
+**Stale.** A name with no snapshot for the session falls back to the previous session's snapshots, evaluated as of that session (its expiries, its close), and is marked `stale`. A stale reading's strip carries no changes, since there is no new quote to compare. Realized vol, VIX and the guards are still today's.
 
 ## Derived
 

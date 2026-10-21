@@ -173,3 +173,4 @@ PREMIUM_RICH_PCTILE = Decimal("70")  # IV30 percentile at or above this reads ri
 PREMIUM_CHEAP_PCTILE = Decimal("30")  # at or below this reads cheap
 HV_WINDOWS: tuple[int, ...] = (20, 60)  # realized-vol windows, sessions
 PREMIUM_CAP = 3  # most premium names surfaced in one brief
+EARNINGS_WINDOW_MIN_DAYS = 30  # earnings guard looks at least this far ahead, calendar days

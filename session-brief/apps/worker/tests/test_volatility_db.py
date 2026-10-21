@@ -11,8 +11,9 @@ from sqlalchemy.engine import Connection
 
 from worker.calendar import previous_session
 from worker.options_ingest import pull_options
+from worker.providers.cboe import parse_chain
 from worker.providers.synthetic import SyntheticOptionsProvider
-from worker.volatility import VolReading, compute_and_store_volatility
+from worker.volatility import VolReading, compute_and_store_volatility, select_strip
 
 # A dedicated throwaway user, distinct from the real dev tenant.
 USER = "00000000-0000-0000-0000-0000000000f7"
@@ -22,6 +23,8 @@ USER = "00000000-0000-0000-0000-0000000000f7"
 SESSIONS = (date(2027, 9, 14), date(2027, 9, 15))
 FRESH = ["SPY", "ZZTHN", "ZZVOL"]  # pulled on both sessions
 STALE = "ZZSTL"  # pulled on the first session only
+OFFSET = "ZZOFF"  # pulled on both; its bars print a dollar above the payload close
+NO_BARS = "ZZNOB"  # pulled on both; no bars at all
 N_BARS = 300
 N_VIX = 260
 
@@ -74,7 +77,10 @@ def _seed(conn: Connection) -> dict[date, Decimal]:
             VALUES (:s, :d, :c, :c, :c, :c, 1000000, :c, :c, :c, :c, 1000000)
             ON CONFLICT DO NOTHING
         """),
-        [{"s": s, "d": d, "c": c} for s in [*FRESH, STALE] for d, c in closes.items()],
+        [
+            *({"s": s, "d": d, "c": c} for s in [*FRESH, STALE] for d, c in closes.items()),
+            *({"s": OFFSET, "d": d, "c": c + 1} for d, c in closes.items()),
+        ],
     )
     vix_days = _sessions_back(previous_session(SESSIONS[0]), N_VIX)
     conn.execute(
@@ -88,7 +94,8 @@ def _seed(conn: Connection) -> dict[date, Decimal]:
 
 
 def _pull(conn: Connection, closes: dict[date, Decimal]) -> None:
-    for session, symbols in ((SESSIONS[0], [*FRESH, STALE]), (SESSIONS[1], FRESH)):
+    both = [*FRESH, OFFSET, NO_BARS]
+    for session, symbols in ((SESSIONS[0], [*both, STALE]), (SESSIONS[1], both)):
         provider = SyntheticOptionsProvider({s: closes[session] for s in symbols}, session)
         result = pull_options(conn, provider, symbols, session)
         assert result.symbols_failed == {}
@@ -234,3 +241,56 @@ def test_a_one_sided_chain_is_thin_and_fair(db_conn: Connection) -> None:
     assert r.iv30_thin
     assert r.premium == "fair"
     assert all(row.contract is None for row in r.strip)
+
+
+def test_selection_measures_against_the_stored_payload_close(db_conn: Connection) -> None:
+    """Ingest selected against the payload's close, not the bar's: re-reading
+    must land on the very contracts ingest chose."""
+    closes = _seed(db_conn)
+    _pull(db_conn, closes)
+    out = compute_and_store_volatility(db_conn, USER, [OFFSET], SESSIONS[1])
+    r = out[OFFSET]
+    payload_close = closes[SESSIONS[1]]
+    assert r.close == payload_close
+    assert r.iv30_cboe == Decimal("30.0")
+    full = SyntheticOptionsProvider({OFFSET: payload_close}, SESSIONS[1]).chain(OFFSET)
+    _, contracts = parse_chain(full)
+    expected = [
+        c.contract.symbol if c.contract else None
+        for c in select_strip(contracts, payload_close, SESSIONS[1])
+    ]
+    assert [row.contract for row in r.strip] == expected
+    assert all(row.contract is not None for row in r.strip)
+    atm = next(row for row in r.strip if (row.tenor, row.rule) == (30, "atm"))
+    assert atm.moneyness == 0
+
+
+def test_selection_falls_back_to_the_bar_close_without_the_payload(db_conn: Connection) -> None:
+    closes = _seed(db_conn)
+    _pull(db_conn, closes)
+    db_conn.execute(
+        text("""
+            DELETE FROM raw_payloads
+            WHERE source = 'cboe' AND endpoint = 'delayed_quotes/options'
+              AND symbol = :s AND as_of = :d
+        """),
+        {"s": OFFSET, "d": SESSIONS[1]},
+    )
+    r = compute_and_store_volatility(db_conn, USER, [OFFSET], SESSIONS[1])[OFFSET]
+    bar_close = closes[SESSIONS[1]] + 1
+    assert r.close == bar_close
+    assert r.iv30_cboe is None
+    atm = next(row for row in r.strip if (row.tenor, row.rule) == (30, "atm"))
+    assert atm.moneyness == closes[SESSIONS[1]] / bar_close - 1
+
+
+def test_a_symbol_with_snapshots_but_no_bars_keeps_its_reading(db_conn: Connection) -> None:
+    closes = _seed(db_conn)
+    _pull(db_conn, closes)
+    r = compute_and_store_volatility(db_conn, USER, [NO_BARS], SESSIONS[1])[NO_BARS]
+    assert r.iv30 is not None
+    assert r.close == closes[SESSIONS[1]]
+    assert r.hv20 is None and r.hv60 is None
+    assert r.iv_hv_spread is None and r.iv_hv_ratio is None
+    assert r.premium == "fair"
+    assert all(row.contract is not None for row in r.strip)

@@ -25,6 +25,7 @@ from sqlalchemy.engine import Connection
 
 from worker.calendar import previous_session
 from worker.constants import (
+    EARNINGS_WINDOW_MIN_DAYS,
     HV_WINDOWS,
     IV30_DRIFT_ALARM_POINTS,
     IV30_MIN_CONTRACTS,
@@ -394,7 +395,6 @@ def regime(
 _STORE_SCALE = Decimal("0.0000000001")
 _BAR_DEPTH = max(HV_WINDOWS) + 2  # realized_vol's window plus the excluded today
 _VIX_DEPTH = BASELINE_SESSIONS + 1
-_EARNINGS_MIN_DAYS = 30
 
 _READ_CHAINS = text("""
     SELECT c.symbol AS underlying, s.contract, c.expiration_date, c.put_or_call, c.strike,
@@ -465,8 +465,8 @@ _READ_PRIOR_STRIP = text("""
     WHERE symbol = ANY(:symbols) AND session_date = :session_date
 """)
 
-_READ_CBOE_IV30 = text("""
-    SELECT body->'data'->>'iv30' FROM raw_payloads
+_READ_UNDERLYING = text("""
+    SELECT body->'data'->>'iv30' AS iv30, body->'data'->>'close' AS close FROM raw_payloads
     WHERE source = 'cboe' AND endpoint = 'delayed_quotes/options'
       AND symbol = :symbol AND as_of = :as_of
 """)
@@ -506,9 +506,14 @@ def compute_and_store_volatility(
     """The premium reading for ``symbols`` on ``session_date``, persisted to
     ``metrics`` and ``option_strip`` and returned keyed by symbol.
 
-    A symbol with no snapshot today is read from the prior session's
-    snapshots, evaluated as of that session, and marked ``stale``; with none
-    there either, or no bar today, it is absent from the result. The regime's
+    The chain is measured against the close in its stored payload, the one
+    ingest selected contracts against, and against ``bars_daily.c`` only when
+    that payload is absent. A symbol with no snapshot today is read from the
+    prior session's snapshots, evaluated as of that session, and marked
+    ``stale``. A symbol is absent from the result only when it has snapshots
+    on neither session (or, degenerately, no close of either kind to measure
+    against). Without a bar today it keeps its reading, with realized vol and
+    the comparisons built on it null. The regime's
     fallback compares against the median IV/VIX ratio of the symbols read in
     this same call, so the book is one call, not one per name.
     """
@@ -531,11 +536,13 @@ def compute_and_store_volatility(
     for symbol in symbols:
         stale = symbol not in chains
         contracts = prior_chains.get(symbol) if stale else chains.get(symbol)
-        symbol_bars = bars.get(symbol)
-        if not contracts or not symbol_bars or symbol_bars[-1][0] != session_date:
+        if not contracts:
             continue
+        symbol_bars = bars.get(symbol, [])
+        has_bar = bool(symbol_bars) and symbol_bars[-1][0] == session_date
         chain_date = prior if stale else session_date
-        spot = next((c for d, c, _ in symbol_bars if d == chain_date), None)
+        cboe, payload_close = _read_underlying(conn, symbol, chain_date)
+        spot = payload_close or next((c for d, c, _ in symbol_bars if d == chain_date), None)
         if spot is None:
             continue
 
@@ -548,22 +555,22 @@ def compute_and_store_volatility(
             prior_mids = {c.symbol: c.mid for c in prior_chains.get(symbol, []) if c.two_sided}
             strip = strip_rows(cells, prior_strip.get(symbol, {}), prior_mids)
 
-        adj = [a for _, _, a in symbol_bars]
+        # realized_vol treats the last close as today's; without one, no HV.
+        adj = [a for _, _, a in symbol_bars] if has_bar else []
         hv20, hv60 = realized_vol(adj, 20), realized_vol(adj, 60)
         iv30 = iv.iv30
         iv30_hist = history.get((symbol, "iv30"), [])
         ratio_hist = history.get((symbol, "iv_vix_ratio"), [])
         iv_vix_ratio = iv30 / vix_close if iv30 is not None and vix_close else None
-        cboe = _read_cboe_iv30(conn, symbol, chain_date)
         if iv30 is not None and cboe is not None and abs(iv30 - cboe) > IV30_DRIFT_ALARM_POINTS:
             print(f"volatility {session_date} {symbol}: iv30 {iv30:.2f} vs cboe {cboe:.2f}")
 
         far = iv.far.expiry if iv.far is not None else session_date
-        horizon = max(far, session_date + timedelta(days=_EARNINGS_MIN_DAYS))
+        horizon = max(far, session_date + timedelta(days=EARNINGS_WINDOW_MIN_DAYS))
         readings.append(
             VolReading(
                 symbol=symbol,
-                close=symbol_bars[-1][1],
+                close=symbol_bars[-1][1] if stale and has_bar else spot,
                 iv30=iv30,
                 iv30_n=iv.n,
                 iv30_cboe=cboe,
@@ -748,9 +755,15 @@ def _read_prior_strip(
     return out
 
 
-def _read_cboe_iv30(conn: Connection, symbol: str, as_of: date) -> Decimal | None:
-    """The vendor's own IV30, read from the stored chain payload."""
-    return _dec(conn.execute(_READ_CBOE_IV30, {"symbol": symbol, "as_of": as_of}).scalar())
+def _read_underlying(
+    conn: Connection, symbol: str, as_of: date
+) -> tuple[Decimal | None, Decimal | None]:
+    """The vendor's own IV30 and the close, from the stored chain payload;
+    ``(None, None)`` when there is no payload."""
+    row = conn.execute(_READ_UNDERLYING, {"symbol": symbol, "as_of": as_of}).mappings().first()
+    if row is None:
+        return None, None
+    return _dec(row["iv30"]), _dec(row["close"])
 
 
 def _read_earnings(conn: Connection, symbol: str, session_date: date, horizon: date) -> date | None:
