@@ -517,3 +517,93 @@ def test_open_prompt_carries_headlines_verbatim() -> None:
     prompt = build_open_prompt(obj, headlines={"ASTS": ["FCC approves"]})
     assert "FCC approves" in prompt
     assert build_open_prompt(obj) == build_open_prompt(obj, headlines={})
+
+
+# --- §6's premium note (M24, D37) --------------------------------------------
+
+_PREMIUM_RULE = (
+    "Characterise the premium regime for the named rows in one or two sentences; "
+    "never recommend an action, name a strike, or use the words sell, write, buy, "
+    "or hold."
+)
+
+
+def _obj_with_premium(*, note: str | None, full: bool = True) -> BriefObject:
+    """The close fixture with §6's assembled `note` (and row tiers) overridden."""
+    payload = json.loads(_FIXTURE.read_text())
+    section = next(s for s in payload["sections"] if s["id"] == "premium")
+    section["note"] = note
+    if not full:
+        for row in section["rows"]:
+            row["tier"] = "brief"
+    return BriefObject.model_validate(payload)
+
+
+def _premium_note(obj: BriefObject) -> str | None:
+    return next(s for s in obj.sections if s.id.value == "premium").note
+
+
+def test_premium_note_lands_when_assembly_left_the_note_empty() -> None:
+    obj = _obj_with_premium(note=None)
+    prose = "Implied runs well above realized across the named rows."
+    narrated = narrate_and_apply(obj, lambda _p: json.dumps({"premium_note": prose}))
+    assert _premium_note(narrated) == prose
+
+
+def test_a_premium_note_with_a_digit_is_dropped() -> None:
+    """Invariant 2: the tables carry every figure."""
+    obj = _obj_with_premium(note=None)
+    raw = json.dumps({"premium_note": "Implied sits in the top decile, near 90."})
+    assert parse_narration(raw, obj).premium_note is None
+    assert _premium_note(narrate_and_apply(obj, lambda _p: raw)) is None
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "A good evening to sell calls against the position.",
+        "Premium is rich enough to Write against.",
+        "Buying here looks early.",
+        "Calls were sold into the strength.",
+        "Better to HOLD off while implied is cheap.",
+        "Written calls would collect more than usual.",
+    ],
+)
+def test_a_premium_note_with_an_action_verb_is_dropped(prose: str) -> None:
+    """D37: the section characterises, it never recommends."""
+    obj = _obj_with_premium(note=None)
+    assert parse_narration(json.dumps({"premium_note": prose}), obj).premium_note is None
+
+
+def test_the_verb_guard_is_word_bounded() -> None:
+    """`holdings`, `shareholder` and `upholds` contain a verb but are not one."""
+    obj = _obj_with_premium(note=None)
+    prose = "Implied runs rich across your holdings, and the shareholder tape upholds it."
+    assert parse_narration(json.dumps({"premium_note": prose}), obj).premium_note == prose
+
+
+def test_close_prompt_asks_for_premium_note_only_with_a_full_row() -> None:
+    with_full = build_prompt(_obj_with_premium(note=None))
+    assert '"premium_note"' in with_full
+    assert _PREMIUM_RULE in with_full
+    without = build_prompt(_obj_with_premium(note=None, full=False))
+    assert '"premium_note"' not in without
+    assert _PREMIUM_RULE not in without
+
+
+def test_premium_note_never_overwrites_an_assembled_note() -> None:
+    """The overflow note names what the email hides; prose must not replace it."""
+    overflow = "D also rich or cheap — see the archive"
+    obj = _obj_with_premium(note=overflow)
+    narrated = narrate_and_apply(
+        obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized."})
+    )
+    assert _premium_note(narrated) == overflow
+
+
+def test_premium_note_never_lands_without_a_full_row() -> None:
+    obj = _obj_with_premium(note=None, full=False)
+    narrated = narrate_and_apply(
+        obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized."})
+    )
+    assert _premium_note(narrated) is None

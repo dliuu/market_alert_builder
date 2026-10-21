@@ -768,3 +768,97 @@ cadence exists.
 most sessions — that would mean the percentiles are not discriminating, the
 same failure M19 caught when its first touch predicate scored ASTS at 61
 touches in 276 sessions. The fallback is divergence-only.
+
+---
+
+**D37 — M24 premium regime is a measurement, not advice**
+
+§6 tells the reader whether option premium on a held name is rich, fair or
+cheap *for that name*, and what the calls a covered-call writer would choose
+between pay today. That sits next to `docs/01`'s *Not advice* non-goal, and the
+section is only defensible because four conditions hold together — the
+non-goal is amended in place under them, not deleted, the way D36 amended *No
+bare technical indicators*.
+
+*The regime is mechanical.* `rich`, `fair` and `cheap` come from one pure
+function over thresholds in `constants.py` (`# --- Premium (M22) ---`: the
+70/30 percentile cut-offs, implied against realized, the book's median IV/VIX
+ratio as the no-baseline fallback), and a thin IV30 always reads fair. No
+judgement enters between the chain and the word.
+
+*Every number carries its comparison base.* IV30 is never rendered in the
+email without its own-year percentile (D36's rule); the regime is stated
+against the name's own year, its own realized volatility and the VIX, each
+explicit. A premium figure without its base is an opinion; with it, it is a
+comparison already made for the reader and auditable against `option_strip`.
+
+*The earnings guard is always visible.* A name with earnings inside the IV30
+window never qualifies — implied volatility before a print prices the event,
+not the regime — and the row carries `earnings_in_window` and its date so the
+archive shows why it was held back.
+
+*No action verb anywhere.* Not in the template, not in the assembled note, not
+in the narration prompt's ask, not in the narrated note. The prompt names the
+forbidden words only to forbid them, and the parser enforces it: a
+`premium_note` matching `sell`, `write`, `buy` or `hold` in any simple
+inflection (word-bounded, case-insensitive — "holdings" passes) is dropped
+exactly as a digit drops it, and §6 renders its table alone.
+*Rules out:* a strike recommendation or a "consider writing" line in any
+surface; a regime set by the model; a rich reading shown without what it is
+rich against; an earnings-window name in the email's rows.
+
+*Reverses if:* an action verb appears anywhere in §6 — template, note or prose
+— and the section comes out of the brief until it is fixed. The guard failing
+once is the evidence the line is not being held.
+
+---
+
+**D38 — M21 Cboe directly, undocumented, and the raw-payload band**
+
+The option chain comes from the exchange's own delayed feed —
+`cdn-api.cboe.com/api/global/delayed_quotes/options/{SYMBOL}.json` — rather
+than a paid options API. It is fifteen minutes delayed and keyless, and it
+carries everything §6 needs in one document per underlying: per-contract IV and
+two-sided quotes with sizes and greeks, Cboe's own IV30 (the check our
+constant-maturity IV30 is measured against), and the VIX family through the
+same host (`_VIX.json` for today's level, the `VIX`/`VIX9D`/`VIX3M` history
+CSVs). A paid API would sell the same exchange's numbers back with a key in
+front of them. The cost is that it is undocumented: the shape is whatever was
+probed on 2026-10-20, and the probe's units (per-contract `iv` a fraction, the
+underlying `iv30` in vol points, `close` not `current_price` for spot) are
+pinned in tests rather than promised by anyone.
+
+*The terms, as read.* Cboe's site terms permit one copy for personal
+non-commercial use and say the materials are not for trading purposes; they do
+not address automated access. This is the Tiingo-free-tier posture (D12):
+single-user, never redistributed, a briefing rather than a trading screen. It
+is the owner's call, made knowingly, and it is the first thing that changes if
+a second user ever exists.
+
+*The one place invariant 5 bends.* `raw_payloads` stores, per name per session,
+the underlying block and every option object with ≤ 60 days to expiry and a
+strike within ±25% of `close`, each object exactly as published — not the whole
+chain. A full large-cap chain is ~1.5 MB a night; on AAPL the band keeps 920 of
+3,320 contracts, 441 KB of 1,448 KB. The band is a superset of everything IV30
+(two expiries bracketing 30 days, strikes nearest spot) and the strip (tenors
+to 30 days, strikes at 0.90–1.10 × spot) can read, so `options rebuild` still
+reproduces `option_contracts`, `option_snapshot` and `option_strip`
+byte-for-byte with zero network calls. What is lost is the far wings and the
+LEAPS, which nothing computes from. Index history likewise stores only rows
+past the watermark, not the 470 KB file.
+
+*`OPTIONS_LIVE` is hand-set.* Cboe needs no key, so D29's derive-from-the-key
+rule has nothing to derive from. The switch is a hand-set flag, default false
+(deterministic `SyntheticOptionsProvider`, `premium.synthetic` stamped into
+`data_quality.stale`) — a documented exception to D29 on the `CN_BARS_LIVE`
+precedent (D32).
+
+*Licensed fallbacks behind the same seam.* `OptionsProvider` is the protocol;
+Market Data's Starter plan ($30/mo) or Cboe DataShop (~$35 per symbol-month)
+slot in without touching compute or assembly.
+*Rules out:* a paid options API while the free feed answers; storing the full
+chain; deriving the live switch from a key that does not exist.
+
+*Reverses if:* the endpoint changes shape or disappears — swap the provider
+behind `OptionsProvider`; or the terms are judged too thin for how the brief is
+used — move to the licensed fallback.

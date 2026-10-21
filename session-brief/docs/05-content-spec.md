@@ -24,9 +24,10 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 | 3 | Attribution | Per name: close, day %, day P&L, contribution bps, total P&L. **Plus a book totals row.** |
 | 4 | How they traded | Technical snapshot, every owned name: RVOL, weekly/monthly volume multiples, close-in-range bar, distance from the 20/50/200-day averages and their stack, nearest support and resistance with touch counts, the 52-week range, and a confirmed breakout marker (M19). |
 | 5 | Where they stand | Per-stock indicator standing, gated and capped at three (M20): RSI, MACD histogram and ADX each paired with their own-history percentile, ATR% and its percentile (volatility regime), relative strength vs the sector benchmark (or SPY) and its percentile, and a divergence badge. Only names with a percentile past the decile, a divergence, or a §4 breakout appear; overflow names are named in the section note. Absent entirely when `standing` was never computed (CN). |
-| 6 | Sector rotation | Per sector: day move, breadth (`n of m up`), bar vs benchmark. |
-| 7 | After hours | Earnings prints and extended-hours moves, with the implied effect on tomorrow's open in bps. |
-| 8 | Yesterday's flag, resolved | The accountability loop. Always last. |
+| 6 | Premium | Per-name option-premium regime, gated and capped at three (M24): IV30 with its own-year percentile and IV rank, HV20 and the implied-minus-realized spread, the IV/VIX ratio with the VIX's percentile, the term slope, and the regime word (`rich` / `fair` / `cheap`). A strip line per name: the 30-day at-the-money and 10%-out-of-the-money calls as a percent of spot with their change since yesterday, and the 7-day at-the-money call only when the term slope is positive. Only names reading rich or cheap, with no earnings inside the IV30 window, a non-thin IV30, and at least one contract's worth of shares appear; the earnings guard is shown on every row it holds back; overflow names are named in the section note. Emitted even when empty ("Premium is fair across the book"); absent entirely when premium was never computed (CN). Characterises, never recommends an action (D37). |
+| 7 | Sector rotation | Per sector: day move, breadth (`n of m up`), bar vs benchmark. |
+| 8 | After hours | Earnings prints and extended-hours moves, with the implied effect on tomorrow's open in bps. |
+| 9 | Yesterday's flag, resolved | The accountability loop. Always last. |
 
 ## The five mechanisms
 
@@ -34,7 +35,7 @@ No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL 
 |---|---|---|---|
 | Position risk | Stage ③, thresholded in ④ | `fundamentals`, `flags` | Open brief, §6 |
 | Correlation flag | ③ rolling window; ④ threshold + rate limit | `flags` (`last_seen`) | Open brief §6 + dashboard, **max 1×/week** |
-| Accountability loop | ④ emits; the *next* brief's ④ resolves | `claims` | Close brief, §8 |
+| Accountability loop | ④ emits; the *next* brief's ④ resolves | `claims` | Close brief, §9 |
 | Suppression | ④ sets `section.tier` | `briefs.body.suppressed` | By absence + the roll-up line |
 | Tape quality | ③ from daily OHLCV | `metrics` | Close brief, §4 |
 

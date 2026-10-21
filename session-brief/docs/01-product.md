@@ -17,6 +17,14 @@ One person, initially the author. A serious retail investor with a concentrated,
 
 - **Not a trading terminal.** No live quotes, no charts, no order entry.
 - **Not advice.** The brief never says buy, sell, or hold, and carries no price targets.
+  *Amended by M24 (D37).* §6 says whether option premium on a held name is
+  rich, fair or cheap for that name — a measurement, kept on the right side of
+  the rule by four conditions: the regime comes from mechanical thresholds in
+  `constants.py`, every number carries its percentile or comparison base, the
+  earnings guard is always visible, and no action verb appears in the template,
+  the note or the narration prompt's ask — the narration verb guard drops any
+  note that uses one. It still never names a strike, and the section comes out
+  if an action verb ever appears in it.
 - **No intraday alerts.** A third channel would turn a briefing into a monitor, which is a different product with worse habits attached.
 - **No bare technical indicators.** *Amended by M20 (D36).* The original rule
   read "no indicator soup — RSI/MACD/Bollinger across eight names is noise",
