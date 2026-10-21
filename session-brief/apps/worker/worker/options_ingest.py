@@ -232,7 +232,8 @@ def store_chain(
 
 def rebuild_options(conn: Connection, session_date: date) -> int:
     """Replay ``session_date``'s stored chains into ``option_contracts`` and
-    ``option_snapshot`` — zero network. ``option_strip`` is not touched here.
+    ``option_snapshot`` — zero network. ``option_strip`` and the metrics are
+    not touched here; the next close compute re-derives them.
     Returns snapshot rows written."""
     written = 0
     for (body,) in conn.execute(_SELECT_CHAINS, {"session_date": session_date}).all():

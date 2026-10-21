@@ -842,8 +842,10 @@ chain. A full large-cap chain is ~1.5 MB a night; on AAPL the band keeps 920 of
 3,320 contracts, 441 KB of 1,448 KB. The band is a superset of everything IV30
 (two expiries bracketing 30 days, strikes nearest spot) and the strip (tenors
 to 30 days, strikes at 0.90–1.10 × spot) can read, so `options rebuild` still
-reproduces `option_contracts`, `option_snapshot` and `option_strip`
-byte-for-byte with zero network calls. What is lost is the far wings and the
+reproduces `option_contracts` and `option_snapshot` byte-for-byte with zero
+network calls; `option_strip` and the metrics are per-user compute, not market
+data, and are re-derived from those two tables by the next close compute. What
+is lost is the far wings and the
 LEAPS, which nothing computes from. Index history likewise stores only rows
 past the watermark, not the 470 KB file.
 

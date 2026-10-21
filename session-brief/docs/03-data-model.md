@@ -103,7 +103,7 @@ A payload is identified by **both ends of the window it covers**, not just where
 
 `option_snapshot` holds only the contracts the strip and IV30 selected, about thirty per name per session, not the whole chain. A large-cap chain runs to thousands of contracts, and nothing downstream reads the ones that were never selected; `option_contracts` keeps each selected contract's identity once, and the strip points back at it.
 
-The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside the D38 band of 60 days to expiry and ±25% of the close. Outside that band no strip rule can pick a contract, and a full large-cap chain is about 1.5 MB per session. The band keeps replay possible (invariant 5) without paying for strikes nobody will read.
+The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside the D38 band of 60 days to expiry and ±25% of the close. Outside that band no strip rule can pick a contract, and a full large-cap chain is about 1.5 MB per session. The band keeps replay possible (invariant 5) without paying for strikes nobody will read. `options rebuild` replays a session's stored chains into `option_contracts` and `option_snapshot` with zero network calls; it does not touch `option_strip` or the metrics, which the next close compute re-derives from those two tables.
 
 `index_daily` is separate from `bars_daily` because an index has no adjusted series and no volume worth storing. Folding it in would mean `NOT NULL` columns filled with copies of `c` and zeros, and every reader of `bars_daily` would have to know which rows to distrust.
 

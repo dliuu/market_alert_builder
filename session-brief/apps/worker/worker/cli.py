@@ -205,7 +205,11 @@ def main() -> None:
     o_pull = opt_sub.add_parser("pull", help="pull, band and store chains and the VIX family")
     o_pull.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest session")
     o_pull.add_argument("--symbols", help="comma-separated; defaults to the book")
-    o_rebuild = opt_sub.add_parser("rebuild", help="replay stored chains (no network)")
+    o_rebuild = opt_sub.add_parser(
+        "rebuild",
+        help="replay stored chains into option_contracts and option_snapshot (no network); "
+        "the strip and metrics are re-derived by the next compute",
+    )
     o_rebuild.add_argument("--date", help="session date YYYY-MM-DD; defaults to the latest session")
 
     args = parser.parse_args()
