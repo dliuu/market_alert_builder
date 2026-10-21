@@ -117,7 +117,7 @@ The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside t
 
 **Thin.** `iv30_n` counts the contracts that fed IV30. Below 4 the reading is `iv30_thin` and the regime is always `fair`, so a thin name never qualifies. A chain with no two-sided quote at all stores no `iv30`, only `iv30_n = 0`.
 
-**Stale.** A name with no snapshot for the session falls back to the previous session's snapshots, evaluated as of that session (its expiries, its close), and is marked `stale`. A stale reading's strip carries no changes, since there is no new quote to compare. Realized vol, VIX and the guards are still today's.
+**Stale.** A name with no snapshot for the session falls back to the previous session's snapshots, evaluated as of that session (its expiries, its close), and is marked `stale`. A stale reading's strip carries no changes, since there is no new quote to compare. Realized vol, VIX and the guards are still today's. A stale reading is stored under today's `session_date`, so a second consecutive pull failure reads as "No option data" (the fallback reaches back one session only), and the duplicated value enters the baseline once.
 
 ## Derived
 
