@@ -167,6 +167,51 @@ def test_failed_premium_compute_degrades_to_a_stale_stamp(
     assert f"close {_SESSION}: premium compute degraded (RuntimeError('chain unreadable'))" in out
 
 
+def test_a_watching_name_gets_metrics_but_never_a_premium_row(db_conn: Connection) -> None:
+    """The close computes the premium reading over every held name, watching
+    ones too, so the dashboard can read them (nothing to write against); §6
+    stays restricted to the open positions."""
+    from worker.options_ingest import pull_options
+    from worker.providers.synthetic import SyntheticOptionsProvider
+
+    _seed_book(db_conn)
+    _seed_bar(db_conn, "ZZW", _PREV, "30")
+    _seed_bar(db_conn, "ZZW", _SESSION, "31")
+    sector_id = db_conn.execute(
+        text("SELECT id FROM sectors WHERE user_id = :u AND name = :n"),
+        {"u": _TEST_USER_ID, "n": _SECTOR},
+    ).scalar_one()
+    db_conn.execute(
+        text(
+            "INSERT INTO holdings (user_id, sector_id, symbol, status) "
+            "VALUES (:u, :s, 'ZZW', 'watching')"
+        ),
+        {"u": _TEST_USER_ID, "s": sector_id},
+    )
+    closes = {"ZZA": Decimal("110"), "ZZB": Decimal("48"), "ZZW": Decimal("31")}
+    pulled = pull_options(
+        db_conn, SyntheticOptionsProvider(closes, _SESSION), sorted(closes), _SESSION, indices=()
+    )
+    assert pulled.symbols_failed == {}
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None
+
+    metrics = dict(
+        db_conn.execute(
+            text(
+                "SELECT metric, value FROM metrics "
+                "WHERE user_id = :u AND symbol = 'ZZW' AND session_date = :d"
+            ),
+            {"u": _TEST_USER_ID, "d": _SESSION},
+        ).all()
+    )
+    assert "iv30_n" in metrics
+    assert metrics["contracts_writable"] == 0
+    premium = next(s for s in to_contract_json(obj)["sections"] if s["id"] == "premium")
+    assert {r["symbol"] for r in premium["rows"]} == {"ZZA", "ZZB"}
+
+
 def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:
     # ZZC barely moves on the tape but has the largest |resid_z| (a
     # residual-material name, M13 §2) → forced full tier and ranks first.

@@ -174,7 +174,7 @@ def assemble(
     stale_list = list(stale or [])
     if premium is not None and kind == "close":
         sections.append(_premium(result.positions, premium))
-        if any(r.stale for r in premium.values()):
+        if any(r.stale for p in result.positions if (r := premium.get(p.symbol))):
             stale_list.append(STALE_PREMIUM)
         if not config.OPTIONS_LIVE:
             stale_list.append(STALE_PREMIUM_SYNTHETIC)
@@ -653,6 +653,15 @@ _READ_CLOSES = text("""
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
 """)
 
+# Every US holding, owned or watching — the set the close job pulls chains for
+# (`scheduler.held_symbols`, restated here to keep assembly off the scheduler's
+# import graph).
+_READ_HELD = text("""
+    SELECT DISTINCT h.symbol FROM holdings h
+    JOIN sectors s ON s.id = h.sector_id AND s.user_id = h.user_id
+    WHERE h.user_id = :user_id AND s.market = 'US'
+""")
+
 _UPSERT_BRIEF = text("""
     INSERT INTO briefs (user_id, session_date, kind, schema_version, body)
     VALUES (:user_id, :session_date, :kind, :schema_version, CAST(:body AS jsonb))
@@ -700,12 +709,17 @@ def assemble_and_store(
     # The premium reading (M22), off the snapshot the close job just pulled. A
     # failed pull already degrades to stale readings; a failed compute must
     # too — it costs §6, never the brief. The savepoint keeps a database error
-    # from poisoning the transaction the rest of assembly still needs.
+    # from poisoning the transaction the rest of assembly still needs. It runs
+    # over every held name, watching ones too, so the dashboard reads them
+    # (contracts_writable 0); §6 itself is built from the open positions only.
+    held = {str(r[0]) for r in conn.execute(_READ_HELD, {"user_id": user_id})}
     premium: dict[str, VolReading] | None
     stale: list[str] = []
     try:
         with conn.begin_nested():
-            premium = compute_and_store_volatility(conn, user_id, symbols, session_date)
+            premium = compute_and_store_volatility(
+                conn, user_id, sorted(held | set(symbols)), session_date
+            )
     except Exception as exc:  # noqa: BLE001 - degrade, never kill the close
         print(f"close {session_date}: premium compute degraded ({exc!r})")
         premium = None
