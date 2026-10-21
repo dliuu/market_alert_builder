@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from worker import cli, config
+from worker import cli, config, options_ingest
 from worker.cli import _options_probe, _options_probe_cmd
 from worker.providers.cboe import CboeClient
 
@@ -149,7 +149,7 @@ def test_pull_uses_the_synthetic_provider_when_not_live(
         {"d": SESSION},
     )
     monkeypatch.setattr(config, "OPTIONS_LIVE", False)
-    monkeypatch.setattr(cli, "CboeClient", _boom)
+    monkeypatch.setattr(options_ingest, "CboeClient", _boom)
     monkeypatch.setattr(cli, "get_engine", lambda: _Engine(db_conn))
     cli._options_pull(date_arg=SESSION.isoformat(), symbols_arg="zzopt")
     out = capsys.readouterr().out

@@ -42,6 +42,7 @@ Alongside the briefs, the scheduler runs three attribution jobs: an AM reconcile
 | Email | **Resend** | |
 | Narration | **Claude API** | |
 | Market data | **Tiingo** (EOD daily bars) | Free tier, personal use only — a commercial plan is the gate to any multi-user product (see `docs/02-architecture.md`). |
+| Options chain, VIX family | **Cboe** (delayed chain JSON + index history CSV) | No key; hand-set `OPTIONS_LIVE` flag; synthetic feed when unset. |
 | Monitoring | **Healthchecks.io** | Dead-man's switch per scheduled job: the worker pings on every run (including correct holiday skips) and pings `/fail` on a crash. A dead worker stops pinging and the check goes red. |
 
 Inspect the live worker:

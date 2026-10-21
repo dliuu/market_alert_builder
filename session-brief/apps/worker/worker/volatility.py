@@ -406,6 +406,14 @@ _READ_CHAINS = text("""
     ORDER BY s.contract
 """)
 
+_ANY_SNAPSHOT = text("""
+    SELECT EXISTS (
+        SELECT 1 FROM option_snapshot s
+        JOIN option_contracts c USING (contract)
+        WHERE c.symbol = ANY(:symbols) AND s.session_date <= :session_date
+    )
+""")
+
 _READ_BARS = text("""
     SELECT symbol, session_date, c, adj_c FROM (
         SELECT symbol, session_date, c, adj_c,
@@ -518,6 +526,14 @@ def compute_and_store_volatility(
     this same call, so the book is one call, not one per name.
     """
     if not symbols:
+        return {}
+    # No snapshot on or before today means no reading on either session, so
+    # the book reads as empty without consulting the calendar (a book whose
+    # options were never pulled, or a session past the calendar's bounds).
+    has_snapshot = conn.execute(
+        _ANY_SNAPSHOT, {"symbols": symbols, "session_date": session_date}
+    ).scalar()
+    if not has_snapshot:
         return {}
 
     prior = previous_session(session_date)

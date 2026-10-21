@@ -15,7 +15,7 @@ from sqlalchemy.engine import Engine
 
 from contracts.brief import BriefObject
 from worker import calendar
-from worker.assemble import _read_closes, assemble_and_store
+from worker.assemble import assemble_and_store
 from worker.assemble_open import assemble_open_and_store
 from worker.compute import compute_and_store
 from worker.constants import (
@@ -27,7 +27,7 @@ from worker.constants import (
 from worker.db import get_engine
 from worker.ingest import ingest_daily_bars
 from worker.normalize import normalize_bars
-from worker.options_ingest import pull_options, rebuild_options
+from worker.options_ingest import options_provider, pull_options, rebuild_options
 from worker.providers.cboe import (
     FEED_ERRORS as CBOE_FEED_ERRORS,
 )
@@ -39,7 +39,6 @@ from worker.providers.cboe import (
     parse_index_csv,
 )
 from worker.providers.fdn import FEED_ERRORS, FdnClient, _safe_error
-from worker.providers.synthetic import SyntheticOptionsProvider
 from worker.providers.tiingo import TiingoProvider
 from worker.volatility import ExpiryIv, iv30_from_chain, select_strip
 
@@ -550,23 +549,16 @@ def _options_pull(*, date_arg: str | None, symbols_arg: str | None) -> None:
     """Live Cboe when ``OPTIONS_LIVE`` is set, else the synthetic chain priced
     off the session's ``bars_daily`` closes. Feed failures are reported on the
     summary and do not fail the run; a database error raises."""
-    from worker import config
-
     session_date = _options_session_date(date_arg)
     engine = get_engine()
     symbols = _resolve_symbols(symbols_arg, engine)
     with engine.begin() as conn:
-        if config.OPTIONS_LIVE:
-            client = CboeClient()
-            try:
-                result = pull_options(conn, client, symbols, session_date)
-            finally:
-                client.close()
-        else:
-            closes = _read_closes(conn, symbols, session_date)
-            result = pull_options(
-                conn, SyntheticOptionsProvider(closes, session_date), symbols, session_date
-            )
+        provider = options_provider(conn, symbols, session_date)
+        try:
+            result = pull_options(conn, provider, symbols, session_date)
+        finally:
+            if isinstance(provider, CboeClient):
+                provider.close()
     print(
         f"options pull {session_date}: {len(result.symbols_ok)} symbols ok "
         f"{list(result.symbols_ok)}, indices ok {list(result.indices_ok)}, "

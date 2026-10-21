@@ -23,15 +23,18 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from worker import config
 from worker.constants import OPTIONS_INDICES
 from worker.providers.base import OptionsProvider
 from worker.providers.cboe import (
     FEED_ERRORS,
+    CboeClient,
     filter_payload_for_storage,
     parse_chain,
     parse_index_csv,
 )
 from worker.providers.fdn import _safe_error
+from worker.providers.synthetic import SyntheticOptionsProvider
 from worker.volatility import selected_contracts
 
 CHAIN_ENDPOINT = "delayed_quotes/options"
@@ -103,6 +106,17 @@ class PullResult:
     indices_ok: tuple[str, ...]
     indices_failed: dict[str, str]
     raw_rows: int
+
+
+def options_provider(conn: Connection, symbols: list[str], session_date: date) -> OptionsProvider:
+    """Live Cboe when ``OPTIONS_LIVE`` is set — a ``CboeClient`` the caller
+    must ``close()`` — else the synthetic chain priced off the session's
+    ``bars_daily`` closes. The one swap point for the CLI and the scheduler."""
+    if config.OPTIONS_LIVE:
+        return CboeClient()
+    from worker.assemble import _read_closes  # local: keeps ingest off the assemble import graph
+
+    return SyntheticOptionsProvider(_read_closes(conn, symbols, session_date), session_date)
 
 
 def pull_options(

@@ -53,6 +53,7 @@ from worker.narrate import Narrator, narrate_and_apply
 from worker.oscillators import Standing, compute_and_store_standing
 from worker.tape import TapeMetrics, compute_and_store_tape
 from worker.technicals import Technicals, Zone, compute_and_store_technicals
+from worker.volatility import VolReading, compute_and_store_volatility
 
 # Object shape version. Bump on any shape change and keep old renderers
 # (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
@@ -112,6 +113,7 @@ def assemble(
     currency: str = "USD",
     technicals: dict[str, Technicals] | None = None,
     standing: dict[str, Standing] | None = None,
+    premium: dict[str, VolReading] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -572,6 +574,8 @@ def assemble_and_store(
     # §5's indicator standing (M20). Its own 286-session read: MACD's warmup
     # needs more history than §4's 252-session window provides.
     standing = compute_and_store_standing(conn, user_id, symbols, session_date)
+    # The premium reading (M22), off the snapshot the close job just pulled.
+    premium = compute_and_store_volatility(conn, user_id, symbols, session_date)
     decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
@@ -608,6 +612,7 @@ def assemble_and_store(
         catalysts=catalysts,
         technicals=technicals,
         standing=standing,
+        premium=premium,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above) but emits none.
