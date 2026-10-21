@@ -29,6 +29,7 @@ export function CloseBrief({
   const attribution = brief.sections.find((s) => s.id === "attribution");
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const standing = brief.sections.find((s) => s.id === "standing");
+  const premium = brief.sections.find((s) => s.id === "premium");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
   const dateLong = formatDate(brief.session_date);
   const preheader = brief.one_thing ?? brief.subject;
@@ -121,6 +122,22 @@ export function CloseBrief({
                   <Standing key={r.symbol} row={r} />
                 ))}
               {standing.note && <p style={note}>{standing.note}.</p>}
+            </Section>
+          )}
+
+          {/* premium (M24) — gated the §5 way: only names whose option premium
+              is rich or cheap against their own year, capped at three; the
+              rest are in `note` and on the archive. A measurement, never
+              advice (D37): no verb in this block tells the reader what to do. */}
+          {premium && (premium.rows.some((r) => r.tier === "full") || premium.note) && (
+            <Section style={sec}>
+              <SectionHead title="Premium" note={premiumHeadNote(brief.data_quality.stale)} />
+              {premium.rows
+                .filter((r) => r.tier === "full")
+                .map((r) => (
+                  <Premium key={r.symbol} row={r} />
+                ))}
+              {premium.note && <p style={note}>{premium.note}.</p>}
             </Section>
           )}
 
@@ -445,6 +462,88 @@ function Standing({ row }: { row: Row }) {
       </tbody>
     </table>
   );
+}
+
+// The §6 head note, with the same data_quality stamps the open brief puts on
+// its synthetic tape: the reader sees the caveat beside the figures it
+// qualifies, not only in the footer list.
+function premiumHeadNote(stale: string[]): string {
+  let head = "against each name's own year and the tape";
+  if (stale.includes("premium.synthetic")) head += " · synthetic feed · not live prices";
+  if (stale.includes("premium.stale")) head += " · stale";
+  return head;
+}
+
+// One name's premium (M24). The regime word is muted ink, not a traffic
+// light — rich is not "good" and cheap is not "bad" (spec, Surfaces). IV30 is
+// never shown without its percentile (the M20 rule): a null percentile darkens
+// both. The strip line describes what the calls are priced at; the earnings
+// date rides along whenever assembly set the guard.
+function Premium({ row }: { row: Row }) {
+  const hasPctile = row.iv30_pctile != null;
+  const iv30 = hasPctile ? numberOrDash(row.iv30, 1) : "—";
+  const pctile = row.iv30_pctile != null ? ordinal(Math.round(row.iv30_pctile)) : "—";
+  const figures = [
+    `IV30 ${iv30} · ${pctile}`,
+    `IV − HV ${signedOrDash(row.iv_hv_spread, 1)}`,
+    `IV/VIX ${numberOrDash(row.iv_vix_ratio, 2)}`,
+    `contracts writable ${row.contracts_writable ?? "—"}`,
+  ];
+  const strip = stripLine(row);
+  return (
+    <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
+      <tbody>
+        <tr>
+          <td style={tdL}>
+            {/* divs and the spaces keep the plaintext part readable: inline
+                spans alone would run "2" into "30d" there. */}
+            <span style={sym}>{row.symbol}</span>{" "}
+            {row.premium && <span style={{ ...breakoutBadge, ...mut }}>{row.premium}</span>}{" "}
+            {row.earnings_in_window && (
+              <span style={{ ...breakoutBadge, ...mut }}>
+                earnings {row.occurs_at ? dayMonth(row.occurs_at) : "—"}
+              </span>
+            )}
+            <div style={levelLine}>{figures.join("  ·  ")}</div>
+            {strip && <div style={levelLine}>{strip}</div>}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+// "30d ATM pays 4.8% (+2.0%) · 10% OTM 1.2% (−1.0%) · 7d ATM 2.1%". Each
+// premium is the call mid as a fraction of spot; the bracket is its change
+// against the prior session at the same tenor (`chg_tenor_pct`, a relative
+// change — so it carries its own %). The 7-day cell is present only when
+// assembly included it (a positive term slope).
+function stripLine(row: Row): string | null {
+  if (row.call_atm30_pct == null && row.call_otm30_pct == null) return null;
+  const cell = (v: number | null | undefined, chg: number | null | undefined) =>
+    `${v == null ? "—" : `${(v * 100).toFixed(1)}%`}${chg == null ? "" : ` (${signedOrDash(chg * 100, 1)}%)`}`;
+  const parts = [
+    `30d ATM pays ${cell(row.call_atm30_pct, row.call_atm30_chg)}`,
+    `10% OTM ${cell(row.call_otm30_pct, row.call_otm30_chg)}`,
+  ];
+  if (row.call_atm7_pct != null) parts.push(`7d ATM ${cell(row.call_atm7_pct, null)}`);
+  return parts.join(" · ");
+}
+
+// Signed, with U+2212 for minus — the archive page's convention for a change.
+function signedOrDash(v: number | null | undefined, places: number): string {
+  if (v == null) return "—";
+  return `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(places)}`;
+}
+
+// "2026-10-28" → "28 Oct", read as a calendar date (no timezone shift).
+function dayMonth(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
 
 // k=3 pivots mean the second pivot needs three more sessions before it is a
