@@ -197,19 +197,20 @@ def test_a_watching_name_gets_metrics_but_never_a_premium_row(db_conn: Connectio
     obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
     assert obj is not None
 
-    metrics = dict(
-        db_conn.execute(
+    metrics: dict[str, Decimal] = {
+        str(r[0]): r[1]
+        for r in db_conn.execute(
             text(
                 "SELECT metric, value FROM metrics "
                 "WHERE user_id = :u AND symbol = 'ZZW' AND session_date = :d"
             ),
             {"u": _TEST_USER_ID, "d": _SESSION},
-        ).all()
-    )
+        )
+    }
     assert "iv30_n" in metrics
     assert metrics["contracts_writable"] == 0
-    premium = next(s for s in to_contract_json(obj)["sections"] if s["id"] == "premium")
-    assert {r["symbol"] for r in premium["rows"]} == {"ZZA", "ZZB"}
+    premium = next(s for s in obj.sections if s.id.value == "premium")
+    assert {r.symbol for r in premium.rows} == {"ZZA", "ZZB"}
 
 
 def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:
