@@ -67,6 +67,7 @@ class Id(Enum):
     accountability = 'accountability'
     catalysts = 'catalysts'
     standing = 'standing'
+    premium = 'premium'
 
 
 class Tier(Enum):
@@ -116,6 +117,18 @@ class Breakout(Enum):
 class Divergence(Enum):
     bullish = 'bullish'
     bearish = 'bearish'
+
+
+class Premium(Enum):
+    rich = 'rich'
+    fair = 'fair'
+    cheap = 'cheap'
+
+
+class PremiumPrior(Enum):
+    rich = 'rich'
+    fair = 'fair'
+    cheap = 'cheap'
 
 
 class Row(BaseModel):
@@ -373,6 +386,80 @@ class Row(BaseModel):
     divergence: Divergence | None = Field(
         None,
         description='Close brief §5: `bearish` when the last two swing highs made a higher high on a lower RSI, `bullish` on the mirror. Pivots are k=3, so a divergence is confirmed at least three sessions after the fact and the renderer says so (M20).',
+    )
+    iv30: float | None = Field(
+        None,
+        description="Close brief §6: constant-maturity 30-day implied volatility in vol points, from Cboe's per-contract IVs (M24).",
+    )
+    iv30_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description="Close brief §6: `iv30` against this name's own 252 prior sessions, 0-100. Null below a full baseline. Never rendered bare in email (M24).",
+    )
+    iv_rank_252: confloat(ge=0.0, le=1.0) | None = Field(
+        None,
+        description='Close brief §6: `iv30` rank within its 252-session range, 0-1 (M24).',
+    )
+    hv20: float | None = Field(
+        None,
+        description='Close brief §6: 20-day realized volatility in vol points, today excluded (M24).',
+    )
+    iv_hv_spread: float | None = Field(
+        None, description='Close brief §6: `iv30` less `hv20`, in vol points (M24).'
+    )
+    iv_vix_ratio: float | None = Field(
+        None, description='Close brief §6: `iv30` divided by the VIX close (M24).'
+    )
+    vix_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description='Close brief §6: VIX against its own 252 sessions, 0-100 (M24).',
+    )
+    iv_term_slope: float | None = Field(
+        None,
+        description='Close brief §6: 7-day ATM IV less 30-day ATM IV, in vol points (M24).',
+    )
+    premium: Premium | None = Field(
+        None,
+        description='Close brief §6: `rich`, `fair` or `cheap`, computed in assembly from mechanical thresholds. A measurement of option pricing, not advice (D37; M24).',
+    )
+    premium_prior: PremiumPrior | None = Field(
+        None,
+        description="Open brief strip: the prior session's `premium` regime (M25).",
+    )
+    earnings_in_window: bool | None = Field(
+        None,
+        description='Close brief §6: an earnings date falls inside the IV30 window; the date rides `occurs_at` (M24).',
+    )
+    contracts_writable: conint(ge=0) | None = Field(
+        None,
+        description='Close brief §6: floor(open-lot shares / 100), the number of covered-call contracts the position could write (M24).',
+    )
+    iv30_thin: bool | None = Field(
+        None,
+        description='Close brief §6: fewer than 4 contracts contributed to `iv30`, so the read is thin (M24).',
+    )
+    call_atm30_pct: float | None = Field(
+        None,
+        description='Close brief §6: the 30-day ATM call mid as a fraction of spot (M24).',
+    )
+    call_atm30_chg: float | None = Field(
+        None,
+        description='Close brief §6: day-over-day change in `call_atm30_pct`, at constant tenor (M24).',
+    )
+    call_otm30_pct: float | None = Field(
+        None,
+        description='Close brief §6: the 30-day 10% OTM call mid as a fraction of spot (M24).',
+    )
+    call_otm30_chg: float | None = Field(
+        None,
+        description='Close brief §6: day-over-day change in `call_otm30_pct`, at constant tenor (M24).',
+    )
+    call_atm7_pct: float | None = Field(
+        None,
+        description='Close brief §6: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24).',
+    )
+    level_pctile: confloat(ge=0.0, le=100.0) | None = Field(
+        None,
+        description="Open brief §2: the tape row's level against its own 252 sessions, 0-100. VIX only (M25).",
     )
 
 

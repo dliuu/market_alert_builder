@@ -103,6 +103,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 7 | CN-M1 | `open_cn`/`close_cn` kinds and an optional `currency` (absent ⇒ USD) |
 | 8 | M19 | §4 technical snapshot row fields: `ma20_dist`/`ma50_dist`/`ma200_dist`, `ma_stack`, `vol_vs_5d`/`vol_vs_21d`, `atr14`, `support`/`resistance` with `*_touches` and `*_last_touch`, `high_52w`/`low_52w`, `breakout` |
 | 9 | M20 | §5 standing row fields: `rsi14`/`macd_hist`/`adx14`/`atr_pct`/`rel_strength` with their `*_pctile` pairs, `rel_strength_benchmark`, `divergence`; new section id `standing` |
+| 10 | M24/M25 | close brief `premium` section (§6) and its row fields: `iv30`/`iv30_pctile`/`iv_rank_252`, `hv20`, `iv_hv_spread`, `iv_vix_ratio`, `vix_pctile`, `iv_term_slope`, `premium`, `earnings_in_window`, `contracts_writable`, `iv30_thin`, `call_atm30_*`/`call_otm30_*`/`call_atm7_pct`; `level_pctile` on §2; `premium_prior` for the open strip; new section id `premium` |
 
 ## Narration contract
 
@@ -112,6 +113,7 @@ Stage ⑤ sends the *computed* object and expects JSON back, keyed by section id
 {
   "one_thing": "…",
   "tape_read": "…",          // open brief §2, lands in the section's note (M15)
+  "premium_note": "…",       // close brief §6, lands in the section's note (M24)
   "why": { "SNDK": "…" },    // close: attribution rows · open: pre-market rows
   "sector_notes": { "semis": "…" }
 }
@@ -119,7 +121,7 @@ Stage ⑤ sends the *computed* object and expects JSON back, keyed by section id
 
 Three rules:
 
-1. **The model never produces a number.** Prompt it to write causal prose and let the tables carry the figures. Any digit in its output is a hallucination surface. `tape_read` is subject to the same digit guard; a read containing a figure is dropped and §2 renders as a table alone.
+1. **The model never produces a number.** Prompt it to write causal prose and let the tables carry the figures. Any digit in its output is a hallucination surface. `tape_read` is subject to the same digit guard; a read containing a figure is dropped and §2 renders as a table alone. `premium_note` is subject to the same digit guard; a note containing a figure is dropped and §6 renders as a table alone.
 2. **Give it the news headlines** — attributing a move to a cause is the one thing it does better than the pipeline.
 3. **Failure is non-fatal.** Malformed JSON or a 500 means render tables-only with a one-line note.
 
