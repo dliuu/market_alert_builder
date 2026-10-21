@@ -50,6 +50,9 @@ export function OpenBrief({ brief, options }: { brief: BriefObject; options?: Op
   const tapeIsSynthetic = brief.data_quality.stale.includes("overnight_tape.synthetic");
   const calendar = section("calendar");
   const sectors = section("sector_setup");
+  // M25: present only when some held name's premium regime changed since the
+  // close before; a one-line strip under §2, regime words only.
+  const premium = section("premium");
   const dateLong = formatDate(brief.session_date);
   const preheader = brief.one_thing ?? brief.subject;
 
@@ -109,6 +112,14 @@ export function OpenBrief({ brief, options }: { brief: BriefObject; options?: Op
               <Tape rows={tape.rows} />
               {tape.note && <p style={note}>{tape.note}</p>}
             </Sec>
+          )}
+          {premium && premium.rows.length > 0 && (
+            <p style={note}>
+              Premium:{" "}
+              {premium.rows
+                .map((r) => `${r.symbol} ${r.premium} from ${r.premium_prior}`)
+                .join(" · ")}
+            </p>
           )}
 
           {/* your names, pre-market */}

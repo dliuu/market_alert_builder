@@ -274,9 +274,11 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
             section["note"] = narration.tape_read
         # Never over an assembled note (the overflow names what the email hides;
         # "fair across the book" and "no option data" are the honest empties),
-        # and never on a section the email shows no row of.
+        # never on a section the email shows no row of, and never on the open
+        # brief's regime-change strip (M25): the note is the close's §6 alone.
         if (
-            section["id"] == SectionId.premium.value
+            obj.kind.value == "close"
+            and section["id"] == SectionId.premium.value
             and narration.premium_note
             and section["note"] is None
             and any(row.get("tier") == "full" for row in section["rows"])

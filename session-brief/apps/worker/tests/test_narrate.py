@@ -607,3 +607,23 @@ def test_premium_note_never_lands_without_a_full_row() -> None:
         obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized."})
     )
     assert _premium_note(narrated) is None
+
+
+@pytest.mark.parametrize("tier", [None, "full"])
+def test_an_open_premium_strip_never_receives_a_note(tier: str | None) -> None:
+    """The open brief's regime-change strip carries no prose (M25): the note
+    is the close brief's §6 alone, whatever the rows' tier."""
+    payload = _open_obj().model_dump(mode="json")
+    payload["sections"].append(
+        {
+            "id": "premium",
+            "tier": "full",
+            "note": None,
+            "rows": [{"symbol": "SNDK", "premium": "rich", "premium_prior": "fair", "tier": tier}],
+        }
+    )
+    obj = BriefObject.model_validate(payload)
+    narrated = narrate_open_and_apply(
+        obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized."})
+    )
+    assert _premium_note(narrated) is None

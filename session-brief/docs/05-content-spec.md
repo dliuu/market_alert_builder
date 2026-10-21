@@ -15,6 +15,8 @@ Section order is fixed. `design/design-reference.html` is the visual authority.
 
 No performance, no P&L, no tape quality. Pre-market volume is too thin for RVOL to mean anything.
 
+§2's VIX row carries its own-year percentile when a full baseline exists; a Premium line under §2 names holdings whose regime changed since the prior close (M25). Both are read from the prior close's stored metrics — no new ingest at 08:00 — and the Premium line is omitted when no regime changed. Regime words only (rich, fair, cheap), never an action verb (D37).
+
 ## Close brief (16:45 ET)
 
 | # | Section | Contents |

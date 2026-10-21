@@ -390,6 +390,20 @@ def regime(
     return "fair"
 
 
+def regime_from_metrics(
+    values: dict[str, Decimal], book_median_ratio: Decimal | None, *, iv30_thin: bool
+) -> str:
+    """``regime`` over one name's stored ``metrics`` for a session — the same
+    rule, recomputed from the numbers because the enum is never stored."""
+    return regime(
+        iv30_pctile=values.get("iv30_pctile"),
+        iv_hv_spread=values.get("iv_hv_spread"),
+        iv30_thin=iv30_thin,
+        iv_vix_ratio=values.get("iv_vix_ratio"),
+        book_median_ratio=book_median_ratio,
+    )
+
+
 # --- database layer ----------------------------------------------------------
 
 _STORE_SCALE = Decimal("0.0000000001")
@@ -854,3 +868,104 @@ def _store(
         conn.execute(_UPSERT_METRIC, metric_rows)
     if strip_rows_out:
         conn.execute(_UPSERT_STRIP, strip_rows_out)
+
+
+# --- the open brief's reads (M25) ---------------------------------------------
+
+_REGIME_METRICS = ("iv30_n", "iv30_pctile", "iv_hv_spread", "iv_vix_ratio")
+
+_READ_SESSION_METRICS = text("""
+    SELECT symbol, metric, value FROM metrics
+    WHERE user_id = :user_id AND symbol = ANY(:symbols)
+      AND session_date = :session_date AND metric = ANY(:metrics)
+""")
+
+# Whether the book has any reading before the open session at all: a book
+# whose options were never pulled reads as no change without consulting the
+# calendar, `_ANY_SNAPSHOT`'s reason (a session past the calendar's bounds).
+_ANY_READING = text("""
+    SELECT EXISTS (
+        SELECT 1 FROM metrics
+        WHERE user_id = :user_id AND symbol = ANY(:symbols)
+          AND session_date < :session_date AND metric = 'iv30_n'
+    )
+""")
+
+_READ_VIX_PCTILE = text("""
+    SELECT value FROM metrics
+    WHERE user_id = :user_id AND symbol = ANY(:symbols)
+      AND session_date = :session_date AND metric = 'vix_pctile'
+    LIMIT 1
+""")
+
+
+def _session_regimes(
+    conn: Connection, user_id: str, symbols: list[str], session_date: date
+) -> dict[str, str]:
+    """Each name's regime at one close, from its stored metrics. The fallback's
+    book median is the median ``iv_vix_ratio`` across the names read here, the
+    set ``compute_and_store_volatility`` used. A name with no ``iv30_n`` that
+    session had no reading and is absent."""
+    by_symbol: dict[str, dict[str, Decimal]] = {}
+    for row in conn.execute(
+        _READ_SESSION_METRICS,
+        {
+            "user_id": user_id,
+            "symbols": symbols,
+            "session_date": session_date,
+            "metrics": list(_REGIME_METRICS),
+        },
+    ).mappings():
+        by_symbol.setdefault(str(row["symbol"]), {})[str(row["metric"])] = Decimal(
+            str(row["value"])
+        )
+    ratios = [v["iv_vix_ratio"] for v in by_symbol.values() if "iv_vix_ratio" in v]
+    book_median_ratio = median(ratios) if ratios else None
+    return {
+        symbol: regime_from_metrics(
+            values, book_median_ratio, iv30_thin=values["iv30_n"] < IV30_MIN_CONTRACTS
+        )
+        for symbol, values in by_symbol.items()
+        if "iv30_n" in values
+    }
+
+
+def _any_reading(conn: Connection, user_id: str, symbols: list[str], session_date: date) -> bool:
+    if not symbols:
+        return False
+    params = {"user_id": user_id, "symbols": symbols, "session_date": session_date}
+    return bool(conn.execute(_ANY_READING, params).scalar())
+
+
+def read_premium_changes(
+    conn: Connection, user_id: str, symbols: list[str], session_date: date
+) -> list[tuple[str, str, str]]:
+    """``(symbol, premium_prior, premium)`` for each name whose regime differs
+    between the last two closes before ``session_date`` — the open brief's
+    strip, read from the prior close's metrics with no new ingest. A name
+    without a reading on both closes has nothing to compare and is left out."""
+    if not _any_reading(conn, user_id, symbols, session_date):
+        return []
+    last = previous_session(session_date)
+    now = _session_regimes(conn, user_id, symbols, last)
+    then = _session_regimes(conn, user_id, symbols, previous_session(last))
+    return [
+        (symbol, then[symbol], now[symbol])
+        for symbol in sorted(now)
+        if symbol in then and then[symbol] != now[symbol]
+    ]
+
+
+def read_vix_pctile(
+    conn: Connection, user_id: str, symbols: list[str], session_date: date
+) -> Decimal | None:
+    """VIX against its own year at the last close before ``session_date``. It
+    is one figure per session stored on every held name's row; absent (None)
+    below a full baseline, since the percentile is never stored short."""
+    if not _any_reading(conn, user_id, symbols, session_date):
+        return None
+    value = conn.execute(
+        _READ_VIX_PCTILE,
+        {"user_id": user_id, "symbols": symbols, "session_date": previous_session(session_date)},
+    ).scalar()
+    return _dec(value)

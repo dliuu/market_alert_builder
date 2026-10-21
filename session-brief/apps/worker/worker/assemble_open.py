@@ -57,6 +57,7 @@ from worker.premarket import (
     premarket_vol_mult,
     tape_change,
 )
+from worker.volatility import read_premium_changes, read_vix_pctile
 
 # §5's trailing window (docs/05: "benchmark 5d, vs SPY 5d").
 _SECTOR_WINDOW = 5
@@ -70,6 +71,8 @@ _CALENDAR_WINDOW_DAYS = 7
 # header marker off this exact string, so it is the one thing that has to stay
 # byte-identical between here and `open-brief.tsx` / `briefs/[slug]/page.tsx`.
 STALE_OVERNIGHT_TAPE_SYNTHETIC = "overnight_tape.synthetic"
+
+_VIX = "^VIX"
 
 _OMITTED_TAPE = "No overnight tape captured for this session."
 _QUIET_PREMARKET = "Nothing moved pre-market:"
@@ -123,6 +126,8 @@ def assemble_open(
     missing: list[str] | None = None,
     stale: list[str] | None = None,
     news: dict[str, list[str]] | None = None,
+    premium_changes: list[tuple[str, str, str]] | None = None,
+    vix_pctile: Decimal | None = None,
 ) -> BriefObject:
     """Build a validated open ``BriefObject``.
 
@@ -140,9 +145,15 @@ def assemble_open(
     widen §3's visibility gate (``clears_threshold(..., has_news=True)``), the
     same claim-free role invariant 2 gives every narration input. It does not
     reach ``emit_premarket_gap``: news presence is not a directional call.
+
+    ``premium_changes`` (M25) is ``(symbol, premium_prior, premium)`` for each
+    held name whose regime changed between the last two closes; the
+    ``premium`` section exists only when it is non-empty. ``vix_pctile`` is VIX
+    against its own year at the prior close, None below a full baseline; it
+    lands on §2's ``^VIX`` row as ``level_pctile``.
     """
     premarket_section, skipped = _premarket(premarket or [], frozenset(news or {}))
-    tape_section = _overnight_tape(tape)
+    tape_section = _overnight_tape(tape, vix_pctile)
 
     # §2 carries invented levels while `config.premarket_feed_is_synthetic()` is
     # True (final-pass review, M15; derived from `FDN_API_KEY`, M16) — flag it
@@ -152,6 +163,17 @@ def assemble_open(
     stale_list = list(stale or [])
     if tape_section["rows"] and config.premarket_feed_is_synthetic():
         stale_list.append(STALE_OVERNIGHT_TAPE_SYNTHETIC)
+
+    sections = [
+        tape_section,
+        premarket_section,
+        _calendar(events, holdings, session_date),
+        _sector_setup(sectors),
+        _exposure_check(flags),
+    ]
+    # Omitted, not an empty strip: no regime change is nothing to say (M25).
+    if premium_changes:
+        sections.append(_premium_changes(premium_changes))
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -163,13 +185,7 @@ def assemble_open(
         "subject": _subject(session_date),
         "one_thing": None,  # narration, stage ⑤
         # `book` is deliberately absent, not null: no performance, no P&L.
-        "sections": [
-            tape_section,
-            premarket_section,
-            _calendar(events, holdings, session_date),
-            _sector_setup(sectors),
-            _exposure_check(flags),
-        ],
+        "sections": sections,
         "flags": [candidate_dict(f) for f in flags],
         "claims": [claim_dict(c, user_id, session_date, "open") for c in claims or []],
         "resolved_claims": [],  # resolution stays in the close brief (D16b)
@@ -189,20 +205,24 @@ def _subject(session_date: date) -> str:
     return f"Open · {session_label(session_date)} — the day ahead"
 
 
-def _overnight_tape(tape: list[TapeQuote]) -> dict[str, object]:
+def _overnight_tape(tape: list[TapeQuote], vix_pctile: Decimal | None = None) -> dict[str, object]:
     """§2 Overnight tape — the macro backdrop plus the foreign proxies this
     book's sectors make relevant (docs/05). The narrated "read" paragraph lands
-    in ``note`` at stage ⑤; assembly leaves it None."""
+    in ``note`` at stage ⑤; assembly leaves it None. The ``^VIX`` row carries
+    its own-year percentile (M25) when the prior close had a full baseline."""
     rows = []
     for quote in tape:
         pct, absolute = tape_change(quote)
-        rows.append({
+        row: dict[str, object] = {
             "symbol": quote.symbol,
             "label": quote.label,
             "level": _float(quote.last),
             "overnight_pct": _float(pct),
             "overnight_abs": _float(absolute),
-        })
+        }
+        if quote.symbol == _VIX and vix_pctile is not None:
+            row["level_pctile"] = _float(vix_pctile)
+        rows.append(row)
     return {
         "id": "overnight_tape",
         "tier": "full" if rows else "suppressed",
@@ -322,6 +342,21 @@ def _exposure_check(flags: list[FlagCandidate]) -> dict[str, object]:
         "tier": "full" if flags else "suppressed",
         "note": None if flags else _NO_FLAGS,
         "rows": [],
+    }
+
+
+def _premium_changes(changes: list[tuple[str, str, str]]) -> dict[str, object]:
+    """The regime-change strip under §2 (M25): one row per held name whose
+    premium regime moved since the close before. A strip, not a ranked
+    section — no gate, no cap, so each row's ``tier`` is null."""
+    return {
+        "id": "premium",
+        "tier": "full",
+        "note": None,
+        "rows": [
+            {"symbol": symbol, "premium_prior": prior, "premium": now, "tier": None}
+            for symbol, prior, now in changes
+        ],
     }
 
 
@@ -504,6 +539,9 @@ def assemble_open_and_store(
 
     symbols = sorted(holdings)
     surfaced = surface_open_flags(conn, user_id, session_date, symbols, prior_session)
+    # M25: no new ingest at 08:00 — both read the prior close's stored metrics.
+    premium_changes = read_premium_changes(conn, user_id, symbols, session_date)
+    vix_pctile = read_vix_pctile(conn, user_id, symbols, session_date)
     emitted = emit_premarket_gap(premarket)
 
     obj = assemble_open(
@@ -520,6 +558,8 @@ def assemble_open_and_store(
         generated_at=generated_at,
         news=news,
         missing=missing,
+        premium_changes=premium_changes,
+        vix_pctile=vix_pctile,
     )
     # Stage ⑤ — non-fatal by construction (D19): a failed call ships tables-only.
     obj = narrate_open_and_apply(obj, narrator, headlines=news)  # type: ignore[arg-type]

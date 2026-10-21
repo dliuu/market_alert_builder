@@ -13,7 +13,13 @@ from worker.calendar import previous_session
 from worker.options_ingest import pull_options
 from worker.providers.cboe import parse_chain
 from worker.providers.synthetic import SyntheticOptionsProvider
-from worker.volatility import VolReading, compute_and_store_volatility, select_strip
+from worker.volatility import (
+    VolReading,
+    compute_and_store_volatility,
+    read_premium_changes,
+    read_vix_pctile,
+    select_strip,
+)
 
 # A dedicated throwaway user, distinct from the real dev tenant.
 USER = "00000000-0000-0000-0000-0000000000f7"
@@ -294,3 +300,52 @@ def test_a_symbol_with_snapshots_but_no_bars_keeps_its_reading(db_conn: Connecti
     assert r.iv_hv_spread is None and r.iv_hv_ratio is None
     assert r.premium == "fair"
     assert all(row.contract is not None for row in r.strip)
+
+
+# --- Regime changes since the prior close (M25) -----------------------------
+
+# The open session; the two closes it reads are the sessions before it.
+OPEN_SESSION = date(2027, 9, 16)
+
+
+def _seed_metrics(conn: Connection, session_date: date, rows: dict[str, dict[str, str]]) -> None:
+    conn.execute(
+        text("""
+            INSERT INTO metrics (user_id, symbol, session_date, metric, value)
+            VALUES (:u, :s, :d, :m, :v)
+        """),
+        [
+            {"u": USER, "s": symbol, "d": session_date, "m": metric, "v": Decimal(value)}
+            for symbol, values in rows.items()
+            for metric, value in values.items()
+        ],
+    )
+
+
+def test_read_premium_changes_names_the_flipped_regime(db_conn: Connection) -> None:
+    db_conn.execute(
+        text("INSERT INTO users (id, email) VALUES (:u, 'test-volatility@example.invalid')"),
+        {"u": USER},
+    )
+    last = previous_session(OPEN_SESSION)
+    before = previous_session(last)
+    steady = {"iv30_n": "8", "iv30_pctile": "50", "iv_hv_spread": "0.02", "vix_pctile": "41"}
+    # VIX is one figure per session, stored on every held name's row.
+    today = {**steady, "vix_pctile": "63"}
+    # ZZFLP: fair (mid-year) the session before, rich (top of its year) at the
+    # last close. ZZTHN: thin at the last close, so its rich numbers read fair.
+    _seed_metrics(db_conn, before, {"ZZFLP": steady, "ZZSTD": steady, "ZZTHN": steady})
+    _seed_metrics(
+        db_conn,
+        last,
+        {
+            "ZZFLP": {**today, "iv30_pctile": "85"},
+            "ZZSTD": today,
+            "ZZTHN": {**today, "iv30_pctile": "90", "iv30_n": "2"},
+        },
+    )
+
+    symbols = ["ZZFLP", "ZZSTD", "ZZTHN"]
+    assert read_premium_changes(db_conn, USER, symbols, OPEN_SESSION) == [("ZZFLP", "fair", "rich")]
+    assert read_vix_pctile(db_conn, USER, symbols, OPEN_SESSION) == Decimal("63")
+    assert read_vix_pctile(db_conn, USER, symbols, last) == Decimal("41")

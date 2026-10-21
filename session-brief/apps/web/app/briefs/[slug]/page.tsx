@@ -210,12 +210,45 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                     {r.overnight_pct != null
                       ? pctOrDash(r.overnight_pct)
                       : `${fmtLevel(r.level)} ${signedAbs(r.overnight_abs)}`}
+                    {/* VIX's own-year standing at the prior close (M25). */}
+                    {r.level_pctile != null && (
+                      <span style={S.muted}> · {ordinalOrDash(r.level_pctile)} pctile</span>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {overnightTape.note && <p style={S.muted}>{overnightTape.note}</p>}
+        </section>
+      )}
+
+      {/* Premium regime changes since the prior close — the open brief's strip
+          under §2 (M25). Present only when some name's regime changed. */}
+      {premium && brief.kind === "open" && (
+        <section style={S.card}>
+          <h2 style={S.h2}>
+            Premium
+            <span style={S.sectionNote}> · regime changes since the prior close</span>
+          </h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Symbol</th>
+                <th style={S.th}>Prior regime</th>
+                <th style={S.th}>Regime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {premium.rows.map((r: Row) => (
+                <tr key={r.symbol}>
+                  <td style={S.td}>{r.symbol}</td>
+                  <td style={{ ...S.td, ...S.regime }}>{r.premium_prior ?? "—"}</td>
+                  <td style={{ ...S.td, ...S.regime }}>{r.premium ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       )}
 
@@ -528,7 +561,7 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
           email shows only the full-tier rows. A measurement, never advice
           (D37). The strip grid itself is on /volatility; this carries the
           brief's one strip line per name. */}
-      {premium && (
+      {premium && brief.kind !== "open" && (
         <section style={S.card}>
           <h2 style={S.h2}>
             Premium

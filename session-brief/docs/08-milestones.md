@@ -36,6 +36,8 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 
 - [x] **M24 — Close brief §6.** v10, `_premium`, email + archive, narration note, D37/D38, docs 01/04/05/07/08. *Done when:* Gmail/Outlook render under 80KB, a stored v9 brief renders unchanged, `pnpm contracts:gen` is clean, a name with earnings in the window never qualifies. See the same spec.
 
+- [x] **M25 — Open brief strip.** `regime_from_metrics`, `read_premium_changes`, `read_vix_pctile`; the open `premium` section (rows `symbol`/`premium_prior`/`premium`, `tier: null`, omitted when no name changed regime), §2's `^VIX` `level_pctile`, email strip + archive table, narration note kept to the close. *Done when:* a session with no regime change renders no strip; the VIX row carries its percentile only with a full baseline. See the same spec.
+
 **Chinese side (Shanghai/Shenzhen A-share briefs):** tracked separately in
 `cn/docs/milestones.md` (CN-M1…CN-M3) so the two feature sets stay separable —
 design in `cn/docs/2026-08-15-shanghai-briefs-design.md`, structural decisions
