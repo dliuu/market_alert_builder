@@ -567,6 +567,8 @@ def test_a_premium_note_with_a_digit_is_dropped() -> None:
         "Calls were sold into the strength.",
         "Better to HOLD off while implied is cheap.",
         "Written calls would collect more than usual.",
+        "Overwriting the position looks well paid tonight.",
+        "A good night to roll the short calls out.",
     ],
 )
 def test_a_premium_note_with_an_action_verb_is_dropped(prose: str) -> None:
@@ -580,6 +582,8 @@ def test_the_verb_guard_is_word_bounded() -> None:
     obj = _obj_with_premium(note=None)
     prose = "Implied runs rich across your holdings, and the shareholder tape upholds it."
     assert parse_narration(json.dumps({"premium_note": prose}), obj).premium_note == prose
+    enrolled = "Implied runs rich on the newly enrolled index names."
+    assert parse_narration(json.dumps({"premium_note": enrolled}), obj).premium_note == enrolled
 
 
 def test_close_prompt_asks_for_premium_note_only_with_a_full_row() -> None:

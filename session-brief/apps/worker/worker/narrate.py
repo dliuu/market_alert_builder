@@ -47,7 +47,8 @@ _HAS_DIGIT = re.compile(r"\d")
 # D37: §6 measures, it never advises. Word-bounded, so "holdings" passes.
 _ACTION_VERB = re.compile(
     r"\b(?:sell|sells|selling|sold|write|writes|writing|written|wrote"
-    r"|buy|buys|buying|bought|hold|holds|holding|held)\b",
+    r"|buy|buys|buying|bought|hold|holds|holding|held"
+    r"|overwrit\w*|roll|rolls|rolling|rolled)\b",
     re.IGNORECASE,
 )
 
