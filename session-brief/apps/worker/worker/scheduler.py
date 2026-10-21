@@ -42,6 +42,7 @@ from worker.providers.base import MarketDataProvider, PremarketProvider
 from worker_cn import scheduler as cn_scheduler
 
 if TYPE_CHECKING:
+    from worker.options_ingest import PullResult
     from worker.providers.fdn import FdnClient
 
 UTC = ZoneInfo("UTC")
@@ -506,6 +507,38 @@ def _pull_close_catalysts_and_news(
     return news
 
 
+def _pull_close_options(engine: Engine, user_id: str, session_date: date) -> PullResult | None:
+    """The M22 options stage: pull the held names' chains and the VIX family
+    so assemble's volatility reading sees today's snapshot. Live Cboe when
+    ``OPTIONS_LIVE`` is set, else the synthetic chain off ``bars_daily``.
+
+    Never raises: a failure is one log line and ``None``, because a bad chain
+    feed must cost the premium section, not the brief. Per-name feed failures
+    are already absorbed by ``pull_options`` and named on the summary line."""
+    from worker.options_ingest import options_provider, pull_options
+    from worker.providers.cboe import CboeClient
+
+    try:
+        with engine.begin() as conn:
+            symbols = sorted(held_symbols(conn, user_id))
+            provider = options_provider(conn, symbols, session_date)
+            try:
+                result = pull_options(conn, provider, symbols, session_date)
+            finally:
+                if isinstance(provider, CboeClient):
+                    provider.close()
+    except Exception as exc:  # noqa: BLE001 - degrade, never kill the close
+        print(f"close {session_date}: options pull degraded ({exc!r})")
+        return None
+    failed = sorted({**result.symbols_failed, **result.indices_failed})
+    print(
+        f"close {session_date}: options ok {list(result.symbols_ok)}, "
+        f"indices ok {list(result.indices_ok)}, failed {failed}, "
+        f"{result.raw_rows} raw rows."
+    )
+    return result
+
+
 def run_session_job(
     engine: Engine,
     *,
@@ -576,6 +609,10 @@ def run_session_job(
         # M17's scheduled stage, at last: catalysts + the week's news land
         # before assemble reads them. Non-fatal by construction.
         news = _pull_close_catalysts_and_news(engine, user_id, session_date)
+        # M22: options after bars (the synthetic chain prices off today's
+        # close) and before assemble (the volatility reading reads the
+        # snapshot). Non-fatal by construction, like the stage above.
+        _pull_close_options(engine, user_id, session_date)
 
         # Assemble in its own transaction so the briefs row is committed before
         # delivery reads it back (deliver renders from the persisted body).

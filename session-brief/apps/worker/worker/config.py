@@ -104,3 +104,11 @@ def premarket_feed_is_synthetic() -> bool:
     to stamp `overnight_tape.synthetic` into `data_quality.stale`, which is the
     single source both renderers key their banner off."""
     return not FDN_API_KEY
+
+
+# Whether the options sections read Cboe's delayed chain (True) or the
+# deterministic synthetic feed (False). Env-read boolean in the CN_BARS_LIVE
+# style: "1" and "true" (case-insensitive) are truthy, all others falsy. Hand-set:
+# the Cboe endpoints are keyless, so no credential's presence can say "live".
+_options_live_str = os.environ.get("OPTIONS_LIVE", "").lower()
+OPTIONS_LIVE: bool = _options_live_str in ("1", "true")

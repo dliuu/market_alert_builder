@@ -107,3 +107,26 @@ class PremarketProvider(Protocol):
     def get_forex_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
         """Same shape, for currency series (DXY)."""
         ...
+
+
+class OptionsProvider(Protocol):
+    """Option chains and the VIX family (M21).
+
+    A fourth protocol rather than more methods on ``MarketDataProvider``, for
+    the reason M15 found the hard way (D28): protocols are structural, so
+    widening the shared one makes the EOD vendor stop conforming to a contract
+    it can never satisfy — Tiingo has no option chain to return.
+    """
+
+    def chain(self, symbol: str) -> dict[str, Any]:
+        """The delayed option chain, Cboe-shaped:
+        ``{"timestamp": str, "data": {..., "options": [...]}}``."""
+        ...
+
+    def index_quote(self, symbol: str) -> dict[str, Any]:
+        """Same shape, for an index (``VIX``)."""
+        ...
+
+    def index_history(self, symbol: str) -> str:
+        """Daily OHLC history as CSV text, ``DATE,OPEN,HIGH,LOW,CLOSE``."""
+        ...

@@ -67,7 +67,7 @@
           "enum": ["one_thing", "overnight_tape", "premarket", "calendar",
                    "sector_setup", "exposure_check", "scorecard", "attribution",
                    "tape_quality", "sector_rotation", "after_hours", "accountability",
-                   "catalysts", "standing"]
+                   "catalysts", "standing", "premium"]
         },
         "tier": { "enum": ["full", "brief", "suppressed"] },
         "note": { "type": ["string", "null"] },
@@ -335,6 +335,82 @@
         "divergence": {
           "description": "Close brief \u00a75: `bearish` when the last two swing highs made a higher high on a lower RSI, `bullish` on the mirror. Pivots are k=3, so a divergence is confirmed at least three sessions after the fact and the renderer says so (M20).",
           "anyOf": [{ "enum": ["bullish", "bearish"] }, { "type": "null" }]
+        },
+        "iv30": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: constant-maturity 30-day implied volatility in vol points, from Cboe's per-contract IVs (M24)."
+        },
+        "iv30_pctile": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 100,
+          "description": "Close brief \u00a76: `iv30` against this name's own 252 prior sessions, 0-100. Null below a full baseline. Never rendered bare in email (M24)."
+        },
+        "iv_rank_252": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 1,
+          "description": "Close brief \u00a76: `iv30` rank within its 252-session range, 0-1 (M24)."
+        },
+        "hv20": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: 20-day realized volatility in vol points, today excluded (M24)."
+        },
+        "iv_hv_spread": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: `iv30` less `hv20`, in vol points (M24)."
+        },
+        "iv_vix_ratio": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: `iv30` divided by the VIX close (M24)."
+        },
+        "vix_pctile": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 100,
+          "description": "Close brief \u00a76: VIX against its own 252 sessions, 0-100 (M24)."
+        },
+        "iv_term_slope": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: 7-day ATM IV less 30-day ATM IV, in vol points (M24)."
+        },
+        "premium": {
+          "description": "Close brief \u00a76: `rich`, `fair` or `cheap`, computed in assembly from mechanical thresholds. A measurement of option pricing, not advice (D37; M24).",
+          "anyOf": [{ "enum": ["rich", "fair", "cheap"] }, { "type": "null" }]
+        },
+        "premium_prior": {
+          "description": "Open brief strip: the prior session's `premium` regime (M25).",
+          "anyOf": [{ "enum": ["rich", "fair", "cheap"] }, { "type": "null" }]
+        },
+        "earnings_in_window": {
+          "type": ["boolean", "null"],
+          "description": "Close brief \u00a76: an earnings date falls inside the IV30 window; the date rides `occurs_at` (M24)."
+        },
+        "contracts_writable": {
+          "type": ["integer", "null"], "minimum": 0,
+          "description": "Close brief \u00a76: floor(open-lot shares / 100), the number of covered-call contracts the position could write (M24)."
+        },
+        "iv30_thin": {
+          "type": ["boolean", "null"],
+          "description": "Close brief \u00a76: fewer than 4 contracts contributed to `iv30`, so the read is thin (M24)."
+        },
+        "call_atm30_pct": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: the 30-day ATM call mid as a fraction of spot (M24)."
+        },
+        "call_atm30_chg": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: day-over-day change in `call_atm30_pct`, at constant tenor (M24)."
+        },
+        "call_otm30_pct": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: the 30-day 10% OTM call mid as a fraction of spot (M24)."
+        },
+        "call_otm30_chg": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: day-over-day change in `call_otm30_pct`, at constant tenor (M24)."
+        },
+        "call_atm7_pct": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24)."
+        },
+        "level_pctile": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 100,
+          "description": "Open brief \u00a72: the tape row's level against its own 252 sessions, 0-100. VIX only (M25)."
         }
       }
     },

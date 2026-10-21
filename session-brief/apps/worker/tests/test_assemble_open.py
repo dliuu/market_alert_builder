@@ -392,3 +392,41 @@ def test_a_sub_threshold_name_with_news_still_gets_a_row_but_no_claim() -> None:
     pre = _section(obj, "premarket")
     assert [r.symbol for r in pre.rows] == ["ZNEWS"]  # 0.5% gap, shown via news
     assert obj.claims == []                            # news is not a directional call
+
+
+# --- Regime changes and the VIX percentile (M25) ----------------------------
+
+
+def test_no_premium_section_without_a_regime_change() -> None:
+    """Omitted entirely, not an empty strip: no change is nothing to say."""
+    empties: tuple[list[tuple[str, str, str]] | None, ...] = (None, [])
+    for changes in empties:
+        ids = [s.id.value for s in _assemble(premium_changes=changes).sections]
+        assert "premium" not in ids
+
+
+def test_one_premium_row_per_regime_change() -> None:
+    changes = [("ASTS", "fair", "rich"), ("SNDK", "rich", "fair")]
+    section = _section(_assemble(premium_changes=changes), "premium")
+    assert section.tier.value == "full"
+    assert section.note is None
+    got = [
+        (r.symbol, r.premium_prior.value, r.premium.value, r.tier)  # type: ignore[union-attr]
+        for r in section.rows
+    ]
+    assert got == [("ASTS", "fair", "rich", None), ("SNDK", "rich", "fair", None)]
+
+
+def _vix_tape() -> list[TapeQuote]:
+    return [*_tape(), TapeQuote("^VIX", "VIX", Decimal("16.40"), Decimal("15.90"))]
+
+
+def test_vix_row_carries_its_percentile_only_with_a_full_baseline() -> None:
+    rows = _section(_assemble(tape=_vix_tape(), vix_pctile=Decimal("62.5")), "overnight_tape").rows
+    by_symbol = {r.symbol: r for r in rows}
+    assert by_symbol["^VIX"].level_pctile == 62.5
+    assert by_symbol["ES=F"].level_pctile is None
+    assert by_symbol["^TNX"].level_pctile is None
+
+    bare = _section(_assemble(tape=_vix_tape()), "overnight_tape").rows
+    assert all(r.level_pctile is None for r in bare)

@@ -21,9 +21,12 @@ invariant 2 "the LLM never produces a number"):
   (close) or the pre-market rows (open), or any key the response schema
   doesn't define, is dropped.
 
-``one_thing``, the attribution/pre-market rows' ``why``, and the open brief's
-§2 ``tape_read`` (M15) are populated here. ``sector_notes`` (docs/04) waits on
-a sector section, which the close brief doesn't build yet.
+``one_thing``, the attribution/pre-market rows' ``why``, the open brief's
+§2 ``tape_read`` (M15) and the close brief's §6 ``premium_note`` (M24) are
+populated here. ``premium_note`` carries a third rule (D37): any sell, write,
+buy or hold, in any simple inflection, drops it — the section measures, it never
+advises. ``sector_notes`` (docs/04) waits on a sector section, which the close
+brief doesn't build yet.
 """
 
 from __future__ import annotations
@@ -41,6 +44,13 @@ from contracts.brief import Id as SectionId
 Narrator = Callable[[str], str]
 
 _HAS_DIGIT = re.compile(r"\d")
+# D37: §6 measures, it never advises. Word-bounded, so "holdings" passes.
+_ACTION_VERB = re.compile(
+    r"\b(?:sell|sells|selling|sold|write|writes|writing|written|wrote"
+    r"|buy|buys|buying|bought|hold|holds|holding|held"
+    r"|overwrit\w*|roll|rolls|rolling|rolled)\b",
+    re.IGNORECASE,
+)
 
 _SYSTEM = (
     "You are the writer for a personal daily market brief. You write short, "
@@ -62,6 +72,9 @@ class _Narration(BaseModel):
     # `note`, which is why it needs no schema change — the section already
     # carries a note, and the digit guard applies to it like everything else.
     tape_read: str | None = None
+    # §6's note (M24). Lands in the premium section's `note` only when assembly
+    # left it empty; the digit guard and the D37 action-verb guard both apply.
+    premium_note: str | None = None
 
 
 def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None) -> str:
@@ -84,6 +97,13 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
         else ""
     )
     framing = _theme_framing(rows) + _technical_framing(obj)
+    premium_ask = (
+        '  "premium_note": the premium section\'s note. Characterise the premium '
+        "regime for the named rows in one or two sentences; never recommend an "
+        "action, name a strike, or use the words sell, write, buy, or hold.\n"
+        if _has_full_premium_rows(obj)
+        else ""
+    )
     context = json.dumps(obj.model_dump(mode="json"), indent=2, sort_keys=True)
     news_block = ""
     if headlines:
@@ -91,14 +111,16 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
         news_block = (
             "News headlines for these names from the past week (attribute moves "
             "to causes where they explain them; do not restate figures):\n"
-            + "\n".join(lines) + "\n\n"
+            + "\n".join(lines)
+            + "\n\n"
         )
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
         '  "one_thing": one short paragraph (2-3 sentences) naming the single '
         f"most consequential fact of the session and why it happened.{lead_clause}\n"
         f'  "why": an object mapping each of these tickers exactly — {symbols} — '
-        "to one causal sentence explaining its move.\n\n"
+        "to one causal sentence explaining its move.\n"
+        f"{premium_ask}\n"
         "Rules: prose only. Never write a number, percentage, price, or basis "
         "point — describe direction and cause in words and let the tables carry "
         "the figures. Do not invent news you were not given.\n\n"
@@ -109,9 +131,7 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
     )
 
 
-def build_open_prompt(
-    obj: BriefObject, headlines: dict[str, list[str]] | None = None
-) -> str:
+def build_open_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None) -> str:
     """The open brief's user turn (M14). Same contract, opposite tense: the close
     brief explains a session that happened, the open brief reads the one about to
     start. It asks for ``one_thing``, §2's ``tape_read``, and §3's per-name
@@ -170,7 +190,15 @@ def build_open_prompt(
 def _has_tape_rows(obj: BriefObject) -> bool:
     """Whether §2 (overnight_tape) carries any rows this session."""
     return any(
-        section.id == SectionId.overnight_tape and len(section.rows) > 0
+        section.id == SectionId.overnight_tape and len(section.rows) > 0 for section in obj.sections
+    )
+
+
+def _has_full_premium_rows(obj: BriefObject) -> bool:
+    """Whether §6 (premium) shows any row in the email this session."""
+    return any(
+        section.id == SectionId.premium
+        and any(row.tier is not None and row.tier.value == "full" for row in section.rows)
         for section in obj.sections
     )
 
@@ -211,7 +239,12 @@ def parse_narration(raw: str, obj: BriefObject) -> _Narration:
     tape_read = narration.tape_read
     if tape_read is not None and _HAS_DIGIT.search(tape_read):
         tape_read = None
-    return _Narration(one_thing=one_thing, why=why, tape_read=tape_read)
+    premium_note = narration.premium_note
+    if premium_note is not None and (
+        _HAS_DIGIT.search(premium_note) or _ACTION_VERB.search(premium_note)
+    ):
+        premium_note = None
+    return _Narration(one_thing=one_thing, why=why, tape_read=tape_read, premium_note=premium_note)
 
 
 def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
@@ -238,6 +271,18 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
             and section["rows"]
         ):
             section["note"] = narration.tape_read
+        # Never over an assembled note (the overflow names what the email hides;
+        # "fair across the book" and "no option data" are the honest empties),
+        # never on a section the email shows no row of, and never on the open
+        # brief's regime-change strip (M25): the note is the close's §6 alone.
+        if (
+            obj.kind.value == "close"
+            and section["id"] == SectionId.premium.value
+            and narration.premium_note
+            and section["note"] is None
+            and any(row.get("tier") == "full" for row in section["rows"])
+        ):
+            section["note"] = narration.premium_note
     return BriefObject.model_validate(payload)
 
 

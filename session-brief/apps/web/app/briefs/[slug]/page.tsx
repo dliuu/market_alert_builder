@@ -40,6 +40,13 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
   const tape = brief.sections.find((s) => s.id === "tape_quality");
   const catalysts = brief.sections.find((s) => s.id === "catalysts");
   const standing = brief.sections.find((s) => s.id === "standing");
+  const premium = brief.sections.find((s) => s.id === "premium");
+  // Same keys as the close email's §6 head note (`assemble` appends them).
+  const premiumIsSynthetic = brief.data_quality.stale.includes("premium.synthetic");
+  const premiumIsStale = brief.data_quality.stale.includes("premium.stale");
+  // IV30 may stand bare here (never in the email), but marked: a dagger
+  // and a footnote whenever a row's percentile is still pending.
+  const premiumPending = premium?.rows.some((r) => r.iv30 != null && r.iv30_pctile == null);
   const overnightTape = brief.sections.find((s) => s.id === "overnight_tape");
   // Same key as the email template: `assemble_open` appends this exact string
   // to `data_quality.stale` while `constants.PREMARKET_FEED_IS_SYNTHETIC` is
@@ -203,12 +210,45 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                     {r.overnight_pct != null
                       ? pctOrDash(r.overnight_pct)
                       : `${fmtLevel(r.level)} ${signedAbs(r.overnight_abs)}`}
+                    {/* VIX's own-year standing at the prior close (M25). */}
+                    {r.level_pctile != null && (
+                      <span style={S.muted}> · {ordinalOrDash(r.level_pctile)} pctile</span>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {overnightTape.note && <p style={S.muted}>{overnightTape.note}</p>}
+        </section>
+      )}
+
+      {/* Premium regime changes since the prior close — the open brief's strip
+          under §2 (M25). Present only when some name's regime changed. */}
+      {premium && brief.kind === "open" && (
+        <section style={S.card}>
+          <h2 style={S.h2}>
+            Premium
+            <span style={S.sectionNote}> · regime changes since the prior close</span>
+          </h2>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Symbol</th>
+                <th style={S.th}>Prior regime</th>
+                <th style={S.th}>Regime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {premium.rows.map((r: Row) => (
+                <tr key={r.symbol}>
+                  <td style={S.td}>{r.symbol}</td>
+                  <td style={{ ...S.td, ...S.regime }}>{r.premium_prior ?? "—"}</td>
+                  <td style={{ ...S.td, ...S.regime }}>{r.premium ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       )}
 
@@ -517,6 +557,84 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
         </section>
       )}
 
+      {/* Premium (M24) — every name, full and brief tier alike, ungated; the
+          email shows only the full-tier rows. A measurement, never advice
+          (D37). The strip grid itself is on /volatility; this carries the
+          brief's one strip line per name. */}
+      {premium && brief.kind !== "open" && (
+        <section style={S.card}>
+          <h2 style={S.h2}>
+            Premium
+            <span style={S.sectionNote}>
+              {" "}
+              · against each name's own year and the tape
+              {premiumIsSynthetic && " · synthetic feed · not live prices"}
+              {premiumIsStale && " · stale"}
+            </span>
+          </h2>
+          {premium.rows.length === 0 ? (
+            <p style={S.muted}>{premium.note}</p>
+          ) : (
+            <>
+              <table style={S.table}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>Symbol</th>
+                    <th style={S.th}>Regime</th>
+                    <th style={S.thR}>IV30</th>
+                    <th style={S.thR}>IV30 pctile</th>
+                    <th style={S.thR}>IV rank</th>
+                    <th style={S.thR}>HV20</th>
+                    <th style={S.thR}>IV − HV</th>
+                    <th style={S.thR}>IV/VIX</th>
+                    <th style={S.thR}>VIX pctile</th>
+                    <th style={S.thR}>Term slope</th>
+                    <th style={S.thR}>Contracts writable</th>
+                    <th style={S.th}>Earnings</th>
+                    <th style={S.th}>Thin</th>
+                    <th style={S.th}>Calls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {premium.rows.map((r: Row) => (
+                    <tr key={r.symbol}>
+                      <td style={S.td}>{r.symbol}</td>
+                      <td style={{ ...S.td, ...S.regime }}>{r.premium ?? "—"}</td>
+                      <td style={S.tdR}>
+                        {numOrDash(r.iv30, 1)}
+                        {r.iv30 != null && r.iv30_pctile == null && (
+                          <span style={S.muted} title="percentile pending a full year">
+                            †
+                          </span>
+                        )}
+                      </td>
+                      <td style={S.tdR}>{ordinalOrDash(r.iv30_pctile)}</td>
+                      <td style={S.tdR}>{numOrDash(r.iv_rank_252, 2)}</td>
+                      <td style={S.tdR}>{numOrDash(r.hv20, 1)}</td>
+                      <td style={S.tdR}>{signedOrDash(r.iv_hv_spread, 1)}</td>
+                      <td style={S.tdR}>{numOrDash(r.iv_vix_ratio, 2)}</td>
+                      <td style={S.tdR}>{ordinalOrDash(r.vix_pctile)}</td>
+                      <td style={S.tdR}>{signedOrDash(r.iv_term_slope, 1)}</td>
+                      <td style={S.tdR}>{r.contracts_writable ?? "—"}</td>
+                      <td style={{ ...S.td, fontWeight: 400 }}>
+                        {r.earnings_in_window ? (r.occurs_at ?? "—") : "—"}
+                      </td>
+                      <td style={{ ...S.td, fontWeight: 400 }}>{r.iv30_thin ? "thin" : "—"}</td>
+                      <td style={{ ...S.td, fontWeight: 400 }}>{stripLine(r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {premiumPending && <p style={S.muted}>† percentile pending a full year</p>}
+              {/* As §5: the overflow pointer is for the email reader only. */}
+              {premium.note && !premium.note.endsWith("— see the archive") && (
+                <p style={S.muted}>{premium.note}</p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {/* Yesterday's flag, resolved — the accountability loop */}
       {brief.resolved_claims.length > 0 && (
         <section style={S.card}>
@@ -669,6 +787,36 @@ function ValueAndPctile({
 function pctOrDash(fraction: number | null | undefined): string {
   return fraction == null ? "—" : pct(fraction);
 }
+function numOrDash(v: number | null | undefined, places: number): string {
+  return v == null ? "—" : v.toFixed(places);
+}
+// U+2212 for minus, as `pct` and `signedAbs`.
+function signedOrDash(v: number | null | undefined, places: number): string {
+  if (v == null) return "—";
+  return `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(places)}`;
+}
+function ordinalOrDash(p: number | null | undefined): string {
+  if (p == null) return "—";
+  const n = Math.round(p);
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const suffix = ["th", "st", "nd", "rd"][n % 10] ?? "th";
+  return `${n}${n % 10 <= 3 ? suffix : "th"}`;
+}
+// §6's strip line, worded as the email's: the call mid as a fraction of spot,
+// and in brackets its relative change against the prior session at the same
+// tenor (`chg_tenor_pct`). The 7-day cell only when assembly carried it.
+function stripLine(r: Row): string {
+  if (r.call_atm30_pct == null && r.call_otm30_pct == null) return "—";
+  const cell = (v: number | null | undefined, chg: number | null | undefined) =>
+    `${v == null ? "—" : `${(v * 100).toFixed(1)}%`}${chg == null ? "" : ` (${signedOrDash(chg * 100, 1)}%)`}`;
+  const parts = [
+    `30d ATM pays ${cell(r.call_atm30_pct, r.call_atm30_chg)}`,
+    `10% OTM ${cell(r.call_otm30_pct, r.call_otm30_chg)}`,
+  ];
+  if (r.call_atm7_pct != null) parts.push(`7d ATM ${cell(r.call_atm7_pct, null)}`);
+  return parts.join(" · ");
+}
 function fmtLevel(level: number | null | undefined): string {
   return level == null ? "—" : level.toFixed(2);
 }
@@ -713,6 +861,8 @@ const S: Record<string, React.CSSProperties> = {
   card: { border: "1px solid #e2e2e2", borderRadius: 10, padding: "14px 16px", margin: "16px 0" },
   h2: { margin: "0 0 12px", fontSize: "1rem", color: "#333" },
   sectionNote: { fontWeight: 400, fontSize: "0.78rem", color: "#888" },
+  // §6's regime word: muted, never pine/oxblood — a measurement, not a signal.
+  regime: { fontWeight: 400, color: "#666" },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 },
   statLabel: {
     fontSize: "0.72rem",

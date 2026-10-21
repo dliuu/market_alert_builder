@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Any
+
+from worker.calendar import previous_session
 
 # Gaps land in ±3.5%, wide enough that some names clear §3's 1% line and some
 # don't — a seed where everything moves would never exercise the suppression.
@@ -174,3 +176,148 @@ class SyntheticCatalystProvider:
             f"{symbol}|{self._session.isoformat()}|{salt}".encode()
         ).digest()
         return Decimal(int.from_bytes(digest[:4], "big")) / Decimal(1 << 32)
+
+
+# --- Options (M21) -----------------------------------------------------------
+#
+# The keyless stand-in for Cboe's delayed chain. Like the pre-market feed above
+# it is a pure function of its inputs (`closes`, `session_date`) via `hashlib`,
+# never `random`, and Decimal-only: a re-run is byte-identical and nothing here
+# touches the database. Payloads carry the keys and units `parse_chain` and
+# `parse_index_csv` read from the live feed (per-contract `iv` a fraction,
+# `iv30` in vol points).
+#
+# The time value is a Brenner-Subrahmanyam-style approximation, 0.4 * S * sigma
+# * sqrt(T), damped by exp(-3 * |moneyness|), rather than Black-Scholes. It
+# needs only sqrt and exp, which `Decimal` provides exactly in its own context,
+# so no float (and no normal CDF) ever enters the feed; the shape (more value
+# at the money, more with time, more with vol) is all the downstream maths
+# needs from an invented chain.
+
+_OPT_BASE_IV = Decimal("0.30")
+_OPT_SMILE = Decimal("0.004")  # added per percentage point of |moneyness|
+_OPT_TV_SCALE = Decimal("0.4")
+_OPT_TV_DECAY = Decimal(3)
+_OPT_SPREAD = Decimal("0.02")
+_OPT_DELTA_SLOPE = Decimal(2)
+_OPT_GREEK = Decimal("0.01")
+_OPT_STRIKE_STEPS = range(-8, 9)  # 2.5% apart, -20%..+20%
+_OPT_STRIKE_STEP = Decimal("0.025")
+_CENT = Decimal("0.01")
+_VIX_BASE = Decimal(18)
+_VIX_OFFSETS = {"VIX": Decimal(0), "VIX9D": Decimal(-2), "VIX3M": Decimal(1)}
+_HISTORY_DAYS = 300
+
+
+def _vix_jitter(day: date) -> Decimal:
+    """Deterministic in [-3.00, +3.00], to the cent, from the date alone."""
+    digest = hashlib.sha256(f"VIX:{day}".encode()).digest()
+    return Decimal(int.from_bytes(digest[:8], "big") % 601 - 300) / 100
+
+
+def _third_friday(year: int, month: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+
+
+class SyntheticOptionsProvider:
+    """Satisfies `OptionsProvider` with an invented, deterministic chain."""
+
+    def __init__(self, closes: dict[str, Decimal], session_date: date) -> None:
+        self._closes = closes
+        self._session = session_date
+
+    def _expiries(self) -> list[date]:
+        d = self._session
+        first = d + timedelta(days=(4 - d.weekday()) % 7 or 7)
+        found = {first + timedelta(weeks=i) for i in range(8)}
+        for ahead in (1, 2, 3):
+            index = d.year * 12 + d.month - 1 + ahead
+            found.add(_third_friday(index // 12, index % 12 + 1))
+        return sorted(found)
+
+    def _contract(
+        self, symbol: str, close: Decimal, expiry: date, right: str, strike: Decimal
+    ) -> dict[str, Any]:
+        moneyness = (strike - close) / close
+        iv = _OPT_BASE_IV + _OPT_SMILE * abs(moneyness * 100)
+        dte = Decimal((expiry - self._session).days)
+        intrinsic = (
+            max(close - strike, Decimal(0)) if right == "C" else max(strike - close, Decimal(0))
+        )
+        with localcontext() as ctx:
+            ctx.prec = 28
+            time_value = (
+                _OPT_TV_SCALE
+                * close
+                * iv
+                * (dte / 365).sqrt()
+                * (-_OPT_TV_DECAY * abs(moneyness)).exp()
+            )
+        mid = intrinsic + time_value
+        call_delta = min(
+            max(Decimal("0.5") - _OPT_DELTA_SLOPE * moneyness, Decimal("0.02")), Decimal("0.98")
+        )
+        delta = call_delta if right == "C" else call_delta - 1
+        occ = f"{symbol}{expiry:%y%m%d}{right}{int(strike * 1000):08d}"
+        return {
+            "option": occ,
+            "bid": (mid * (1 - _OPT_SPREAD)).quantize(_CENT),
+            "ask": (mid * (1 + _OPT_SPREAD)).quantize(_CENT),
+            "bid_size": 10,
+            "ask_size": 10,
+            "iv": iv,
+            "delta": delta,
+            "gamma": _OPT_GREEK,
+            "theta": _OPT_GREEK,
+            "vega": _OPT_GREEK,
+            "rho": _OPT_GREEK,
+            "open_interest": 100,
+            "volume": 10,
+        }
+
+    def chain(self, symbol: str) -> dict[str, Any]:
+        close = self._closes[symbol]
+        strikes = [(close * (1 + _OPT_STRIKE_STEP * n)).quantize(_CENT) for n in _OPT_STRIKE_STEPS]
+        options = [
+            self._contract(symbol, close, expiry, right, strike)
+            for expiry in self._expiries()
+            for strike in strikes
+            for right in ("C", "P")
+        ]
+        return {
+            "timestamp": f"{self._session} 21:00:00",
+            "data": {
+                "symbol": symbol,
+                "close": close,
+                "current_price": close,
+                "prev_day_close": close,
+                "iv30": Decimal("30.0"),
+                "options": options,
+            },
+        }
+
+    def _level(self, symbol: str, day: date) -> Decimal:
+        return _VIX_BASE + _VIX_OFFSETS[symbol] + _vix_jitter(day)
+
+    def index_quote(self, symbol: str) -> dict[str, Any]:
+        level = self._level(symbol, self._session)
+        return {
+            "timestamp": f"{self._session} 21:00:00",
+            "data": {
+                "symbol": f"_{symbol}",
+                "close": level,
+                "current_price": level,
+                "prev_day_close": level,
+                "options": [],
+            },
+        }
+
+    def index_history(self, symbol: str) -> str:
+        last = previous_session(self._session)
+        lines = ["DATE,OPEN,HIGH,LOW,CLOSE"]
+        for back in range(_HISTORY_DAYS - 1, -1, -1):
+            day = last - timedelta(days=back)
+            level = self._level(symbol, day)
+            lines.append(f"{day:%m/%d/%Y},{level},{level},{level},{level}")
+        return "\n".join(lines) + "\n"

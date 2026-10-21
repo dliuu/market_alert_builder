@@ -146,6 +146,73 @@ def test_assemble_and_store_passes_headlines_to_narration(
     assert calls == [{"headlines": {"ASTS": ["h"]}}]
 
 
+def test_failed_premium_compute_degrades_to_a_stale_stamp(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed pull already degrades (the reading carries `stale`); a failed
+    compute must too — it costs §6, never the brief."""
+    _seed_book(db_conn)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("chain unreadable")
+
+    monkeypatch.setattr("worker.assemble.compute_and_store_volatility", _boom)
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None
+    assert all(s.id.value != "premium" for s in obj.sections)
+    assert "premium.stale" in obj.data_quality.stale
+    out = capsys.readouterr().out
+    assert out.count("premium compute degraded") == 1
+    assert f"close {_SESSION}: premium compute degraded (RuntimeError('chain unreadable'))" in out
+
+
+def test_a_watching_name_gets_metrics_but_never_a_premium_row(db_conn: Connection) -> None:
+    """The close computes the premium reading over every held name, watching
+    ones too, so the dashboard can read them (nothing to write against); §6
+    stays restricted to the open positions."""
+    from worker.options_ingest import pull_options
+    from worker.providers.synthetic import SyntheticOptionsProvider
+
+    _seed_book(db_conn)
+    _seed_bar(db_conn, "ZZW", _PREV, "30")
+    _seed_bar(db_conn, "ZZW", _SESSION, "31")
+    sector_id = db_conn.execute(
+        text("SELECT id FROM sectors WHERE user_id = :u AND name = :n"),
+        {"u": _TEST_USER_ID, "n": _SECTOR},
+    ).scalar_one()
+    db_conn.execute(
+        text(
+            "INSERT INTO holdings (user_id, sector_id, symbol, status) "
+            "VALUES (:u, :s, 'ZZW', 'watching')"
+        ),
+        {"u": _TEST_USER_ID, "s": sector_id},
+    )
+    closes = {"ZZA": Decimal("110"), "ZZB": Decimal("48"), "ZZW": Decimal("31")}
+    pulled = pull_options(
+        db_conn, SyntheticOptionsProvider(closes, _SESSION), sorted(closes), _SESSION, indices=()
+    )
+    assert pulled.symbols_failed == {}
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None
+
+    metrics: dict[str, Decimal] = {
+        str(r[0]): r[1]
+        for r in db_conn.execute(
+            text(
+                "SELECT metric, value FROM metrics "
+                "WHERE user_id = :u AND symbol = 'ZZW' AND session_date = :d"
+            ),
+            {"u": _TEST_USER_ID, "d": _SESSION},
+        )
+    }
+    assert "iv30_n" in metrics
+    assert metrics["contracts_writable"] == 0
+    premium = next(s for s in obj.sections if s.id.value == "premium")
+    assert {r.symbol for r in premium.rows} == {"ZZA", "ZZB"}
+
+
 def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:
     # ZZC barely moves on the tape but has the largest |resid_z| (a
     # residual-material name, M13 §2) → forced full tier and ranks first.

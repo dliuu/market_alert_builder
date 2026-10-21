@@ -27,6 +27,16 @@ quotes       (symbol, session_date, captured_at, last, prev_close, extended_last
 fundamentals (symbol, as_of, cash_cents, quarterly_burn_cents, shares_out, next_earnings_date)
 events       (id, symbol, event_type, occurs_at, payload jsonb)  -- earnings | lockup | macro
 news_items   (id, symbol, headline, url, published_at, source)
+option_contracts (contract PK, symbol, expiration_date, put_or_call, strike, first_seen)
+             -- INDEX (symbol, expiration_date) (M21)
+option_snapshot (contract, session_date, bid, bid_size, ask, ask_size, last, iv, delta, gamma,
+             theta, vega, rho, open_interest, volume, prev_day_close, captured_at)
+             -- PK (contract, session_date); only the contracts the strip and IV30 selected
+option_strip (symbol, session_date, tenor, strike_rule, contract, dte, moneyness, mid,
+             premium_pct, time_value_pct, iv, delta, open_interest, volume, chg_contract_pct,
+             chg_tenor_pct, iv_chg, tenor_collapsed, target_miss)
+             -- PK (symbol, session_date, tenor, strike_rule); strike_rule itm10 | atm | otm10
+index_daily  (symbol, session_date, o, h, l, c)   -- PK (symbol, session_date)
 ```
 
 Market data tables have **no `user_id`** — they're shared across the tenant base and keyed by symbol. This is what makes ingest cost scale with the symbol universe rather than the user count.
@@ -89,6 +99,26 @@ A payload is identified by **both ends of the window it covers**, not just where
 
 `quotes` holds the pre-open capture the open brief's §2/§3 read: held names in `extended_last`/`extended_v` (pre-market print, summed pre-market volume), macro tape symbols in `last`/`prev_close`. It is keyed by session rather than by capture timestamp — every read is "the capture for session D", and the session key is what makes re-seeding idempotent.
 
+### Options (M21)
+
+`option_snapshot` holds only the contracts the strip and IV30 selected, about thirty per name per session, not the whole chain. A large-cap chain runs to thousands of contracts, and nothing downstream reads the ones that were never selected; `option_contracts` keeps the identity of every contract inside the stored band (so a replay can re-select against the same universe), and the strip points back at the selected ones.
+
+The full chain is not thrown away: it lands in `raw_payloads` verbatim, inside the D38 band of 60 days to expiry and ±25% of the close. Outside that band no strip rule can pick a contract, and a full large-cap chain is about 1.5 MB per session. The band keeps replay possible (invariant 5) without paying for strikes nobody will read. `options rebuild` replays a session's stored chains into `option_contracts` and `option_snapshot` with zero network calls; it does not touch `option_strip` or the metrics, which the next close compute re-derives from those two tables.
+
+`index_daily` is separate from `bars_daily` because an index has no adjusted series and no volume worth storing. Folding it in would mean `NOT NULL` columns filled with copies of `c` and zeros, and every reader of `bars_daily` would have to know which rows to distrust.
+
+### Premium (M22)
+
+`compute_and_store_volatility` rebuilds each name's chain from `option_snapshot` ⋈ `option_contracts`, writes the twelve `option_strip` cells (upsert on the key) and fourteen per-user metrics (below, under *Metric definitions*). Spot is the `close` in the session's stored chain payload in `raw_payloads`, the same print ingest selected the snapshotted contracts against (`bars_daily.c` only when that payload is absent); `iv30_cboe` comes from the same row. A name with snapshots but no bar for the session keeps its reading, with `hv20`/`hv60` and the spread and ratio built on them null; a name is skipped only when it has no snapshots on the session or the one before.
+
+**The percentile rule is M20's, reused.** `iv30_pctile` and `iv_vix_ratio_pctile` rank today against that metric's own stored values for the 252 sessions before today (`oscillators.percentile`: strict `<`, null below a full baseline); `vix_pctile` ranks the VIX close against its own prior 252 rows of `index_daily`. `iv_rank_252` uses the same full-baseline gate, with today inside the min/max so it stays in [0, 1]. Until a name has a year of stored `iv30`, its percentiles stay null; there is no backfill in v1.
+
+**Enums are recomputed, not stored.** `premium` (`rich` / `fair` / `cheap`) is not in `metrics`, M19's reason: `metrics.value` is `numeric`. Every reader recomputes it from the stored numbers with the one pure function, `volatility.regime`. Its no-percentile fallback compares `iv_vix_ratio` with the book's median ratio for that session, so it is computed over the whole book in one call.
+
+**Thin.** `iv30_n` counts the contracts that fed IV30. Below 4 the reading is `iv30_thin` and the regime is always `fair`, so a thin name never qualifies. A chain with no two-sided quote at all stores no `iv30`, only `iv30_n = 0`.
+
+**Stale.** A name with no snapshot for the session falls back to the previous session's snapshots, evaluated as of that session (its expiries, its close), and is marked `stale`. A stale reading's strip carries no changes, since there is no new quote to compare. Realized vol, VIX and the guards are still today's. A stale reading is stored under today's `session_date`, so a second consecutive pull failure reads as "No option data" (the fallback reaches back one session only), and the duplicated value enters the baseline once.
+
 ## Derived
 
 ```sql
@@ -139,8 +169,22 @@ deliveries (id, user_id, brief_id, channel, recipient, status, provider_msg_id,
 | `support` / `resistance` | nearest clustered zone below / above the close | adjusted daily bars |
 | `support_touches` / `resistance_touches` | distinct sessions within ½ ATR of the zone | adjusted daily bars |
 | `high_52w` / `low_52w` | `max(adj_h, 252d)` / `min(adj_l, 252d)` | adjusted daily bars |
+| `iv30` | constant-maturity 30-day IV: the two expiries bracketing 30 days (near ≥ 7d), two strikes each side of spot, two-sided calls and puts, parity drops, linear in `iv² · T`; vol points | option snapshots |
+| `iv30_n` | contracts that fed `iv30`; below 4 is thin | option snapshots |
+| `iv30_cboe` | Cboe's own underlying `iv30`, vol points | chain raw payload |
+| `iv30_pctile` | percentile of `iv30` against its own prior 252 sessions | `metrics` |
+| `iv_rank_252` | `(iv30 − min) / (max − min)` over the same 252 plus today | `metrics` |
+| `hv20` | annualized sample stdev of log returns on `adj_c`, prior 20 sessions, today excluded, × √252; vol points | adjusted daily bars |
+| `hv60` | the same over the prior 60 sessions | adjusted daily bars |
+| `iv_hv_spread` | `iv30 − hv20` | the above |
+| `iv_hv_ratio` | `iv30 / hv20` | the above |
+| `iv_vix_ratio` | `iv30 / vix_close` | the above + `index_daily` |
+| `iv_vix_ratio_pctile` | percentile of `iv_vix_ratio` against its own prior 252 sessions | `metrics` |
+| `vix_pctile` | percentile of the VIX close against its prior 252 rows | `index_daily` |
+| `iv_term_slope` | `iv(7d atm) − iv(30d atm)`; null when both tenors land on one expiry | option snapshots |
+| `contracts_writable` | `floor(open-lot shares / 100)` | lots |
 
-Everything above runs on **daily OHLCV**. Only gap-fill behaviour and VWAP need minute bars — defer them, and the whole v1 stays on a free data tier.
+Everything above runs on **daily OHLCV**, apart from the M22 premium rows, which read the option snapshots and `index_daily`. Only gap-fill behaviour and VWAP need minute bars — defer them, and the whole v1 stays on a free data tier.
 
 ### The M19 technical metrics
 

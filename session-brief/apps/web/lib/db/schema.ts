@@ -1,4 +1,4 @@
-import { pgTable, varchar, unique, pgPolicy, uuid, text, timestamp, index, foreignKey, integer, check, numeric, bigint, date, jsonb, primaryKey } from "drizzle-orm/pg-core"
+import { pgTable, varchar, unique, pgPolicy, uuid, text, timestamp, index, foreignKey, integer, check, numeric, bigint, date, jsonb, primaryKey, smallint, boolean } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -152,4 +152,97 @@ export const barsDaily = pgTable("bars_daily", {
 }, (table) => [
 	primaryKey({ columns: [table.symbol, table.sessionDate], name: "bars_daily_pkey"}),
 	pgPolicy("bars_daily_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+]);
+
+export const events = pgTable("events", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	symbol: text(),
+	eventType: text("event_type").notNull(),
+	occursAt: date("occurs_at").notNull(),
+	payload: jsonb().default({}).notNull(),
+	label: text(),
+}, (table) => [
+	index("events_symbol_occurs_idx").using("btree", table.symbol.asc().nullsLast().op("text_ops"), table.occursAt.asc().nullsLast().op("date_ops")),
+	unique("events_calendar_key").on(table.symbol, table.eventType, table.occursAt).nullsNotDistinct(),
+	pgPolicy("events_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+	check("events_event_type_check", sql`event_type = ANY (ARRAY['earnings'::text, 'lockup'::text, 'ex_div'::text, 'macro'::text])`),
+]);
+
+export const optionContracts = pgTable("option_contracts", {
+	contract: text().primaryKey().notNull(),
+	symbol: text().notNull(),
+	expirationDate: date("expiration_date").notNull(),
+	putOrCall: text("put_or_call").notNull(),
+	strike: numeric().notNull(),
+	firstSeen: date("first_seen").notNull(),
+}, (table) => [
+	index("option_contracts_symbol_expiry_idx").using("btree", table.symbol.asc().nullsLast().op("text_ops"), table.expirationDate.asc().nullsLast().op("date_ops")),
+	pgPolicy("option_contracts_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+	check("option_contracts_put_or_call_check", sql`put_or_call = ANY (ARRAY['C'::text, 'P'::text])`),
+]);
+
+export const optionSnapshot = pgTable("option_snapshot", {
+	contract: text().notNull(),
+	sessionDate: date("session_date").notNull(),
+	bid: numeric().notNull(),
+	bidSize: integer("bid_size"),
+	ask: numeric().notNull(),
+	askSize: integer("ask_size"),
+	last: numeric(),
+	iv: numeric(),
+	delta: numeric(),
+	gamma: numeric(),
+	theta: numeric(),
+	vega: numeric(),
+	rho: numeric(),
+	openInterest: integer("open_interest").notNull(),
+	volume: integer().notNull(),
+	prevDayClose: numeric("prev_day_close"),
+	capturedAt: timestamp("captured_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.contract],
+			foreignColumns: [optionContracts.contract],
+			name: "option_snapshot_contract_fkey"
+		}),
+	primaryKey({ columns: [table.contract, table.sessionDate], name: "option_snapshot_pkey"}),
+	pgPolicy("option_snapshot_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+]);
+
+export const optionStrip = pgTable("option_strip", {
+	symbol: text().notNull(),
+	sessionDate: date("session_date").notNull(),
+	tenor: smallint().notNull(),
+	strikeRule: text("strike_rule").notNull(),
+	contract: text(),
+	dte: smallint(),
+	moneyness: numeric(),
+	mid: numeric(),
+	premiumPct: numeric("premium_pct"),
+	timeValuePct: numeric("time_value_pct"),
+	iv: numeric(),
+	delta: numeric(),
+	openInterest: integer("open_interest"),
+	volume: integer(),
+	chgContractPct: numeric("chg_contract_pct"),
+	chgTenorPct: numeric("chg_tenor_pct"),
+	ivChg: numeric("iv_chg"),
+	tenorCollapsed: boolean("tenor_collapsed").default(false).notNull(),
+	targetMiss: boolean("target_miss").default(false).notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.symbol, table.sessionDate, table.tenor, table.strikeRule], name: "option_strip_pkey"}),
+	pgPolicy("option_strip_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
+	check("option_strip_strike_rule_check", sql`strike_rule = ANY (ARRAY['itm10'::text, 'atm'::text, 'otm10'::text])`),
+]);
+
+export const indexDaily = pgTable("index_daily", {
+	symbol: text().notNull(),
+	sessionDate: date("session_date").notNull(),
+	o: numeric(),
+	h: numeric(),
+	l: numeric(),
+	c: numeric().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.symbol, table.sessionDate], name: "index_daily_pkey"}),
+	pgPolicy("index_daily_read", { as: "permissive", for: "select", to: ["public"], using: sql`true` }),
 ]);

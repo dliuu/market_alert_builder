@@ -29,6 +29,7 @@ from sqlalchemy.engine import Connection
 from contracts.brief import BriefObject
 from contracts.brief import Id as SectionId
 from contracts.brief import Tier1 as RowTier
+from worker import config
 from worker.assemble_shared import (
     claim_dict,
     resolved_dict,
@@ -48,11 +49,17 @@ from worker.claims import (
     store_emitted_claims,
 )
 from worker.compute import BookMetrics, ComputeResult, PositionMetrics, compute_and_store
-from worker.constants import ATTRIBUTION_MODEL_VERSION, BENCHMARK_SYMBOL, CATALYST_MODEL_VERSION
+from worker.constants import (
+    ATTRIBUTION_MODEL_VERSION,
+    BENCHMARK_SYMBOL,
+    CATALYST_MODEL_VERSION,
+    PREMIUM_CAP,
+)
 from worker.narrate import Narrator, narrate_and_apply
 from worker.oscillators import Standing, compute_and_store_standing
 from worker.tape import TapeMetrics, compute_and_store_tape
 from worker.technicals import Technicals, Zone, compute_and_store_technicals
+from worker.volatility import StripRow, VolReading, compute_and_store_volatility
 
 # Object shape version. Bump on any shape change and keep old renderers
 # (docs/04). v1 = M4 (book + attribution). v2 = M5 (per-row `tier`, tape_quality
@@ -69,8 +76,17 @@ from worker.technicals import Technicals, Zone, compute_and_store_technicals
 # distances and stack, the 5d/21d volume ratios, ATR, the support/resistance
 # zones with their touch evidence, the 52-week pair, and `breakout`. v9 = M20:
 # the gated §5 `standing` section — RSI/MACD/ADX/ATR-pct/relative-strength,
-# each paired with its own 252-session percentile, plus `divergence`.
-SCHEMA_VERSION = 9
+# each paired with its own 252-session percentile, plus `divergence`. v10 =
+# M24: the gated §6 `premium` section — IV30 against its year, realized vol and
+# the tape, the regime, the guards, and the 30-day call strip line.
+SCHEMA_VERSION = 10
+
+# The `data_quality.stale` entries for §6, in `STALE_OVERNIGHT_TAPE_SYNTHETIC`'s
+# naming. `premium.stale`: some reading is a chain carried from the prior
+# session, or the compute failed outright. `premium.synthetic`: the chains are
+# the deterministic stand-in, not Cboe (`OPTIONS_LIVE` off).
+STALE_PREMIUM = "premium.stale"
+STALE_PREMIUM_SYNTHETIC = "premium.synthetic"
 
 _BPS_PER_UNIT = 10_000
 
@@ -112,6 +128,7 @@ def assemble(
     currency: str = "USD",
     technicals: dict[str, Technicals] | None = None,
     standing: dict[str, Standing] | None = None,
+    premium: dict[str, VolReading] | None = None,
 ) -> BriefObject:
     """Build a validated ``BriefObject`` from computed metrics.
 
@@ -151,6 +168,16 @@ def assemble(
     # renders, empty, with a note.
     if standing is not None:
         sections.append(_standing(result.positions, standing, technicals or {}))
+    # §6 follows §5 on the same rule: `None` is "not computed" (CN, or a failed
+    # compute) and omits the section; `{}` is computed and renders, with a note.
+    # The chains are a close-of-day pull, so the close brief only.
+    stale_list = list(stale or [])
+    if premium is not None and kind == "close":
+        sections.append(_premium(result.positions, premium))
+        if any(r.stale for p in result.positions if (r := premium.get(p.symbol))):
+            stale_list.append(STALE_PREMIUM)
+        if not config.OPTIONS_LIVE:
+            stale_list.append(STALE_PREMIUM_SYNTHETIC)
     # Catalysts is post-close data — Form 4s and 144s land after the bell — so
     # it belongs to the close brief only. The open brief is assembled elsewhere
     # (assemble_open.py) and never carries it.
@@ -174,7 +201,7 @@ def assemble(
         "claims": [claim_dict(c, user_id, session_date, kind) for c in claims or []],
         "resolved_claims": [resolved_dict(r) for r in resolved or []],
         "suppressed": sorted(suppressed),
-        "data_quality": {"missing": missing or [], "stale": stale or []},
+        "data_quality": {"missing": missing or [], "stale": stale_list},
     }
     if currency != "USD":
         payload["currency"] = currency
@@ -489,6 +516,104 @@ def _standing_row(s: Standing, tier: str) -> dict[str, object]:
     }
 
 
+def _qualifies_premium(r: VolReading) -> bool:
+    """Priced away from fair, and every guard clear: no earnings inside the
+    window (the premium is the event, not the name), a read from enough
+    contracts, and at least one contract the position could write."""
+    return (
+        r.premium in ("rich", "cheap")
+        and r.earnings_date is None
+        and not r.iv30_thin
+        and r.contracts_writable >= 1
+    )
+
+
+def _premium_rank(r: VolReading) -> tuple[bool, Decimal, Decimal, str]:
+    """Own-year percentile's distance from the middle, furthest first, so a
+    cheap name at the 5th competes with a rich one at the 95th; a null ranks
+    after every real percentile (a real 0 is a real distance). Then the wider
+    implied-vs-realized gap; then symbol, for determinism."""
+    distance = abs(r.iv30_pctile - 50) if r.iv30_pctile is not None else Decimal(0)
+    return (r.iv30_pctile is None, -distance, -abs(r.iv_hv_spread or Decimal(0)), r.symbol)
+
+
+def _premium(
+    positions: list[PositionMetrics],
+    premium: dict[str, VolReading],
+) -> dict[str, object]:
+    """§6 "Premium" — the option-pricing read for names priced away from fair.
+
+    Gated the §5 way, for the §5 reason: on most sessions most names are fair,
+    and a per-name section that said so every evening would bury the one that
+    is not. Ordered by how far the name's own-year percentile sits from the
+    middle (nulls last), then by how far implied runs from realized.
+
+    The section is emitted even when empty: an absent section reads to a
+    renderer as "not computed", and "premium is fair" is information.
+    """
+    present = [r for p in positions if (r := premium.get(p.symbol)) is not None]
+    qualifying = sorted((r for r in present if _qualifies_premium(r)), key=_premium_rank)
+    shown, overflow = qualifying[:PREMIUM_CAP], qualifying[PREMIUM_CAP:]
+    full = {r.symbol for r in shown}
+
+    if not present:
+        note = "No option data for the held names"
+    elif not qualifying:
+        note = "Premium is fair across the book"
+    elif overflow:
+        names = ", ".join(sorted(r.symbol for r in overflow))
+        note = f"{names} also rich or cheap — see the archive"
+    else:
+        note = None
+
+    # One row set, tiered: the email shows `full`, the archive shows all (D16).
+    rows = [_premium_row(r, "full") for r in shown]
+    rows += [
+        _premium_row(r, "brief")
+        for r in sorted(present, key=lambda r: r.symbol)
+        if r.symbol not in full
+    ]
+    return {"id": "premium", "tier": "full", "note": note, "rows": rows}
+
+
+def _premium_row(r: VolReading, tier: str) -> dict[str, object]:
+    cells = {(c.tenor, c.rule): c for c in r.strip}
+    atm30, otm30 = cells.get((30, "atm")), cells.get((30, "otm10"))
+    row: dict[str, object] = {
+        "symbol": r.symbol,
+        "tier": tier,
+        "iv30": _ratio(r.iv30),
+        "iv30_pctile": _ratio(r.iv30_pctile),
+        "iv_rank_252": _ratio(r.iv_rank_252),
+        "hv20": _ratio(r.hv20),
+        "iv_hv_spread": _ratio(r.iv_hv_spread),
+        "iv_vix_ratio": _ratio(r.iv_vix_ratio),
+        "vix_pctile": _ratio(r.vix_pctile),
+        "iv_term_slope": _ratio(r.iv_term_slope),
+        "premium": r.premium,
+        "earnings_in_window": r.earnings_date is not None,
+        "occurs_at": r.earnings_date.isoformat() if r.earnings_date else None,
+        "contracts_writable": r.contracts_writable,
+        "iv30_thin": r.iv30_thin,
+        "call_atm30_pct": _cell_float(atm30, "premium_pct"),
+        "call_atm30_chg": _cell_float(atm30, "chg_tenor_pct"),
+        "call_otm30_pct": _cell_float(otm30, "premium_pct"),
+        "call_otm30_chg": _cell_float(otm30, "chg_tenor_pct"),
+    }
+    # The 7-day call only matters when the near tenor is pricing richer than the
+    # month; on a flat or inverted slope it would be a number with no story.
+    if r.iv_term_slope is not None and r.iv_term_slope > 0:
+        row["call_atm7_pct"] = _cell_float(cells.get((7, "atm")), "premium_pct")
+    return row
+
+
+def _cell_float(cell: StripRow | None, field: str) -> float | None:
+    if cell is None:
+        return None
+    value: Decimal | None = getattr(cell, field)
+    return _ratio(value)
+
+
 def _distance(close: Decimal | None, level: Fraction | None) -> float | None:
     """Signed distance of the close from a level, as a fraction. Distances are
     comparable across names in a way the raw averages are not."""
@@ -526,6 +651,15 @@ def _subject(kind: str, session_date: date, book: BookMetrics, currency: str) ->
 _READ_CLOSES = text("""
     SELECT symbol, c FROM bars_daily
     WHERE session_date = :session_date AND symbol = ANY(:symbols)
+""")
+
+# Every US holding, owned or watching — the set the close job pulls chains for
+# (`scheduler.held_symbols`, restated here to keep assembly off the scheduler's
+# import graph).
+_READ_HELD = text("""
+    SELECT DISTINCT h.symbol FROM holdings h
+    JOIN sectors s ON s.id = h.sector_id AND s.user_id = h.user_id
+    WHERE h.user_id = :user_id AND s.market = 'US'
 """)
 
 _UPSERT_BRIEF = text("""
@@ -572,6 +706,24 @@ def assemble_and_store(
     # §5's indicator standing (M20). Its own 286-session read: MACD's warmup
     # needs more history than §4's 252-session window provides.
     standing = compute_and_store_standing(conn, user_id, symbols, session_date)
+    # The premium reading (M22), off the snapshot the close job just pulled. A
+    # failed pull already degrades to stale readings; a failed compute must
+    # too — it costs §6, never the brief. The savepoint keeps a database error
+    # from poisoning the transaction the rest of assembly still needs. It runs
+    # over every held name, watching ones too, so the dashboard reads them
+    # (contracts_writable 0); §6 itself is built from the open positions only.
+    held = {str(r[0]) for r in conn.execute(_READ_HELD, {"user_id": user_id})}
+    premium: dict[str, VolReading] | None
+    stale: list[str] = []
+    try:
+        with conn.begin_nested():
+            premium = compute_and_store_volatility(
+                conn, user_id, sorted(held | set(symbols)), session_date
+            )
+    except Exception as exc:  # noqa: BLE001 - degrade, never kill the close
+        print(f"close {session_date}: premium compute degraded ({exc!r})")
+        premium = None
+        stale.append(STALE_PREMIUM)
     decomp = read_attribution_decomp(conn, symbols, session_date, ATTRIBUTION_MODEL_VERSION)
 
     # Grade prior claims first — that's independent of whether this brief sends.
@@ -608,6 +760,8 @@ def assemble_and_store(
         catalysts=catalysts,
         technicals=technicals,
         standing=standing,
+        premium=premium,
+        stale=stale,
     )
     if close_brief_should_skip(obj):
         # A quiet session still resolved its due claims (above) but emits none.
