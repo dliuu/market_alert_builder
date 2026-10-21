@@ -111,7 +111,8 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
         news_block = (
             "News headlines for these names from the past week (attribute moves "
             "to causes where they explain them; do not restate figures):\n"
-            + "\n".join(lines) + "\n\n"
+            + "\n".join(lines)
+            + "\n\n"
         )
     return (
         "Write the prose for today's close brief. Return ONLY a JSON object:\n"
@@ -130,9 +131,7 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
     )
 
 
-def build_open_prompt(
-    obj: BriefObject, headlines: dict[str, list[str]] | None = None
-) -> str:
+def build_open_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None) -> str:
     """The open brief's user turn (M14). Same contract, opposite tense: the close
     brief explains a session that happened, the open brief reads the one about to
     start. It asks for ``one_thing``, §2's ``tape_read``, and §3's per-name
@@ -191,8 +190,7 @@ def build_open_prompt(
 def _has_tape_rows(obj: BriefObject) -> bool:
     """Whether §2 (overnight_tape) carries any rows this session."""
     return any(
-        section.id == SectionId.overnight_tape and len(section.rows) > 0
-        for section in obj.sections
+        section.id == SectionId.overnight_tape and len(section.rows) > 0 for section in obj.sections
     )
 
 
