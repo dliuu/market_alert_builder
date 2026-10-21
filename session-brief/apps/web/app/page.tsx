@@ -9,6 +9,9 @@ export default function Home() {
       <p>
         <a href="/briefs">Read your briefs →</a>
       </p>
+      <p>
+        <a href="/volatility">Premium and volatility →</a>
+      </p>
     </main>
   );
 }

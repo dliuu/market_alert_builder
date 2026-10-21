@@ -32,6 +32,8 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 
 - [x] **M22 — Volatility compute.** `worker/volatility.py` (strip, IV30, HV, percentiles, VIX ratios, regime, guards), `compute_and_store_volatility`, the close job's options pull between bars and assemble, metric keys in `docs/03`. *Done when:* a hand-computed IV30, strip cell and percentile match stored rows for one seeded name; a thin chain yields a flagged value that never qualifies; a short history yields null percentiles; the close job still sends when the pull fails, stamped stale. See the same spec.
 
+- [x] **M23 — Dashboard.** `/volatility`. *Done when:* the page renders the book from the ephemeral DB with the strip grid and history per name, `pnpm --filter web typecheck` and `pnpm check` pass. See the same spec.
+
 **Chinese side (Shanghai/Shenzhen A-share briefs):** tracked separately in
 `cn/docs/milestones.md` (CN-M1…CN-M3) so the two feature sets stay separable —
 design in `cn/docs/2026-08-15-shanghai-briefs-design.md`, structural decisions
