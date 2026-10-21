@@ -15,6 +15,7 @@ from worker.providers.cboe import parse_chain
 from worker.providers.synthetic import SyntheticOptionsProvider
 from worker.volatility import (
     VolReading,
+    _session_regimes,
     compute_and_store_volatility,
     read_premium_changes,
     read_vix_pctile,
@@ -349,3 +350,26 @@ def test_read_premium_changes_names_the_flipped_regime(db_conn: Connection) -> N
     assert read_premium_changes(db_conn, USER, symbols, OPEN_SESSION) == [("ZZFLP", "fair", "rich")]
     assert read_vix_pctile(db_conn, USER, symbols, OPEN_SESSION) == Decimal("63")
     assert read_vix_pctile(db_conn, USER, symbols, last) == Decimal("41")
+
+
+def test_the_open_book_median_counts_a_name_sold_since_the_close(db_conn: Connection) -> None:
+    """The fallback's book median is the close's: a name with a reading at the
+    last close still counts after it is sold, so the open strip never reports
+    a flip the close never made."""
+    db_conn.execute(
+        text("INSERT INTO users (id, email) VALUES (:u, 'test-volatility@example.invalid')"),
+        {"u": USER},
+    )
+    last = previous_session(OPEN_SESSION)
+    before = previous_session(last)
+    # No full year, so the regime falls back to the book's median IV/VIX ratio.
+    flat = {"iv30_n": "8", "iv_hv_spread": "0", "iv_vix_ratio": "1.2"}
+    _seed_metrics(db_conn, before, {"ZZMED": flat, "ZZSLD": {**flat, "iv_vix_ratio": "1.5"}})
+    over = {"iv30_n": "8", "iv_hv_spread": "0.02", "iv_vix_ratio": "1.2"}
+    _seed_metrics(db_conn, last, {"ZZMED": over, "ZZSLD": {**over, "iv_vix_ratio": "1.5"}})
+
+    # ZZSLD was sold before the open; only ZZMED is held. With ZZSLD in the
+    # median (1.35) ZZMED's 1.2 reads fair, as it did at the close; over the
+    # held name alone (1.2) it would read rich and invent a flip.
+    assert _session_regimes(db_conn, USER, ["ZZMED"], last) == {"ZZMED": "fair"}
+    assert read_premium_changes(db_conn, USER, ["ZZMED"], OPEN_SESSION) == []

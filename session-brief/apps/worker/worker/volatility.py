@@ -874,9 +874,12 @@ def _store(
 
 _REGIME_METRICS = ("iv30_n", "iv30_pctile", "iv_hv_spread", "iv_vix_ratio")
 
+# Every name the user had a reading for that session, not only today's
+# holdings: the book median must be the one the close computed, even after a
+# name is sold between the close and the open.
 _READ_SESSION_METRICS = text("""
     SELECT symbol, metric, value FROM metrics
-    WHERE user_id = :user_id AND symbol = ANY(:symbols)
+    WHERE user_id = :user_id
       AND session_date = :session_date AND metric = ANY(:metrics)
 """)
 
@@ -902,16 +905,16 @@ _READ_VIX_PCTILE = text("""
 def _session_regimes(
     conn: Connection, user_id: str, symbols: list[str], session_date: date
 ) -> dict[str, str]:
-    """Each name's regime at one close, from its stored metrics. The fallback's
-    book median is the median ``iv_vix_ratio`` across the names read here, the
-    set ``compute_and_store_volatility`` used. A name with no ``iv30_n`` that
+    """Each of ``symbols``' regime at one close, from its stored metrics. The
+    fallback's book median is the median ``iv_vix_ratio`` across every name
+    with an ``iv30_n`` that session — the set ``compute_and_store_volatility``
+    read, including names no longer held. A name with no ``iv30_n`` that
     session had no reading and is absent."""
     by_symbol: dict[str, dict[str, Decimal]] = {}
     for row in conn.execute(
         _READ_SESSION_METRICS,
         {
             "user_id": user_id,
-            "symbols": symbols,
             "session_date": session_date,
             "metrics": list(_REGIME_METRICS),
         },
@@ -919,14 +922,16 @@ def _session_regimes(
         by_symbol.setdefault(str(row["symbol"]), {})[str(row["metric"])] = Decimal(
             str(row["value"])
         )
-    ratios = [v["iv_vix_ratio"] for v in by_symbol.values() if "iv_vix_ratio" in v]
+    ratios = [
+        v["iv_vix_ratio"] for v in by_symbol.values() if "iv_vix_ratio" in v and "iv30_n" in v
+    ]
     book_median_ratio = median(ratios) if ratios else None
     return {
         symbol: regime_from_metrics(
             values, book_median_ratio, iv30_thin=values["iv30_n"] < IV30_MIN_CONTRACTS
         )
         for symbol, values in by_symbol.items()
-        if "iv30_n" in values
+        if "iv30_n" in values and symbol in symbols
     }
 
 
