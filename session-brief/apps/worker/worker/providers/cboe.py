@@ -213,7 +213,9 @@ def filter_payload_for_storage(
 ) -> dict[str, Any]:
     """The D38 subset: the underlying block as published, and only the option
     objects (as published, unmodified) expiring within ``max_dte`` days and
-    struck within ``max_moneyness`` of the close."""
+    struck within ``max_moneyness`` of the close. ``payload`` may be the plain
+    ``json.loads`` of the response (the storage copy, numbers as floats) or the
+    ``Decimal`` parse — the close is read through ``_dec`` either way."""
     data = payload["data"]
     spot = _required(data.get("close"), "close")
     kept: list[Any] = []

@@ -129,7 +129,8 @@ def pull_options(
     now: datetime | None = None,
 ) -> PullResult:
     """Pull, band, store and replay every chain in ``symbols`` and every index
-    in ``indices``. Never raises on a feed failure; ``now`` stamps
+    in ``indices``. Never raises on a feed failure (a storage or derivation
+    error does propagate); ``now`` stamps
     ``raw_payloads.fetched_at`` (the database clock when omitted)."""
     symbols_ok: list[str] = []
     symbols_failed: dict[str, str] = {}
@@ -140,17 +141,24 @@ def pull_options(
     # First capture wins: a re-pull whose raw row already exists derives
     # nothing, so live rows always match a replay. If derivation fails after
     # the raw insert, `options rebuild` (rebuild_options) is the recovery path.
+    # Only the feed half is caught: a bug in storage or contract selection
+    # must surface (the close job prints it), not read as a feed failure.
     for symbol in symbols:
         try:
-            filtered = filter_payload_for_storage(provider.chain(symbol), session_date)
+            chain = provider.chain(symbol)
+            stored = filter_payload_for_storage(
+                _as_published(provider, CHAIN_ENDPOINT, symbol.upper(), chain), session_date
+            )
+            # Derive from exactly what a replay will parse, so live == rebuild.
+            filtered = json.loads(json.dumps(stored), parse_float=Decimal)
             captured_at = parse_chain(filtered)[0].timestamp
-            wrote = _store_raw(conn, CHAIN_ENDPOINT, symbol, session_date, filtered, now)
-            raw_rows += wrote
-            if wrote:
-                store_chain(conn, filtered, session_date, captured_at)
         except FEED_ERRORS as exc:
             symbols_failed[symbol] = _safe_error(exc)
             continue
+        wrote = _store_raw(conn, CHAIN_ENDPOINT, symbol, session_date, stored, now)
+        raw_rows += wrote
+        if wrote:
+            store_chain(conn, filtered, session_date, captured_at)
         symbols_ok.append(symbol)
 
     for index in indices:
@@ -235,6 +243,21 @@ def rebuild_options(conn: Connection, session_date: date) -> int:
     return written
 
 
+def _as_published(
+    provider: OptionsProvider, endpoint: str, vendor_symbol: str, parsed: dict[str, Any]
+) -> dict[str, Any]:
+    """The response as published, JSON numbers kept as numbers (invariant 5,
+    D38): a plain ``json.loads`` of the verbatim text a live client captured
+    for this fetch, else — the synthetic provider has no text — ``parsed``
+    with its Decimals written as JSON numbers."""
+    captured = getattr(provider, "captured", None)
+    if captured and captured[-1][:2] == (endpoint, vendor_symbol):
+        plain: dict[str, Any] = json.loads(captured[-1][2])
+        return plain
+    rendered: dict[str, Any] = json.loads(json.dumps(parsed, default=float))
+    return rendered
+
+
 def _store_raw(
     conn: Connection,
     endpoint: str,
@@ -249,7 +272,7 @@ def _store_raw(
             "endpoint": endpoint,
             "symbol": symbol,
             "as_of": session_date,
-            "body": json.dumps(body, default=str),
+            "body": json.dumps(body),
             "fetched_at": fetched_at,
         },
     )
@@ -302,11 +325,12 @@ def _pull_index(
 
     quote = provider.index_quote(index)
     data = quote["data"]
-    block = {
-        "timestamp": quote["timestamp"],
-        "data": {k: v for k, v in data.items() if k != "options"},
-    }
     vendor_symbol = "_" + index.upper().lstrip("^_")
+    published = _as_published(provider, INDEX_QUOTE_ENDPOINT, vendor_symbol, quote)
+    block = {
+        "timestamp": published["timestamp"],
+        "data": {k: v for k, v in published["data"].items() if k != "options"},
+    }
     raw_rows += _store_raw(
         conn, INDEX_QUOTE_ENDPOINT, vendor_symbol, session_date, block, fetched_at
     )

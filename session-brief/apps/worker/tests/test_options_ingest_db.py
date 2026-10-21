@@ -32,7 +32,7 @@ SESSIONS = (date(2027, 9, 14), date(2027, 9, 15))
 @pytest.fixture(autouse=True)
 def _fake_index_levels() -> Iterator[None]:
     """Let the synthetic provider price this file's fake index names."""
-    names = {f"ZQX{tag}{n}": Decimal(n) for tag in "ABCDEFGH" for n in range(3)}
+    names = {f"ZQX{tag}{n}": Decimal(n) for tag in "ABCDEFGHI" for n in range(3)}
     with patch.dict(synthetic._VIX_OFFSETS, names):
         yield
 
@@ -101,6 +101,37 @@ def test_one_banded_chain_row_per_symbol_per_session(db_conn: Connection) -> Non
         {"syms": symbols},
     ).all()
     assert [tuple(r) for r in rows] == [(s, d, d) for d in SESSIONS for s in symbols]
+
+
+def test_raw_payloads_keep_json_numbers_as_numbers(db_conn: Connection) -> None:
+    """Invariant 5 at the type level: a number the vendor published is stored
+    as a jsonb number, not a string, for chains and index quote blocks."""
+    _pull_both(db_conn, "I")
+    types = db_conn.execute(
+        text("""
+            SELECT jsonb_typeof(body->'data'->'close'),
+                   jsonb_typeof(body->'data'->'options'->0->'iv')
+            FROM raw_payloads
+            WHERE source = 'cboe' AND endpoint = 'delayed_quotes/options'
+              AND symbol = ANY(:syms)
+        """),
+        {"syms": sorted(_closes("I"))},
+    ).all()
+    assert len(types) == 2 * len(SESSIONS)
+    assert all(tuple(t) == ("number", "number") for t in types)
+    quote_types = (
+        db_conn.execute(
+            text("""
+            SELECT jsonb_typeof(body->'data'->'close') FROM raw_payloads
+            WHERE source = 'cboe' AND endpoint = 'delayed_quotes/index'
+              AND symbol = ANY(:vendor)
+        """),
+            {"vendor": ["_" + i for i in _indices("I")]},
+        )
+        .scalars()
+        .all()
+    )
+    assert quote_types and set(quote_types) == {"number"}
 
 
 def test_snapshots_hold_only_the_selected_contracts(db_conn: Connection) -> None:

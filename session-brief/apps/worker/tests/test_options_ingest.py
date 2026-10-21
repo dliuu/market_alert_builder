@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from worker.options import parse_occ
 from worker.options_ingest import PullResult, pull_options
@@ -120,3 +121,15 @@ def test_existing_raw_row_means_store_chain_is_not_called() -> None:
     assert store.call_count == 0
     assert result.symbols_ok == ("GOOD",)
     assert result.raw_rows == 0
+
+
+def test_a_storage_bug_is_not_swallowed_as_a_feed_failure() -> None:
+    """Only the feed half is caught: a TypeError from store_chain (a selection
+    or storage bug) must propagate, not read as a quiet feed failure."""
+    client = CboeClient(transport=httpx.MockTransport(_handler))
+    with (
+        patch("worker.options_ingest.store_chain", side_effect=TypeError("bug")),
+        pytest.raises(TypeError, match="bug"),
+    ):
+        pull_options(_conn(), client, ["GOOD"], SESSION, indices=())
+    client.close()
