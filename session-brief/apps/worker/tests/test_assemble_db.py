@@ -146,6 +146,27 @@ def test_assemble_and_store_passes_headlines_to_narration(
     assert calls == [{"headlines": {"ASTS": ["h"]}}]
 
 
+def test_failed_premium_compute_degrades_to_a_stale_stamp(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed pull already degrades (the reading carries `stale`); a failed
+    compute must too — it costs §6, never the brief."""
+    _seed_book(db_conn)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("chain unreadable")
+
+    monkeypatch.setattr("worker.assemble.compute_and_store_volatility", _boom)
+
+    obj = assemble_and_store(db_conn, _TEST_USER_ID, _SESSION, "close")
+    assert obj is not None
+    assert all(s.id.value != "premium" for s in obj.sections)
+    assert "premium.stale" in obj.data_quality.stale
+    out = capsys.readouterr().out
+    assert out.count("premium compute degraded") == 1
+    assert f"close {_SESSION}: premium compute degraded (RuntimeError('chain unreadable'))" in out
+
+
 def test_attribution_rows_ranked_by_resid_z_end_to_end(db_conn: Connection) -> None:
     # ZZC barely moves on the tape but has the largest |resid_z| (a
     # residual-material name, M13 §2) → forced full tier and ranks first.

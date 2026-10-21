@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "brief_id": "00000000-0000-0000-0000-0000000000c2-2026-08-14-open_cn",
   "user_id": "00000000-0000-0000-0000-0000000000c2",
   "session_date": "2026-08-14",
@@ -86,7 +86,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         },
         {
           "symbol": "SMH",
@@ -159,7 +178,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         }
       ]
     },
@@ -239,7 +277,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         },
         {
           "symbol": "300750.SZ",
@@ -312,7 +369,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         }
       ]
     },
@@ -392,7 +468,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         },
         {
           "symbol": null,
@@ -465,7 +560,26 @@
           "atr_pct_pctile": null,
           "rel_strength_pctile": null,
           "rel_strength_benchmark": null,
-          "divergence": null
+          "divergence": null,
+          "iv30": null,
+          "iv30_pctile": null,
+          "iv_rank_252": null,
+          "hv20": null,
+          "iv_hv_spread": null,
+          "iv_vix_ratio": null,
+          "vix_pctile": null,
+          "iv_term_slope": null,
+          "premium": null,
+          "premium_prior": null,
+          "earnings_in_window": null,
+          "contracts_writable": null,
+          "iv30_thin": null,
+          "call_atm30_pct": null,
+          "call_atm30_chg": null,
+          "call_otm30_pct": null,
+          "call_otm30_chg": null,
+          "call_atm7_pct": null,
+          "level_pctile": null
         }
       ]
     }
@@ -476,6 +590,8 @@
   "suppressed": [],
   "data_quality": {
     "missing": [],
-    "stale": ["cn_bars.synthetic"]
+    "stale": [
+      "cn_bars.synthetic"
+    ]
   }
 }
