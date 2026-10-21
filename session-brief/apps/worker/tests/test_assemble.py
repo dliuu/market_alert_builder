@@ -939,8 +939,34 @@ def test_null_percentile_ranks_last_then_wider_spread_leads() -> None:
         }
     )
     section = _section(obj, "premium")
-    assert [r.symbol for r in section.rows][:3] == ["C", "B", "D"]
+    assert [r.symbol for r in section.rows][:3] == ["D", "C", "B"]
     assert section.note == "A also rich or cheap — see the archive"
+
+
+def test_cheap_extreme_outranks_a_milder_rich_name() -> None:
+    """Distance from the middle, not raw percentile: a cheap name at the 5th
+    is further out than a rich one at the 80th."""
+    obj = _assemble_premium(
+        {
+            "A": _reading("A", iv30_pctile=Decimal("95")),
+            "B": _reading("B", iv30_pctile=Decimal("90")),
+            "C": _reading("C", iv30_pctile=Decimal("80")),
+            "D": _reading("D", premium="cheap", iv30_pctile=Decimal("5")),
+        }
+    )
+    assert _premium_tiers(obj) == {"A": "full", "B": "full", "C": "brief", "D": "full"}
+    assert _section(obj, "premium").note == "C also rich or cheap — see the archive"
+
+
+def test_empty_premium_emits_the_section_with_a_no_data_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "OPTIONS_LIVE", False)
+    obj = _assemble_premium({})
+    section = _section(obj, "premium")
+    assert section.rows == []
+    assert section.note == "No option data for the held names"
+    assert obj.data_quality.stale == [STALE_PREMIUM_SYNTHETIC]
 
 
 def test_premium_section_follows_standing() -> None:

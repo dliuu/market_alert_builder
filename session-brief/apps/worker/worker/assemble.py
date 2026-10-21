@@ -528,11 +528,13 @@ def _qualifies_premium(r: VolReading) -> bool:
     )
 
 
-def _premium_rank(r: VolReading) -> tuple[Decimal, Decimal, str]:
-    """Own-year percentile descending, a null below every real one; then the
-    wider implied-vs-realized gap; then symbol, for determinism."""
-    pctile = r.iv30_pctile if r.iv30_pctile is not None else Decimal(-1)
-    return (-pctile, -abs(r.iv_hv_spread or Decimal(0)), r.symbol)
+def _premium_rank(r: VolReading) -> tuple[bool, Decimal, Decimal, str]:
+    """Own-year percentile's distance from the middle, furthest first, so a
+    cheap name at the 5th competes with a rich one at the 95th; a null ranks
+    after every real percentile (a real 0 is a real distance). Then the wider
+    implied-vs-realized gap; then symbol, for determinism."""
+    distance = abs(r.iv30_pctile - 50) if r.iv30_pctile is not None else Decimal(0)
+    return (r.iv30_pctile is None, -distance, -abs(r.iv_hv_spread or Decimal(0)), r.symbol)
 
 
 def _premium(
@@ -543,8 +545,8 @@ def _premium(
 
     Gated the §5 way, for the §5 reason: on most sessions most names are fair,
     and a per-name section that said so every evening would bury the one that
-    is not. Ordered by the name's own-year percentile (nulls last), then by how
-    far implied runs from realized.
+    is not. Ordered by how far the name's own-year percentile sits from the
+    middle (nulls last), then by how far implied runs from realized.
 
     The section is emitted even when empty: an absent section reads to a
     renderer as "not computed", and "premium is fair" is information.
@@ -554,7 +556,9 @@ def _premium(
     shown, overflow = qualifying[:PREMIUM_CAP], qualifying[PREMIUM_CAP:]
     full = {r.symbol for r in shown}
 
-    if not qualifying:
+    if not present:
+        note = "No option data for the held names"
+    elif not qualifying:
         note = "Premium is fair across the book"
     elif overflow:
         names = ", ".join(sorted(r.symbol for r in overflow))
