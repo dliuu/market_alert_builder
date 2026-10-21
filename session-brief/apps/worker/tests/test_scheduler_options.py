@@ -144,7 +144,9 @@ def test_the_close_job_survives_a_raising_options_stage(
     monkeypatch.setattr(scheduler, "ping_fail", lambda url, d: None)
     _stub_poll(monkeypatch, missing=set())
     monkeypatch.setattr(scheduler, "_pull_close_catalysts_and_news", lambda e, u, d: {})
-    monkeypatch.setattr(scheduler, "held_symbols", lambda conn, user_id: {"ASTS"})
+    # Pinned to the synthetic path, whatever the developer's .env says.
+    monkeypatch.setattr(config, "OPTIONS_LIVE", False)
+    _stub_held(monkeypatch)
     monkeypatch.setattr(options_ingest, "pull_options", _boom)
 
     from worker import assemble, deliver, narrate
