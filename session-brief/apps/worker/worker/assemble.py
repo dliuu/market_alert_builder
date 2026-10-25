@@ -79,7 +79,7 @@ from worker.volatility import StripRow, VolReading, compute_and_store_volatility
 # each paired with its own 252-session percentile, plus `divergence`. v10 =
 # M24: the gated §6 `premium` section — IV30 against its year, realized vol and
 # the tape, the regime, the guards, and the 30-day call strip line.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # The `data_quality.stale` entries for §6, in `STALE_OVERNIGHT_TAPE_SYNTHETIC`'s
 # naming. `premium.stale`: some reading is a chain carried from the prior

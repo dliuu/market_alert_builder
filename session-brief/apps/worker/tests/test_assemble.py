@@ -362,13 +362,13 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_ten() -> None:
+def test_schema_version_is_eleven() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
     # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
     # `open_cn`/`close_cn` kinds and optional `currency`; v8 = M19's §4
     # technical snapshot; v9 = M20's gated §5 `standing` section; v10 = M24's
-    # gated §6 `premium` section (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 10
+    # gated §6 `premium` section; v11 = M26's ungated §6 with `calls[]` (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 11
 
 
 def test_material_residual_predicate() -> None:

@@ -131,6 +131,142 @@ class PremiumPrior(Enum):
     cheap = 'cheap'
 
 
+class Tenor(Enum):
+    int_7 = 7
+    int_14 = 14
+    int_21 = 21
+    int_30 = 30
+
+
+class Rule(Enum):
+    itm10 = 'itm10'
+    atm = 'atm'
+    otm10 = 'otm10'
+
+
+class CallQuote(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    tenor: Tenor = Field(..., description='Calendar days the cell was asked for (M26).')
+    rule: Rule = Field(
+        ..., description='The strike rule: 0.90, 1.00 or 1.10 × close (M26).'
+    )
+    contract: str | None = Field(
+        None,
+        description='OCC symbol; null when no two-sided call was quoted for the cell (M26).',
+    )
+    strike: float | None = Field(None, description='Strike price (M26).')
+    expiry: date | None = Field(None, description='Expiration date (M26).')
+    dte: int | None = Field(
+        None, description='Calendar days to expiry from the session date (M26).'
+    )
+    moneyness: float | None = Field(None, description='`strike / close - 1` (M26).')
+    mid: float | None = Field(
+        None,
+        description='`(bid + ask) / 2`, dollars per share; a price like `close`, so a float (M26).',
+    )
+    mid_chg: float | None = Field(
+        None,
+        description="Same contract's mid, today less the prior session, dollars per share; null without a prior quote (M26).",
+    )
+    contract_cents: int | None = Field(
+        None,
+        description='`round(mid × 100 × 100)`: the cost of one contract in cents (M26).',
+    )
+    writable_cents: int | None = Field(
+        None,
+        description='`contract_cents × contracts_writable`; null when `contracts_writable` is 0 (M26).',
+    )
+    premium_pct: float | None = Field(None, description='`mid / close` (M26).')
+    premium_pct_chg: float | None = Field(
+        None,
+        description="Relative change of `premium_pct` against the prior session's cell at the same tenor and rule (M26).",
+    )
+    time_value_pct: float | None = Field(
+        None, description='`(mid - max(close - strike, 0)) / close` (M26).'
+    )
+    iv: float | None = Field(
+        None, description="The contract's implied volatility, vol points (M26)."
+    )
+    iv_chg: float | None = Field(
+        None,
+        description="Change in `iv` against the prior session's cell, vol points (M26).",
+    )
+    delta: float | None = Field(None, description="The contract's delta (M26).")
+    open_interest: int | None = Field(None, description='Open interest (M26).')
+    target_miss: bool = Field(
+        ...,
+        description="The strike landed more than 2.5% from the rule's target (M26).",
+    )
+    tenor_collapsed: bool = Field(
+        ..., description='This expiry was already used by a shorter tenor (M26).'
+    )
+
+
+class Type(Enum):
+    concentration = 'concentration'
+    correlation = 'correlation'
+    runway = 'runway'
+    dilution = 'dilution'
+    earnings_soon = 'earnings_soon'
+    supply_event = 'supply_event'
+    short_interest = 'short_interest'
+
+
+class Severity(Enum):
+    info = 'info'
+    warn = 'warn'
+
+
+class Flag(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Type
+    severity: Severity
+    symbol: str | None = None
+    sector_id: str | None = None
+    value: float | None = None
+    text_key: str
+
+
+class Type1(Enum):
+    catalyst_pending = 'catalyst_pending'
+    relative_strength = 'relative_strength'
+    supply_overhang = 'supply_overhang'
+    breadth = 'breadth'
+    premarket_gap = 'premarket_gap'
+
+
+class Direction(Enum):
+    up = 'up'
+    down = 'down'
+    neutral = 'neutral'
+
+
+class Outcome(Enum):
+    correct = 'correct'
+    wrong = 'wrong'
+    unresolved = 'unresolved'
+    NoneType_None = None
+
+
+class Claim(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: str
+    symbol: str
+    type: Type1
+    direction: Direction
+    horizon_sessions: conint(ge=0) = Field(
+        ...,
+        description="Sessions until the claim is due. 0 is the open brief's morning claim, resolved at the same session's close — the same-day loop D16b built the engine for (M15).",
+    )
+    outcome: Outcome
+
+
 class Row(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -439,91 +575,44 @@ class Row(BaseModel):
     )
     call_atm30_pct: float | None = Field(
         None,
-        description='Close brief §6: the 30-day ATM call mid as a fraction of spot (M24).',
+        description='Close brief §6: the 30-day ATM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`.',
     )
     call_atm30_chg: float | None = Field(
         None,
-        description='Close brief §6: day-over-day change in `call_atm30_pct`, at constant tenor (M24).',
+        description='Close brief §6: day-over-day change in `call_atm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`.',
     )
     call_otm30_pct: float | None = Field(
         None,
-        description='Close brief §6: the 30-day 10% OTM call mid as a fraction of spot (M24).',
+        description='Close brief §6: the 30-day 10% OTM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`.',
     )
     call_otm30_chg: float | None = Field(
         None,
-        description='Close brief §6: day-over-day change in `call_otm30_pct`, at constant tenor (M24).',
+        description='Close brief §6: day-over-day change in `call_otm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`.',
     )
     call_atm7_pct: float | None = Field(
         None,
-        description='Close brief §6: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24).',
+        description='Close brief §6: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24). v10; not emitted from v11, see `calls`.',
+    )
+    iv30_chg: float | None = Field(
+        None,
+        description="Close brief §6: day-over-day change in `iv30`, vol points, against the prior session's stored IV30; null across any gap and on a stale reading (M26).",
+    )
+    vix_close: float | None = Field(
+        None,
+        description='Close brief §6: the VIX close `iv_vix_ratio` and `vix_pctile` are measured against (M26).',
+    )
+    iv_vix_book_median: float | None = Field(
+        None,
+        description="Close brief §6: the book's median IV/VIX ratio that session, the regime's no-baseline fallback base (M26).",
+    )
+    calls: list[CallQuote] | None = Field(
+        None,
+        description='Close brief §6: the selected calls in fixed order — 30-day ATM, 30-day 10% OTM, 7-day ATM — each present even when no contract was quoted (M26).',
     )
     level_pctile: confloat(ge=0.0, le=100.0) | None = Field(
         None,
         description="Open brief §2: the tape row's level against its own 252 sessions, 0-100. VIX only (M25).",
     )
-
-
-class Type(Enum):
-    concentration = 'concentration'
-    correlation = 'correlation'
-    runway = 'runway'
-    dilution = 'dilution'
-    earnings_soon = 'earnings_soon'
-    supply_event = 'supply_event'
-    short_interest = 'short_interest'
-
-
-class Severity(Enum):
-    info = 'info'
-    warn = 'warn'
-
-
-class Flag(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    type: Type
-    severity: Severity
-    symbol: str | None = None
-    sector_id: str | None = None
-    value: float | None = None
-    text_key: str
-
-
-class Type1(Enum):
-    catalyst_pending = 'catalyst_pending'
-    relative_strength = 'relative_strength'
-    supply_overhang = 'supply_overhang'
-    breadth = 'breadth'
-    premarket_gap = 'premarket_gap'
-
-
-class Direction(Enum):
-    up = 'up'
-    down = 'down'
-    neutral = 'neutral'
-
-
-class Outcome(Enum):
-    correct = 'correct'
-    wrong = 'wrong'
-    unresolved = 'unresolved'
-    NoneType_None = None
-
-
-class Claim(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    id: str
-    symbol: str
-    type: Type1
-    direction: Direction
-    horizon_sessions: conint(ge=0) = Field(
-        ...,
-        description="Sessions until the claim is due. 0 is the open brief's morning claim, resolved at the same session's close — the same-day loop D16b built the engine for (M15).",
-    )
-    outcome: Outcome
 
 
 class Section(BaseModel):

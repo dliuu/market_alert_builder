@@ -390,28 +390,73 @@
         },
         "call_atm30_pct": {
           "type": ["number", "null"],
-          "description": "Close brief \u00a76: the 30-day ATM call mid as a fraction of spot (M24)."
+          "description": "Close brief \u00a76: the 30-day ATM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`."
         },
         "call_atm30_chg": {
           "type": ["number", "null"],
-          "description": "Close brief \u00a76: day-over-day change in `call_atm30_pct`, at constant tenor (M24)."
+          "description": "Close brief \u00a76: day-over-day change in `call_atm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`."
         },
         "call_otm30_pct": {
           "type": ["number", "null"],
-          "description": "Close brief \u00a76: the 30-day 10% OTM call mid as a fraction of spot (M24)."
+          "description": "Close brief \u00a76: the 30-day 10% OTM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`."
         },
         "call_otm30_chg": {
           "type": ["number", "null"],
-          "description": "Close brief \u00a76: day-over-day change in `call_otm30_pct`, at constant tenor (M24)."
+          "description": "Close brief \u00a76: day-over-day change in `call_otm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`."
         },
         "call_atm7_pct": {
           "type": ["number", "null"],
-          "description": "Close brief \u00a76: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24)."
+          "description": "Close brief \u00a76: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24). v10; not emitted from v11, see `calls`."
+        },
+        "iv30_chg": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: day-over-day change in `iv30`, vol points, against the prior session's stored IV30; null across any gap and on a stale reading (M26)."
+        },
+        "vix_close": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: the VIX close `iv_vix_ratio` and `vix_pctile` are measured against (M26)."
+        },
+        "iv_vix_book_median": {
+          "type": ["number", "null"],
+          "description": "Close brief \u00a76: the book's median IV/VIX ratio that session, the regime's no-baseline fallback base (M26)."
+        },
+        "calls": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/call_quote" },
+          "description": "Close brief \u00a76: the selected calls in fixed order \u2014 30-day ATM, 30-day 10% OTM, 7-day ATM \u2014 each present even when no contract was quoted (M26)."
         },
         "level_pctile": {
           "type": ["number", "null"], "minimum": 0, "maximum": 100,
           "description": "Open brief \u00a72: the tape row's level against its own 252 sessions, 0-100. VIX only (M25)."
         }
+      }
+    },
+    "call_quote": {
+      "type": "object",
+      "description": "Close brief \u00a76: one selected call, a measurement of what the position holds, never a recommendation (D37, D39; M26).",
+      "required": ["tenor", "rule", "target_miss", "tenor_collapsed"],
+      "additionalProperties": false,
+      "properties": {
+        "tenor": { "enum": [7, 14, 21, 30], "description": "Calendar days the cell was asked for (M26)." },
+        "rule": { "enum": ["itm10", "atm", "otm10"], "description": "The strike rule: 0.90, 1.00 or 1.10 \u00d7 close (M26)." },
+        "contract": { "type": ["string", "null"], "description": "OCC symbol; null when no two-sided call was quoted for the cell (M26)." },
+        "strike": { "type": ["number", "null"], "description": "Strike price (M26)." },
+        "expiry": { "type": ["string", "null"], "format": "date", "description": "Expiration date (M26)." },
+        "dte": { "type": ["integer", "null"], "description": "Calendar days to expiry from the session date (M26)." },
+        "moneyness": { "type": ["number", "null"], "description": "`strike / close - 1` (M26)." },
+        "mid": { "type": ["number", "null"], "description": "`(bid + ask) / 2`, dollars per share; a price like `close`, so a float (M26)." },
+        "mid_chg": { "type": ["number", "null"], "description": "Same contract's mid, today less the prior session, dollars per share; null without a prior quote (M26)." },
+        "contract_cents": { "type": ["integer", "null"], "description": "`round(mid \u00d7 100 \u00d7 100)`: the cost of one contract in cents (M26)." },
+        "writable_cents": { "type": ["integer", "null"], "description": "`contract_cents \u00d7 contracts_writable`; null when `contracts_writable` is 0 (M26)." },
+        "premium_pct": { "type": ["number", "null"], "description": "`mid / close` (M26)." },
+        "premium_pct_chg": { "type": ["number", "null"], "description": "Relative change of `premium_pct` against the prior session's cell at the same tenor and rule (M26)." },
+        "time_value_pct": { "type": ["number", "null"], "description": "`(mid - max(close - strike, 0)) / close` (M26)." },
+        "iv": { "type": ["number", "null"], "description": "The contract's implied volatility, vol points (M26)." },
+        "iv_chg": { "type": ["number", "null"], "description": "Change in `iv` against the prior session's cell, vol points (M26)." },
+        "delta": { "type": ["number", "null"], "description": "The contract's delta (M26)." },
+        "open_interest": { "type": ["integer", "null"], "description": "Open interest (M26)." },
+        "target_miss": { "type": "boolean", "description": "The strike landed more than 2.5% from the rule's target (M26)." },
+        "tenor_collapsed": { "type": "boolean", "description": "This expiry was already used by a shorter tenor (M26)." }
       }
     },
     "flag": {
