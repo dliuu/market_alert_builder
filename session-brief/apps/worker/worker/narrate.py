@@ -272,18 +272,23 @@ def apply_narration(obj: BriefObject, narration: _Narration) -> BriefObject:
             and section["rows"]
         ):
             section["note"] = narration.tape_read
-        # Never over an assembled note (the overflow names what the email hides;
-        # "fair across the book" and "no option data" are the honest empties),
-        # never on a section the email shows no row of, and never on the open
-        # brief's regime-change strip (M25): the note is the close's §6 alone.
+        # Beside an assembled note, never over it (M26): the assembled part
+        # names facts the email needs — a held name with no chain, the overflow
+        # past the cap — so the prose is closed as a sentence and the facts
+        # follow. Never on a section the email shows no row of, and never on
+        # the open brief's regime-change strip (M25): the note is the close's
+        # §6 alone.
         if (
             obj.kind.value == "close"
             and section["id"] == SectionId.premium.value
             and narration.premium_note
-            and section["note"] is None
             and any(row.get("tier") == "full" for row in section["rows"])
         ):
-            section["note"] = narration.premium_note
+            prose = narration.premium_note.strip()
+            if not prose.endswith((".", "!", "?")):
+                prose += "."
+            assembled = section["note"]
+            section["note"] = f"{prose} {assembled}" if assembled else prose
     return BriefObject.model_validate(payload)
 
 

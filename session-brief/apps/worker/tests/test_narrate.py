@@ -602,14 +602,23 @@ def test_premium_ask_says_every_held_name_is_listed() -> None:
     assert "every held name is listed" in prompt.lower()
 
 
-def test_premium_note_never_overwrites_an_assembled_note() -> None:
-    """The overflow note names what the email hides; prose must not replace it."""
-    overflow = "D also rich or cheap — see the archive"
-    obj = _obj_with_premium(note=overflow)
+def test_premium_note_lands_beside_an_assembled_note() -> None:
+    """The assembled note names facts the email needs (a held name with no
+    chain, the overflow past the cap); the prose joins it rather than
+    replacing it or being dropped (M26). Prose first, so the archive's
+    overflow filter keeps it; the prose is closed as a sentence."""
+    assembled = "No option data for B; D also measured — see the archive"
+    obj = _obj_with_premium(note=assembled)
     narrated = narrate_and_apply(
-        obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized."})
+        obj, lambda _p: json.dumps({"premium_note": "Implied runs above realized"})
     )
-    assert _premium_note(narrated) == overflow
+    assert _premium_note(narrated) == f"Implied runs above realized. {assembled}"
+
+
+def test_an_assembled_note_stands_alone_without_prose() -> None:
+    assembled = "No option data for B"
+    obj = _obj_with_premium(note=assembled)
+    assert _premium_note(narrate_and_apply(obj, lambda _p: json.dumps({}))) == assembled
 
 
 def test_premium_note_never_lands_without_a_full_row() -> None:
