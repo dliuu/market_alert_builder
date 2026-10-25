@@ -172,5 +172,5 @@ IV30_DRIFT_ALARM_POINTS = Decimal("1")  # own IV30 vs the vendor's, vol points
 PREMIUM_RICH_PCTILE = Decimal("70")  # IV30 percentile at or above this reads rich
 PREMIUM_CHEAP_PCTILE = Decimal("30")  # at or below this reads cheap
 HV_WINDOWS: tuple[int, ...] = (20, 60)  # realized-vol windows, sessions
-PREMIUM_CAP = 3  # most premium names surfaced in one brief
+PREMIUM_CAP = 20  # most premium names in one email, for its size budget (M26)
 EARNINGS_WINDOW_MIN_DAYS = 30  # earnings guard looks at least this far ahead, calendar days

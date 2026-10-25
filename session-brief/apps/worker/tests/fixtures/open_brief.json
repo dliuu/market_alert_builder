@@ -1,5 +1,5 @@
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "brief_id": "00000000-0000-0000-0000-000000000001-2026-08-13-open",
   "user_id": "00000000-0000-0000-0000-000000000001",
   "session_date": "2026-08-13",
@@ -104,6 +104,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         },
         {
@@ -196,6 +200,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         }
       ]
@@ -295,6 +303,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         }
       ]
@@ -394,6 +406,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         },
         {
@@ -486,6 +502,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         },
         {
@@ -578,6 +598,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         }
       ]
@@ -677,6 +701,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         },
         {
@@ -769,6 +797,10 @@
           "call_otm30_pct": null,
           "call_otm30_chg": null,
           "call_atm7_pct": null,
+          "iv30_chg": null,
+          "vix_close": null,
+          "iv_vix_book_median": null,
+          "calls": null,
           "level_pctile": null
         }
       ]
