@@ -104,6 +104,7 @@ Canonical schema: `packages/contracts/brief-object.schema.json`. Generated types
 | 8 | M19 | §4 technical snapshot row fields: `ma20_dist`/`ma50_dist`/`ma200_dist`, `ma_stack`, `vol_vs_5d`/`vol_vs_21d`, `atr14`, `support`/`resistance` with `*_touches` and `*_last_touch`, `high_52w`/`low_52w`, `breakout` |
 | 9 | M20 | §5 standing row fields: `rsi14`/`macd_hist`/`adx14`/`atr_pct`/`rel_strength` with their `*_pctile` pairs, `rel_strength_benchmark`, `divergence`; new section id `standing` |
 | 10 | M24/M25 | close brief `premium` section (§6) and its row fields: `iv30`/`iv30_pctile`/`iv_rank_252`, `hv20`, `iv_hv_spread`, `iv_vix_ratio`, `vix_pctile`, `iv_term_slope`, `premium`, `earnings_in_window`, `contracts_writable`, `iv30_thin`, `call_atm30_*`/`call_otm30_*`/`call_atm7_pct`; `level_pctile` on §2; `premium_prior` for the open strip; new section id `premium` |
+| 11 | M26 | §6 ungated: every held name with a reading, `tier: full` up to 20 (D39); row fields `iv30_chg`, `vix_close`, `iv_vix_book_median`, `calls[]` (`call_quote`: `contract`, `strike`, `expiry`, `dte`, `moneyness`, `mid`, `mid_chg`, `contract_cents`, `writable_cents`, `premium_pct`(`_chg`), `time_value_pct`, `iv`(`_chg`), `delta`, `open_interest`, `target_miss`, `tenor_collapsed`); the v10 flat `call_*` fields stay in the schema for stored bodies and are no longer emitted |
 
 ## Narration contract
 

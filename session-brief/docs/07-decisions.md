@@ -864,3 +864,56 @@ chain; deriving the live switch from a key that does not exist.
 *Reverses if:* the endpoint changes shape or disappears — swap the provider
 behind `OptionsProvider`; or the terms are judged too thin for how the brief is
 used — move to the licensed fallback.
+
+---
+
+**D39 — M26 §6 is a ledger, not a gate, and IV30 may stand without its percentile in the email**
+
+M24 built §6 as a gate: three names at most, only when the regime read rich or
+cheap, with IV30 hidden in the email until a full year of stored history gave
+it a percentile. Four sessions into live Cboe data the section printed
+"Premium is fair across the book" or a row whose IV30 was a dash — and would
+have until late 2027, because the own-year percentile needs 252 prior sessions
+and the no-baseline fallbacks (IV/VIX against the book's median, IV below
+HV20) land most names on `fair`. The reader wanted the opposite: every held
+name, every evening, with its implied vol, how it moved, how it sits against
+the market, and what its calls cost in dollars. M26 makes §6 that ledger.
+Three things change and one does not.
+
+*The regime orders; it no longer gates.* Every held name with a reading is a
+`full` row — rich and cheap first, by distance from the median percentile
+(nulls last), then the implied-vs-realized gap; fair after. The guards
+(earnings in the window, a thin IV30, zero writable contracts) stay on every
+row as badges and never sort or hide a name: a rich name inside its earnings
+window is still the richest name, and the badge says why to be careful.
+`PREMIUM_CAP` goes to twenty for the email's 80KB budget, not for emphasis.
+
+*IV30 may stand bare in the email, marked.* D36's rule (a level never without
+its comparison) is amended for this one level, on two conditions: a missing
+percentile prints as `pctile pending` beside the value, never as a silent
+dash; and the two comparisons that exist from the first live session — IV
+less HV20, and IV against the VIX — sit on the same line. The percentile rule
+itself is untouched: no percentile below a full baseline, no backfill.
+
+*Dollars per contract and across writable contracts are measurements.* Each
+selected call carries its mid, `mid × 100` as integer cents (the `docs/04`
+money rule), and that figure times the position's writable contracts — null,
+not zero, when nothing is writable, since a zero would read as a price. These
+are what the position holds, priced. The words that keep it so: "writable"
+and "across N" are counts of what is held; no surface says "if you wrote",
+"income" or "collect".
+
+*What does not change.* D37's four conditions hold as written: the regime is
+mechanical; every number carries its base or is marked as lacking one; the
+earnings guard is always visible; no action verb anywhere. The VIX close, its
+percentile and the book's median ratio print once in the section head because
+they are identical on every row. The 7-day call is always shown, with the term
+slope beside it, rather than only on a positive slope: a weekly writer wants
+its price whatever the slope says.
+*Rules out:* a `fair` name dropped from the email; an IV30 dash where a value
+exists; a dollar figure labelled as income; a guard used to hide a row.
+
+*Reverses if:* an action verb appears anywhere in §6 — the D37 clause, the
+section comes out until fixed; or the twenty-name email crosses the 80KB
+budget — then the calls line loses open interest, then delta, before any name
+or the 7-day line is dropped.
