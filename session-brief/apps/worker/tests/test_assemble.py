@@ -1091,8 +1091,10 @@ def _twenty() -> BriefObject:
 def test_matches_frozen_twenty_name_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "OPTIONS_LIVE", False)
     body = to_contract_json(_twenty())
-    section = next(s for s in body["sections"] if s["id"] == "premium")
-    assert [r["tier"] for r in section["rows"]] == ["full"] * 20
+    sections = cast("list[dict[str, object]]", body["sections"])
+    section = next(s for s in sections if s["id"] == "premium")
+    rows = cast("list[dict[str, object]]", section["rows"])
+    assert [r["tier"] for r in rows] == ["full"] * 20
     assert body == json.loads(_FIXTURE_P20.read_text())
 
 

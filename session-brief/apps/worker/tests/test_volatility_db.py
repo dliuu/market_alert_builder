@@ -3,13 +3,15 @@ sessions of synthetic option snapshots."""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from worker.assemble import assemble
 from worker.calendar import next_session, previous_session
+from worker.compute import Lot, Price, compute
 from worker.options_ingest import pull_options
 from worker.providers.cboe import parse_chain
 from worker.providers.synthetic import SyntheticOptionsProvider
@@ -402,3 +404,50 @@ def test_the_open_book_median_counts_a_name_sold_since_the_close(db_conn: Connec
     # held name alone (1.2) it would read rich and invent a flip.
     assert _session_regimes(db_conn, USER, ["ZZMED"], last) == {"ZZMED": "fair"}
     assert read_premium_changes(db_conn, USER, ["ZZMED"], OPEN_SESSION) == []
+
+
+# --- M26: end to end, from seeded chains to the assembled §6 -----------------
+
+
+def test_end_to_end_the_close_brief_lists_every_held_name_with_its_calls(
+    db_conn: Connection,
+) -> None:
+    """Two held names, one fresh and one stale, through pull, compute and
+    assembly: both land in §6 as `full` rows carrying three calls, the fresh
+    one with an IV change and dollars across its two writable contracts."""
+    closes = _seed(db_conn)
+    _pull(db_conn, closes)
+    _own(db_conn, "ZZVOL", "250")
+    _, second = _run(db_conn)
+    session = SESSIONS[1]
+    held = ["ZZVOL", STALE]
+    lots = [Lot(s, Decimal("250"), 100_00, SESSIONS[0] - timedelta(days=30)) for s in held]
+    prices = {s: Price(c=closes[session], prev_c=closes[SESSIONS[0]]) for s in held}
+    obj = assemble(
+        compute(session, lots, prices),
+        {s: closes[session] for s in held},
+        {},
+        user_id=USER,
+        session_date=session,
+        kind="close",
+        generated_at=datetime(2027, 9, 15, 20, 42, tzinfo=UTC),
+        standing={},
+        premium={s: second[s] for s in held},
+    )
+    section = next(s for s in obj.sections if s.id.value == "premium")
+    rows = {r.symbol: r for r in section.rows}
+    assert set(rows) == set(held)
+    assert all(r.tier is not None and r.tier.value == "full" for r in section.rows)
+    for r in section.rows:
+        assert r.calls is not None and len(r.calls) == 3
+
+    fresh = rows["ZZVOL"]
+    assert fresh.iv30_chg is not None and fresh.contracts_writable == 2
+    atm30 = fresh.calls[0]  # type: ignore[index]
+    assert atm30.contract is not None and atm30.contract_cents is not None
+    assert atm30.writable_cents == atm30.contract_cents * 2
+    assert atm30.mid_chg is not None  # same contract quoted on both sessions
+
+    stale = rows[STALE]
+    assert stale.iv30_chg is None and stale.contracts_writable == 0
+    assert stale.calls[0].writable_cents is None  # type: ignore[index]
