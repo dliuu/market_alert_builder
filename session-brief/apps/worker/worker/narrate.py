@@ -98,9 +98,10 @@ def build_prompt(obj: BriefObject, headlines: dict[str, list[str]] | None = None
     )
     framing = _theme_framing(rows) + _technical_framing(obj)
     premium_ask = (
-        '  "premium_note": the premium section\'s note. Characterise the premium '
-        "regime for the named rows in one or two sentences; never recommend an "
-        "action, name a strike, or use the words sell, write, buy, or hold.\n"
+        '  "premium_note": the premium section\'s note. Every held name is listed; '
+        "characterise which sit away from fair and why, in one or two sentences; "
+        "never recommend an action, name a strike, or use the words sell, write, "
+        "buy, or hold.\n"
         if _has_full_premium_rows(obj)
         else ""
     )

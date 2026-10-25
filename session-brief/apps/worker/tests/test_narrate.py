@@ -522,9 +522,9 @@ def test_open_prompt_carries_headlines_verbatim() -> None:
 # --- §6's premium note (M24, D37) --------------------------------------------
 
 _PREMIUM_RULE = (
-    "Characterise the premium regime for the named rows in one or two sentences; "
-    "never recommend an action, name a strike, or use the words sell, write, buy, "
-    "or hold."
+    "Every held name is listed; characterise which sit away from fair and why, in "
+    "one or two sentences; never recommend an action, name a strike, or use the "
+    "words sell, write, buy, or hold."
 )
 
 
@@ -593,6 +593,13 @@ def test_close_prompt_asks_for_premium_note_only_with_a_full_row() -> None:
     without = build_prompt(_obj_with_premium(note=None, full=False))
     assert '"premium_note"' not in without
     assert _PREMIUM_RULE not in without
+
+
+def test_premium_ask_says_every_held_name_is_listed() -> None:
+    """M26: §6 is a ledger of every held name, so the ask says so and steers
+    the prose to the names away from fair rather than to every row."""
+    prompt = build_prompt(_obj_with_premium(note=None))
+    assert "every held name is listed" in prompt.lower()
 
 
 def test_premium_note_never_overwrites_an_assembled_note() -> None:
