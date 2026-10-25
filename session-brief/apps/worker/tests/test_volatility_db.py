@@ -9,7 +9,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from worker.calendar import previous_session
+from worker.calendar import next_session, previous_session
 from worker.options_ingest import pull_options
 from worker.providers.cboe import parse_chain
 from worker.providers.synthetic import SyntheticOptionsProvider
@@ -230,6 +230,35 @@ def test_a_symbol_missing_todays_snapshot_reads_yesterdays_as_stale(db_conn: Con
     assert stale.stale
     assert stale.iv30 is not None
     assert not second["ZZVOL"].stale
+
+
+def test_iv30_chg_is_against_the_prior_sessions_stored_iv30(db_conn: Connection) -> None:
+    _pull(db_conn, _seed(db_conn))
+    first, second = _run(db_conn)
+    assert first["ZZVOL"].iv30_chg is None  # nothing stored before session 0
+    r = second["ZZVOL"]
+    assert r.iv30 is not None and first["ZZVOL"].iv30 is not None
+    assert r.iv30_chg == r.iv30 - first["ZZVOL"].iv30
+    assert r.book_median_ratio is not None
+
+
+def test_a_stale_reading_carries_no_iv30_chg(db_conn: Connection) -> None:
+    _pull(db_conn, _seed(db_conn))
+    _, second = _run(db_conn)
+    assert second[STALE].stale and second[STALE].iv30_chg is None
+
+
+def test_iv30_chg_after_a_stale_session_reads_the_carried_value(db_conn: Connection) -> None:
+    """Review Focus 1: session 1 stored STALE's carried IV30 under session 1's
+    date, so a fresh chain on session 2 measures against that number."""
+    closes = _seed(db_conn)
+    _pull(db_conn, closes)
+    _run(db_conn)
+    third = next_session(SESSIONS[1])
+    provider = SyntheticOptionsProvider({STALE: closes[SESSIONS[1]]}, third)
+    assert pull_options(db_conn, provider, [STALE], third).symbols_failed == {}
+    out = compute_and_store_volatility(db_conn, USER, [STALE], third)
+    assert not out[STALE].stale and out[STALE].iv30_chg is not None
 
 
 def test_a_symbol_with_no_snapshot_either_day_is_omitted(db_conn: Connection) -> None:
