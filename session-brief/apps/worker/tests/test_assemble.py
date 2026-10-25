@@ -43,6 +43,7 @@ _GENERATED_AT = datetime(2026, 8, 11, 20, 42, 11, tzinfo=UTC)
 _FIXTURE = Path(__file__).parent / "fixtures" / "close_brief.json"
 _FIXTURE_V10 = Path(__file__).parent / "fixtures" / "close_brief_v10.json"
 _FIXTURE_V11 = Path(__file__).parent / "fixtures" / "close_brief_v11.json"
+_FIXTURE_P20 = Path(__file__).parent / "fixtures" / "close_brief_premium20.json"
 
 
 def _lot(symbol: str, shares: str, cost: str) -> Lot:
@@ -1073,6 +1074,26 @@ def test_synthetic_chain_stamps_premium_synthetic(monkeypatch: pytest.MonkeyPatc
     assert obj.data_quality.stale == [STALE_PREMIUM_SYNTHETIC]
     assert STALE_PREMIUM_SYNTHETIC == "premium.synthetic"
     assert STALE_PREMIUM == "premium.stale"
+
+
+def _twenty() -> BriefObject:
+    """A twenty-name book, every name in §6 at the cap: the email size check
+    (docs/06, 80KB) renders this one."""
+    readings = {
+        f"P{i:02d}": _reading(
+            f"P{i:02d}", premium=("rich", "fair", "cheap")[i % 3], iv30_pctile=Decimal(5 + 4 * i)
+        )
+        for i in range(20)
+    }
+    return _assemble_premium(readings)
+
+
+def test_matches_frozen_twenty_name_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "OPTIONS_LIVE", False)
+    body = to_contract_json(_twenty())
+    section = next(s for s in body["sections"] if s["id"] == "premium")
+    assert [r["tier"] for r in section["rows"]] == ["full"] * 20
+    assert body == json.loads(_FIXTURE_P20.read_text())
 
 
 def test_frozen_fixture_carries_an_ungated_premium_section() -> None:
