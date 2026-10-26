@@ -384,29 +384,130 @@ export interface Row {
    */
   iv30_thin?: boolean | null;
   /**
-   * Close brief §6: the 30-day ATM call mid as a fraction of spot (M24).
+   * Close brief §6: the 30-day ATM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`.
    */
   call_atm30_pct?: number | null;
   /**
-   * Close brief §6: day-over-day change in `call_atm30_pct`, at constant tenor (M24).
+   * Close brief §6: day-over-day change in `call_atm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`.
    */
   call_atm30_chg?: number | null;
   /**
-   * Close brief §6: the 30-day 10% OTM call mid as a fraction of spot (M24).
+   * Close brief §6: the 30-day 10% OTM call mid as a fraction of spot (M24). v10; not emitted from v11, see `calls`.
    */
   call_otm30_pct?: number | null;
   /**
-   * Close brief §6: day-over-day change in `call_otm30_pct`, at constant tenor (M24).
+   * Close brief §6: day-over-day change in `call_otm30_pct`, at constant tenor (M24). v10; not emitted from v11, see `calls`.
    */
   call_otm30_chg?: number | null;
   /**
-   * Close brief §6: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24).
+   * Close brief §6: the 7-day ATM call mid as a fraction of spot; present only when `iv_term_slope` is positive (M24). v10; not emitted from v11, see `calls`.
    */
   call_atm7_pct?: number | null;
+  /**
+   * Close brief §6: day-over-day change in `iv30`, vol points, against the prior session's stored IV30; null across any gap and on a stale reading (M26).
+   */
+  iv30_chg?: number | null;
+  /**
+   * Close brief §6: the VIX close `iv_vix_ratio` and `vix_pctile` are measured against (M26).
+   */
+  vix_close?: number | null;
+  /**
+   * Close brief §6: the book's median IV/VIX ratio that session, the regime's no-baseline fallback base (M26).
+   */
+  iv_vix_book_median?: number | null;
+  /**
+   * Close brief §6: the selected calls in fixed order — 30-day ATM, 30-day 10% OTM, 7-day ATM — each present even when no contract was quoted (M26).
+   */
+  calls?: CallQuote[] | null;
   /**
    * Open brief §2: the tape row's level against its own 252 sessions, 0-100. VIX only (M25).
    */
   level_pctile?: number | null;
+}
+/**
+ * Close brief §6: one selected call, a measurement of what the position holds, never a recommendation (D37, D39; M26).
+ */
+export interface CallQuote {
+  /**
+   * Calendar days the cell was asked for (M26).
+   */
+  tenor: 7 | 14 | 21 | 30;
+  /**
+   * The strike rule: 0.90, 1.00 or 1.10 × close (M26).
+   */
+  rule: "itm10" | "atm" | "otm10";
+  /**
+   * OCC symbol; null when no two-sided call was quoted for the cell (M26).
+   */
+  contract?: string | null;
+  /**
+   * Strike price (M26).
+   */
+  strike?: number | null;
+  /**
+   * Expiration date (M26).
+   */
+  expiry?: string | null;
+  /**
+   * Calendar days to expiry from the session date (M26).
+   */
+  dte?: number | null;
+  /**
+   * `strike / close - 1` (M26).
+   */
+  moneyness?: number | null;
+  /**
+   * `(bid + ask) / 2`, dollars per share; a price like `close`, so a float (M26).
+   */
+  mid?: number | null;
+  /**
+   * Same contract's mid, today less the prior session, dollars per share; null without a prior quote (M26).
+   */
+  mid_chg?: number | null;
+  /**
+   * `round(mid × 100 × 100)`: the cost of one contract in cents (M26).
+   */
+  contract_cents?: number | null;
+  /**
+   * `contract_cents × contracts_writable`; null when `contracts_writable` is 0 (M26).
+   */
+  writable_cents?: number | null;
+  /**
+   * `mid / close` (M26).
+   */
+  premium_pct?: number | null;
+  /**
+   * Relative change of `premium_pct` against the prior session's cell at the same tenor and rule (M26).
+   */
+  premium_pct_chg?: number | null;
+  /**
+   * `(mid - max(close - strike, 0)) / close` (M26).
+   */
+  time_value_pct?: number | null;
+  /**
+   * The contract's implied volatility, vol points (M26).
+   */
+  iv?: number | null;
+  /**
+   * Change in `iv` against the prior session's cell, vol points (M26).
+   */
+  iv_chg?: number | null;
+  /**
+   * The contract's delta (M26).
+   */
+  delta?: number | null;
+  /**
+   * Open interest (M26).
+   */
+  open_interest?: number | null;
+  /**
+   * The strike landed more than 2.5% from the rule's target (M26).
+   */
+  target_miss: boolean;
+  /**
+   * This expiry was already used by a shorter tenor (M26).
+   */
+  tenor_collapsed: boolean;
 }
 export interface Flag {
   type: "concentration" | "correlation" | "runway" | "dilution" | "earnings_soon" | "supply_event" | "short_interest";

@@ -1,9 +1,10 @@
 import { DEV_USER_ID } from "@/lib/constants";
-import type { BriefObject, Claim, Row } from "@/lib/contracts/brief";
+import type { BriefObject, CallQuote, Claim, Row } from "@/lib/contracts/brief";
 import { db } from "@/lib/db";
 import { briefs } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import { Fragment } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -582,11 +583,14 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                     <th style={S.th}>Symbol</th>
                     <th style={S.th}>Regime</th>
                     <th style={S.thR}>IV30</th>
+                    <th style={S.thR}>IV30 chg</th>
                     <th style={S.thR}>IV30 pctile</th>
                     <th style={S.thR}>IV rank</th>
                     <th style={S.thR}>HV20</th>
                     <th style={S.thR}>IV − HV</th>
                     <th style={S.thR}>IV/VIX</th>
+                    <th style={S.thR}>Book median</th>
+                    <th style={S.thR}>VIX</th>
                     <th style={S.thR}>VIX pctile</th>
                     <th style={S.thR}>Term slope</th>
                     <th style={S.thR}>Contracts writable</th>
@@ -597,38 +601,60 @@ export default async function BriefPage({ params }: { params: Promise<{ slug: st
                 </thead>
                 <tbody>
                   {premium.rows.map((r: Row) => (
-                    <tr key={r.symbol}>
-                      <td style={S.td}>{r.symbol}</td>
-                      <td style={{ ...S.td, ...S.regime }}>{r.premium ?? "—"}</td>
-                      <td style={S.tdR}>
-                        {numOrDash(r.iv30, 1)}
-                        {r.iv30 != null && r.iv30_pctile == null && (
-                          <span style={S.muted} title="percentile pending a full year">
-                            †
-                          </span>
-                        )}
-                      </td>
-                      <td style={S.tdR}>{ordinalOrDash(r.iv30_pctile)}</td>
-                      <td style={S.tdR}>{numOrDash(r.iv_rank_252, 2)}</td>
-                      <td style={S.tdR}>{numOrDash(r.hv20, 1)}</td>
-                      <td style={S.tdR}>{signedOrDash(r.iv_hv_spread, 1)}</td>
-                      <td style={S.tdR}>{numOrDash(r.iv_vix_ratio, 2)}</td>
-                      <td style={S.tdR}>{ordinalOrDash(r.vix_pctile)}</td>
-                      <td style={S.tdR}>{signedOrDash(r.iv_term_slope, 1)}</td>
-                      <td style={S.tdR}>{r.contracts_writable ?? "—"}</td>
-                      <td style={{ ...S.td, fontWeight: 400 }}>
-                        {r.earnings_in_window ? (r.occurs_at ?? "—") : "—"}
-                      </td>
-                      <td style={{ ...S.td, fontWeight: 400 }}>{r.iv30_thin ? "thin" : "—"}</td>
-                      <td style={{ ...S.td, fontWeight: 400 }}>{stripLine(r)}</td>
-                    </tr>
+                    <Fragment key={r.symbol}>
+                      <tr>
+                        <td style={S.td}>{r.symbol}</td>
+                        <td style={{ ...S.td, ...S.regime }}>{r.premium ?? "—"}</td>
+                        <td style={S.tdR}>
+                          {numOrDash(r.iv30, 1)}
+                          {r.iv30 != null && r.iv30_pctile == null && (
+                            <span style={S.muted} title="percentile pending a full year">
+                              †
+                            </span>
+                          )}
+                        </td>
+                        <td style={S.tdR}>{signedOrDash(r.iv30_chg, 1)}</td>
+                        <td style={S.tdR}>{ordinalOrDash(r.iv30_pctile)}</td>
+                        <td style={S.tdR}>{numOrDash(r.iv_rank_252, 2)}</td>
+                        <td style={S.tdR}>{numOrDash(r.hv20, 1)}</td>
+                        <td style={S.tdR}>{signedOrDash(r.iv_hv_spread, 1)}</td>
+                        <td style={S.tdR}>{numOrDash(r.iv_vix_ratio, 2)}</td>
+                        <td style={S.tdR}>{numOrDash(r.iv_vix_book_median, 2)}</td>
+                        <td style={S.tdR}>{numOrDash(r.vix_close, 2)}</td>
+                        <td style={S.tdR}>{ordinalOrDash(r.vix_pctile)}</td>
+                        <td style={S.tdR}>{signedOrDash(r.iv_term_slope, 1)}</td>
+                        <td style={S.tdR}>{r.contracts_writable ?? "—"}</td>
+                        <td style={{ ...S.td, fontWeight: 400 }}>
+                          {r.earnings_in_window ? (r.occurs_at ?? "—") : "—"}
+                        </td>
+                        <td style={{ ...S.td, fontWeight: 400 }}>{r.iv30_thin ? "thin" : "—"}</td>
+                        <td style={{ ...S.td, fontWeight: 400 }}>
+                          {r.calls != null ? "below" : stripLine(r)}
+                        </td>
+                      </tr>
+                      {/* M26: one sub-row per selected call, every field the
+                          body carries. v10 bodies have no `calls` and keep
+                          the strip line in the cell above. */}
+                      {r.calls != null && (
+                        <tr>
+                          <td colSpan={17} style={{ ...S.td, fontWeight: 400, paddingLeft: 16 }}>
+                            <CallRows
+                              calls={r.calls}
+                              writable={r.contracts_writable}
+                              currencySymbol={currencySymbol}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
               {premiumPending && <p style={S.muted}>† percentile pending a full year</p>}
-              {/* As §5: the overflow pointer is for the email reader only. */}
-              {premium.note && !premium.note.endsWith("— see the archive") && (
-                <p style={S.muted}>{premium.note}</p>
+              {/* As §5: the overflow pointer is for the email reader only; the
+                  no-data part of a combined note (M26) still shows here. */}
+              {premiumArchiveNote(premium.note) && (
+                <p style={S.muted}>{premiumArchiveNote(premium.note)}</p>
               )}
             </>
           )}
@@ -802,6 +828,110 @@ function ordinalOrDash(p: number | null | undefined): string {
   if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
   const suffix = ["th", "st", "nd", "rd"][n % 10] ?? "th";
   return `${n}${n % 10 <= 3 ? suffix : "th"}`;
+}
+// §6's note without its overflow sentence ("… — see the archive"), which is
+// for the email reader; the "No option data for …" part stays (M26).
+function premiumArchiveNote(note: string | null | undefined): string | null {
+  if (!note) return null;
+  const kept = note.split("; ").filter((part) => !part.endsWith("— see the archive"));
+  return kept.length > 0 ? kept.join("; ") : null;
+}
+// The selected calls (M26): a nested table, one row per cell in the body's
+// fixed order. Dollars per contract and across the position's writable
+// contracts are measurements of what is held (D39); an empty cell says so.
+function CallRows({
+  calls,
+  writable,
+  currencySymbol,
+}: {
+  calls: CallQuote[];
+  writable: number | null | undefined;
+  currencySymbol: string;
+}) {
+  const label = (c: CallQuote) =>
+    `${c.tenor}d ${c.rule === "atm" ? "ATM" : c.rule === "otm10" ? "10% OTM" : "10% ITM"}`;
+  const strike = (v: number) => (Number.isInteger(v) ? `${v}` : v.toFixed(2));
+  const fracOrDash = (v: number | null | undefined) =>
+    v == null ? "—" : `${(v * 100).toFixed(1)}%`;
+  const cell = { ...S.td, fontWeight: 400, borderBottom: "none", padding: "2px 10px 2px 0" };
+  const cellR = { ...cell, textAlign: "right" as const };
+  const head = { ...cell, color: "#888", fontSize: "0.78rem" };
+  const headR = { ...head, textAlign: "right" as const };
+  return (
+    <table style={{ ...S.table, width: "auto" }}>
+      <thead>
+        <tr>
+          <th style={head}>Call</th>
+          <th style={head}>Contract</th>
+          <th style={headR}>DTE</th>
+          <th style={headR}>Mid</th>
+          <th style={headR}>Mid chg</th>
+          <th style={headR}>Per contract</th>
+          <th style={headR}>Across {writable ?? "—"}</th>
+          <th style={headR}>% of spot</th>
+          <th style={headR}>chg</th>
+          <th style={headR}>Time value</th>
+          <th style={headR}>IV</th>
+          <th style={headR}>IV chg</th>
+          <th style={headR}>Δ</th>
+          <th style={headR}>OI</th>
+          <th style={head}>Marks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {calls.map((c) => (
+          <tr key={`${c.tenor}-${c.rule}`}>
+            <td style={cell}>{label(c)}</td>
+            {c.contract == null ? (
+              <td style={cell} colSpan={14}>
+                no two-sided quote
+              </td>
+            ) : (
+              <>
+                <td style={cell}>
+                  {c.strike != null && c.expiry != null
+                    ? `${strike(c.strike)}C ${c.expiry}`
+                    : c.contract}
+                </td>
+                <td style={cellR}>{c.dte ?? "—"}</td>
+                <td style={cellR}>
+                  {c.mid != null ? `${currencySymbol}${c.mid.toFixed(2)}` : "—"}
+                </td>
+                <td style={cellR}>
+                  {dollarsOrDash(c.mid_chg != null ? c.mid_chg * 100 : null, currencySymbol)}
+                </td>
+                <td style={cellR}>
+                  {c.contract_cents != null ? dollars(c.contract_cents, currencySymbol) : "—"}
+                </td>
+                <td style={cellR}>
+                  {c.writable_cents != null ? dollars(c.writable_cents, currencySymbol) : "—"}
+                </td>
+                <td style={cellR}>{fracOrDash(c.premium_pct)}</td>
+                <td style={cellR}>
+                  {c.premium_pct_chg != null ? `${signedOrDash(c.premium_pct_chg * 100, 1)}%` : "—"}
+                </td>
+                <td style={cellR}>{fracOrDash(c.time_value_pct)}</td>
+                <td style={cellR}>{numOrDash(c.iv, 1)}</td>
+                <td style={cellR}>{signedOrDash(c.iv_chg, 1)}</td>
+                <td style={cellR}>{numOrDash(c.delta, 2)}</td>
+                <td style={cellR}>
+                  {c.open_interest != null ? c.open_interest.toLocaleString("en-US") : "—"}
+                </td>
+                <td style={cell}>
+                  {[
+                    c.target_miss ? "strike off target" : null,
+                    c.tenor_collapsed ? "same expiry as shorter tenor" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
+                </td>
+              </>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 // §6's strip line, worded as the email's: the call mid as a fraction of spot,
 // and in brackets its relative change against the prior session at the same

@@ -334,6 +334,7 @@ def _prior_row(tenor: int, rule: str, premium_pct: str, iv: str) -> StripRow:
         open_interest=None,
         volume=None,
         chg_contract_pct=None,
+        mid_chg=None,
         chg_tenor_pct=None,
         iv_chg=None,
         tenor_collapsed=False,
@@ -358,6 +359,18 @@ def test_strip_rows_computes_the_three_changes_against_the_priors() -> None:
     assert row.chg_contract_pct == Decimal("1.05") / Decimal("0.84") - 1
     assert row.iv_chg == Decimal("2")
     assert row.iv == Decimal("30")
+
+
+def test_strip_rows_mid_chg_is_the_same_contract_dollar_change() -> None:
+    spot = Decimal("100")
+    cells = select_strip(_grid(SESSION + timedelta(days=30), spot), spot, SESSION)
+    atm30 = next(c for c in cells if (c.tenor, c.rule) == (30, "atm"))
+    assert atm30.contract is not None
+    rows = strip_rows(cells, {}, {atm30.contract.symbol: Decimal("0.84")})
+    row = next(r for r in rows if (r.tenor, r.rule) == (30, "atm"))
+    assert row.mid_chg == Decimal("1.05") - Decimal("0.84")
+    other = next(r for r in rows if (r.tenor, r.rule) == (30, "otm10"))
+    assert other.mid_chg is None  # no prior quote for that contract
 
 
 def test_strip_rows_leaves_the_changes_none_without_priors() -> None:

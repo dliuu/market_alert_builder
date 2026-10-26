@@ -42,6 +42,7 @@ def validator() -> Draft202012Validator:
         "close_brief_v8.json",
         "close_brief_v9.json",
         "close_brief_v10.json",
+        "close_brief_v11.json",
         "open_brief.json",
         "open_brief_v3.json",
         "open_brief_v6.json",

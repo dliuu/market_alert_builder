@@ -11,7 +11,12 @@ const LIMIT = 80 * 1024;
 
 // Both kinds, so the open brief can never quietly regress past the budget or
 // lose its plaintext part (docs/06).
-const FIXTURES = ["close_brief.json", "open_brief.json"];
+const FIXTURES = [
+  "close_brief.json",
+  "open_brief.json",
+  "close_brief_v10.json",
+  "close_brief_premium20.json",
+];
 
 async function main(): Promise<void> {
   const here = dirname(fileURLToPath(import.meta.url));

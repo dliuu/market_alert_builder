@@ -1,4 +1,4 @@
-import type { Book, BriefObject, Claim, Row } from "@/lib/contracts/brief";
+import type { Book, BriefObject, CallQuote, Claim, Row } from "@/lib/contracts/brief";
 import { Body, Container, Head, Hr, Html, Link, Preview, Section } from "@react-email/components";
 import { font, palette, signColor } from "./theme";
 
@@ -125,17 +125,24 @@ export function CloseBrief({
             </Section>
           )}
 
-          {/* premium (M24) — gated the §5 way: only names whose option premium
-              is rich or cheap against their own year, capped at three; the
-              rest are in `note` and on the archive. A measurement, never
-              advice (D37): no verb in this block tells the reader what to do. */}
+          {/* premium (M26, D39) — a ledger of every held name with a reading:
+              rich and cheap first, fair after, the guards worn as badges. The
+              VIX line sits in the head because it is the same on every row.
+              A measurement, never advice (D37): no verb in this block tells
+              the reader what to do. */}
           {premium && (premium.rows.some((r) => r.tier === "full") || premium.note) && (
             <Section style={sec}>
-              <SectionHead title="Premium" note={premiumHeadNote(brief.data_quality.stale)} />
+              <SectionHead
+                title="Premium"
+                note={premiumHeadNote(
+                  brief.data_quality.stale,
+                  premium.rows.find((r) => r.vix_close != null),
+                )}
+              />
               {premium.rows
                 .filter((r) => r.tier === "full")
                 .map((r) => (
-                  <Premium key={r.symbol} row={r} />
+                  <Premium key={r.symbol} row={r} currencySymbol={currencySymbol} />
                 ))}
               {premium.note && <p style={note}>{asSentence(premium.note)}</p>}
             </Section>
@@ -473,29 +480,57 @@ function asSentence(text: string): string {
 // The §6 head note, with the same data_quality stamps the open brief puts on
 // its synthetic tape: the reader sees the caveat beside the figures it
 // qualifies, not only in the footer list.
-function premiumHeadNote(stale: string[]): string {
+function premiumHeadNote(stale: string[], first: Row | undefined): string {
   let head = "against each name's own year and the tape";
+  // M26: the VIX close, its percentile and the book's median IV/VIX ratio are
+  // the same on every row, so they print once here rather than twenty times.
+  if (first?.vix_close != null) {
+    head += ` · VIX ${first.vix_close.toFixed(2)}`;
+    head +=
+      first.vix_pctile != null
+        ? ` (${ordinal(Math.round(first.vix_pctile))})`
+        : " (pctile pending)";
+  }
+  if (first?.iv_vix_book_median != null) {
+    head += ` · book median IV/VIX ${first.iv_vix_book_median.toFixed(2)}×`;
+  }
   if (stale.includes("premium.synthetic")) head += " · synthetic feed · not live prices";
   if (stale.includes("premium.stale")) head += " · stale";
   return head;
 }
 
-// One name's premium (M24). The regime word is muted ink, not a traffic
-// light — rich is not "good" and cheap is not "bad" (spec, Surfaces). IV30 is
-// never shown without its percentile (the M20 rule): a null percentile darkens
-// both. The strip line describes what the calls are priced at; the earnings
-// date rides along whenever assembly set the guard.
-function Premium({ row }: { row: Row }) {
-  const hasPctile = row.iv30_pctile != null;
-  const iv30 = hasPctile ? numberOrDash(row.iv30, 1) : "—";
-  const pctile = row.iv30_pctile != null ? ordinal(Math.round(row.iv30_pctile)) : "—";
-  const figures = [
-    `IV30 ${iv30} · ${pctile}`,
+// One name's premium (M26). The regime word is muted ink, not a traffic
+// light — rich is not "good" and cheap is not "bad" (spec, Surfaces). IV30
+// prints with its day-over-day change and its own-year percentile, or
+// "pctile pending" while the baseline is short (D39 amends the M20 rule for
+// this one level: the two comparisons that exist from day one, IV − HV and
+// IV/VIX, sit on the same line). One line per selected call when the body
+// carries `calls` (v11); the v10 strip line otherwise. The guards ride along
+// as badges — they never hide a name.
+function Premium({ row, currencySymbol }: { row: Row; currencySymbol: string }) {
+  const iv30 = numberOrDash(row.iv30, 1);
+  const ivChange =
+    row.iv30 != null && row.iv30_chg != null ? ` (${signedOrDash(row.iv30_chg, 1)})` : "";
+  const pctile =
+    row.iv30 == null
+      ? ""
+      : row.iv30_pctile != null
+        ? ` · ${ordinal(Math.round(row.iv30_pctile))}`
+        : " · pctile pending";
+  const own = [
+    `IV30 ${iv30}${ivChange}${pctile}`,
+    `HV20 ${numberOrDash(row.hv20, 1)}`,
     `IV − HV ${signedOrDash(row.iv_hv_spread, 1)}`,
-    `IV/VIX ${numberOrDash(row.iv_vix_ratio, 2)}`,
-    `contracts writable ${row.contracts_writable ?? "—"}`,
+    `IV/VIX ${numberOrDash(row.iv_vix_ratio, 2)}×`,
+    `term ${signedOrDash(row.iv_term_slope, 1)}`,
   ];
-  const strip = stripLine(row);
+  const v10 = stripLine(row);
+  const calls =
+    row.calls != null
+      ? row.calls.map((c) => callLine(c, row.contracts_writable, currencySymbol))
+      : v10 != null
+        ? [v10]
+        : [];
   return (
     <table role="presentation" width="100%" cellPadding={0} cellSpacing={0} style={dataTable}>
       <tbody>
@@ -509,9 +544,18 @@ function Premium({ row }: { row: Row }) {
               <span style={{ ...breakoutBadge, ...mut }}>
                 earnings {row.occurs_at ? dayMonth(row.occurs_at) : "—"}
               </span>
-            )}
-            <div style={levelLine}>{figures.join("  ·  ")}</div>
-            {strip && <div style={levelLine}>{strip}</div>}
+            )}{" "}
+            {row.iv30_thin && <span style={{ ...breakoutBadge, ...mut }}>thin</span>}{" "}
+            <span style={mut}>
+              · {row.contracts_writable ?? "—"} contract{row.contracts_writable === 1 ? "" : "s"}{" "}
+              writable
+            </span>
+            <div style={levelLine}>{own.join("  ·  ")}</div>
+            {calls.map((line) => (
+              <div key={line} style={levelLine}>
+                {line}
+              </div>
+            ))}
           </td>
         </tr>
       </tbody>
@@ -519,11 +563,56 @@ function Premium({ row }: { row: Row }) {
   );
 }
 
-// "30d ATM pays 4.8% (+2.0%) · 10% OTM 1.2% (−1.0%) · 7d ATM 2.1%". Each
-// premium is the call mid as a fraction of spot; the bracket is its change
-// against the prior session at the same tenor (`chg_tenor_pct`, a relative
-// change — so it carries its own %). The 7-day cell is present only when
-// assembly included it (a positive term slope).
+// "30d ATM · 150C 21 Nov (27d) · $4.80 = $480/contract · $1,920 across 4 ·
+// 3.2% of spot (+10.3%) · +$0.45 · IV 41.0 (+2.1) · Δ 0.52 · OI 1,204". The
+// per-contract and across-writable sums are what the position holds, priced
+// (D39); a null change prints nothing, so the first live session after a gap
+// reads clean. An empty cell says so rather than vanishing.
+function callLine(
+  c: CallQuote,
+  writable: number | null | undefined,
+  currencySymbol: string,
+): string {
+  const label = `${c.tenor}d ${c.rule === "atm" ? "ATM" : c.rule === "otm10" ? "10% OTM" : "10% ITM"}`;
+  if (c.contract == null) return `${label} · no two-sided quote`;
+  const parts = [label];
+  if (c.strike != null && c.expiry != null) {
+    const strike = Number.isInteger(c.strike) ? `${c.strike}` : c.strike.toFixed(2);
+    parts.push(`${strike}C ${dayMonth(c.expiry)}${c.dte != null ? ` (${c.dte}d)` : ""}`);
+  }
+  if (c.mid != null) {
+    const per =
+      c.contract_cents != null ? ` = ${dollars(c.contract_cents, currencySymbol)}/contract` : "";
+    parts.push(`${currencySymbol}${c.mid.toFixed(2)}${per}`);
+  }
+  if (c.writable_cents != null && writable) {
+    parts.push(`${dollars(c.writable_cents, currencySymbol)} across ${writable}`);
+  }
+  if (c.premium_pct != null) {
+    const chg = c.premium_pct_chg != null ? ` (${signedOrDash(c.premium_pct_chg * 100, 1)}%)` : "";
+    parts.push(`${(c.premium_pct * 100).toFixed(1)}% of spot${chg}`);
+  }
+  if (c.mid_chg != null) {
+    parts.push(`${c.mid_chg >= 0 ? "+" : "−"}${currencySymbol}${Math.abs(c.mid_chg).toFixed(2)}`);
+  }
+  if (c.iv != null) {
+    parts.push(`IV ${c.iv.toFixed(1)}${c.iv_chg != null ? ` (${signedOrDash(c.iv_chg, 1)})` : ""}`);
+  }
+  if (c.delta != null) parts.push(`Δ ${c.delta.toFixed(2)}`);
+  if (c.open_interest != null) parts.push(`OI ${c.open_interest.toLocaleString("en-US")}`);
+  if (c.target_miss && c.moneyness != null) {
+    const target = c.rule === "atm" ? 0 : c.rule === "otm10" ? 0.1 : -0.1;
+    parts.push(`strike ${(Math.abs(c.moneyness - target) * 100).toFixed(1)}% off target`);
+  }
+  if (c.tenor_collapsed) parts.push("same expiry as shorter tenor");
+  return parts.join(" · ");
+}
+
+// v10 bodies only: "30d ATM pays 4.8% (+2.0%) · 10% OTM 1.2% (−1.0%) · 7d ATM
+// 2.1%". Each premium is the call mid as a fraction of spot; the bracket is
+// its change against the prior session at the same tenor (`chg_tenor_pct`, a
+// relative change — so it carries its own %). The 7-day cell is present only
+// when assembly included it (a positive term slope).
 function stripLine(row: Row): string | null {
   if (row.call_atm30_pct == null && row.call_otm30_pct == null) return null;
   const cell = (v: number | null | undefined, chg: number | null | undefined) =>

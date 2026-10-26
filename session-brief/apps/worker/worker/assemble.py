@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 from typing import cast
 
@@ -56,6 +56,7 @@ from worker.constants import (
     PREMIUM_CAP,
 )
 from worker.narrate import Narrator, narrate_and_apply
+from worker.options import parse_occ
 from worker.oscillators import Standing, compute_and_store_standing
 from worker.tape import TapeMetrics, compute_and_store_tape
 from worker.technicals import Technicals, Zone, compute_and_store_technicals
@@ -79,7 +80,7 @@ from worker.volatility import StripRow, VolReading, compute_and_store_volatility
 # each paired with its own 252-session percentile, plus `divergence`. v10 =
 # M24: the gated §6 `premium` section — IV30 against its year, realized vol and
 # the tape, the regime, the guards, and the 30-day call strip line.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # The `data_quality.stale` entries for §6, in `STALE_OVERNIGHT_TAPE_SYNTHETIC`'s
 # naming. `premium.stale`: some reading is a chain carried from the prior
@@ -516,78 +517,78 @@ def _standing_row(s: Standing, tier: str) -> dict[str, object]:
     }
 
 
-def _qualifies_premium(r: VolReading) -> bool:
-    """Priced away from fair, and every guard clear: no earnings inside the
-    window (the premium is the event, not the name), a read from enough
-    contracts, and at least one contract the position could write."""
+def _premium_rank(r: VolReading) -> tuple[bool, bool, Decimal, Decimal, str]:
+    """Regime first: a rich or cheap name leads a fair one. Within a regime,
+    the own-year percentile's distance from the middle, furthest first, so a
+    cheap name at the 5th competes with a rich one at the 95th; a null ranks
+    after every real percentile (a real 0 is a real distance). Then the wider
+    implied-vs-realized gap; then symbol, for determinism. The guards
+    (earnings, thin, writable) are badges on the row and never sort (D39)."""
+    distance = abs(r.iv30_pctile - 50) if r.iv30_pctile is not None else Decimal(0)
     return (
-        r.premium in ("rich", "cheap")
-        and r.earnings_date is None
-        and not r.iv30_thin
-        and r.contracts_writable >= 1
+        r.premium == "fair",
+        r.iv30_pctile is None,
+        -distance,
+        -abs(r.iv_hv_spread or Decimal(0)),
+        r.symbol,
     )
 
 
-def _premium_rank(r: VolReading) -> tuple[bool, Decimal, Decimal, str]:
-    """Own-year percentile's distance from the middle, furthest first, so a
-    cheap name at the 5th competes with a rich one at the 95th; a null ranks
-    after every real percentile (a real 0 is a real distance). Then the wider
-    implied-vs-realized gap; then symbol, for determinism."""
-    distance = abs(r.iv30_pctile - 50) if r.iv30_pctile is not None else Decimal(0)
-    return (r.iv30_pctile is None, -distance, -abs(r.iv_hv_spread or Decimal(0)), r.symbol)
+_CALL_SLOTS: tuple[tuple[int, str], ...] = ((30, "atm"), (30, "otm10"), (7, "atm"))
 
 
 def _premium(
     positions: list[PositionMetrics],
     premium: dict[str, VolReading],
 ) -> dict[str, object]:
-    """§6 "Premium" — the option-pricing read for names priced away from fair.
+    """§6 "Premium" — the option-pricing read for every held name (M26, D39).
 
-    Gated the §5 way, for the §5 reason: on most sessions most names are fair,
-    and a per-name section that said so every evening would bury the one that
-    is not. Ordered by how far the name's own-year percentile sits from the
-    middle (nulls last), then by how far implied runs from realized.
+    A ledger, not a gate: on most sessions most names are fair, and the reader
+    asked to see each name's implied vol, how it moved and what its calls cost
+    regardless. The regime orders the rows — rich and cheap first, by how far
+    the own-year percentile sits from the middle (nulls last), then by how far
+    implied runs from realized — and the guards ride along as row fields.
+    `PREMIUM_CAP` bounds the email for its size budget, not for emphasis.
 
     The section is emitted even when empty: an absent section reads to a
-    renderer as "not computed", and "premium is fair" is information.
+    renderer as "not computed". Held names with no reading are named in the
+    note, so a missing chain is visible rather than silent.
     """
     present = [r for p in positions if (r := premium.get(p.symbol)) is not None]
-    qualifying = sorted((r for r in present if _qualifies_premium(r)), key=_premium_rank)
-    shown, overflow = qualifying[:PREMIUM_CAP], qualifying[PREMIUM_CAP:]
-    full = {r.symbol for r in shown}
+    ordered = sorted(present, key=_premium_rank)
+    shown, overflow = ordered[:PREMIUM_CAP], ordered[PREMIUM_CAP:]
+    missing = sorted(p.symbol for p in positions if p.symbol not in premium)
 
+    notes: list[str] = []
     if not present:
-        note = "No option data for the held names"
-    elif not qualifying:
-        note = "Premium is fair across the book"
-    elif overflow:
+        notes.append("No option data for the held names")
+    elif missing:
+        notes.append("No option data for " + ", ".join(missing))
+    if overflow:
         names = ", ".join(sorted(r.symbol for r in overflow))
-        note = f"{names} also rich or cheap — see the archive"
-    else:
-        note = None
+        notes.append(f"{names} also measured — see the archive")
+    note = "; ".join(notes) if notes else None
 
     # One row set, tiered: the email shows `full`, the archive shows all (D16).
     rows = [_premium_row(r, "full") for r in shown]
-    rows += [
-        _premium_row(r, "brief")
-        for r in sorted(present, key=lambda r: r.symbol)
-        if r.symbol not in full
-    ]
+    rows += [_premium_row(r, "brief") for r in overflow]
     return {"id": "premium", "tier": "full", "note": note, "rows": rows}
 
 
 def _premium_row(r: VolReading, tier: str) -> dict[str, object]:
     cells = {(c.tenor, c.rule): c for c in r.strip}
-    atm30, otm30 = cells.get((30, "atm")), cells.get((30, "otm10"))
-    row: dict[str, object] = {
+    return {
         "symbol": r.symbol,
         "tier": tier,
         "iv30": _ratio(r.iv30),
+        "iv30_chg": _ratio(r.iv30_chg),
         "iv30_pctile": _ratio(r.iv30_pctile),
         "iv_rank_252": _ratio(r.iv_rank_252),
         "hv20": _ratio(r.hv20),
         "iv_hv_spread": _ratio(r.iv_hv_spread),
         "iv_vix_ratio": _ratio(r.iv_vix_ratio),
+        "iv_vix_book_median": _ratio(r.book_median_ratio),
+        "vix_close": _ratio(r.vix_close),
         "vix_pctile": _ratio(r.vix_pctile),
         "iv_term_slope": _ratio(r.iv_term_slope),
         "premium": r.premium,
@@ -595,23 +596,53 @@ def _premium_row(r: VolReading, tier: str) -> dict[str, object]:
         "occurs_at": r.earnings_date.isoformat() if r.earnings_date else None,
         "contracts_writable": r.contracts_writable,
         "iv30_thin": r.iv30_thin,
-        "call_atm30_pct": _cell_float(atm30, "premium_pct"),
-        "call_atm30_chg": _cell_float(atm30, "chg_tenor_pct"),
-        "call_otm30_pct": _cell_float(otm30, "premium_pct"),
-        "call_otm30_chg": _cell_float(otm30, "chg_tenor_pct"),
+        "calls": [
+            _call_quote(cells.get(slot), *slot, r.contracts_writable) for slot in _CALL_SLOTS
+        ],
     }
-    # The 7-day call only matters when the near tenor is pricing richer than the
-    # month; on a flat or inverted slope it would be a number with no story.
-    if r.iv_term_slope is not None and r.iv_term_slope > 0:
-        row["call_atm7_pct"] = _cell_float(cells.get((7, "atm")), "premium_pct")
-    return row
 
 
-def _cell_float(cell: StripRow | None, field: str) -> float | None:
+def _call_quote(
+    cell: StripRow | None, tenor: int, rule: str, contracts_writable: int
+) -> dict[str, object]:
+    """One selected call as the brief carries it: the contract's identity, its
+    price in dollars per share and per contract (integer cents, the docs/04
+    money rule), and across the position's writable contracts — null at zero
+    writable, where a zero would read as a price. An empty cell keeps its
+    slot with every quote field null, so the renderer can say so."""
     if cell is None:
-        return None
-    value: Decimal | None = getattr(cell, field)
-    return _ratio(value)
+        return {"tenor": tenor, "rule": rule, "target_miss": False, "tenor_collapsed": False}
+    occ = parse_occ(cell.contract) if cell.contract is not None else None
+    contract_cents = (
+        int((cell.mid * 10000).to_integral_value(ROUND_HALF_UP)) if cell.mid is not None else None
+    )
+    writable_cents = (
+        contract_cents * contracts_writable
+        if contract_cents is not None and contracts_writable > 0
+        else None
+    )
+    return {
+        "tenor": tenor,
+        "rule": rule,
+        "contract": cell.contract,
+        "strike": _ratio(occ.strike) if occ is not None else None,
+        "expiry": occ.expiry.isoformat() if occ is not None else None,
+        "dte": cell.dte,
+        "moneyness": _ratio(cell.moneyness),
+        "mid": _ratio(cell.mid),
+        "mid_chg": _ratio(cell.mid_chg),
+        "contract_cents": contract_cents,
+        "writable_cents": writable_cents,
+        "premium_pct": _ratio(cell.premium_pct),
+        "premium_pct_chg": _ratio(cell.chg_tenor_pct),
+        "time_value_pct": _ratio(cell.time_value_pct),
+        "iv": _ratio(cell.iv),
+        "iv_chg": _ratio(cell.iv_chg),
+        "delta": _ratio(cell.delta),
+        "open_interest": cell.open_interest,
+        "target_miss": cell.target_miss,
+        "tenor_collapsed": cell.tenor_collapsed,
+    }
 
 
 def _distance(close: Decimal | None, level: Fraction | None) -> float | None:

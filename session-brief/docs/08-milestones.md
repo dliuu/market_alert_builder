@@ -38,6 +38,8 @@ Sequenced. Each has a definition of done that is testable, not vibes.
 
 - [x] **M25 — Open brief strip.** `regime_from_metrics`, `read_premium_changes`, `read_vix_pctile`; the open `premium` section (rows `symbol`/`premium_prior`/`premium`, `tier: null`, omitted when no name changed regime), §2's `^VIX` `level_pctile`, email strip + archive table, narration note kept to the close. *Done when:* a session with no regime change renders no strip; the VIX row carries its percentile only with a full baseline. See the same spec.
 
+- [x] **M26 — §6 every held name, calls in dollars.** v11; `iv30_chg`, `book_median_ratio` and the same-contract `mid_chg` on the reading (no new metrics stored, no migration); `calls[]` of `call_quote` per row with dollars in integer cents; `PREMIUM_CAP` 20; the regime orders and no guard gates; the email ledger with the VIX line in the section head and `pctile pending` where the baseline is short; archive sub-rows per call; the narration ask says every name is listed; D39; docs 03/04/05/07/08. *Done when:* `iv30_chg` equals the difference of two stored IV30s and is null across a gap and on a stale reading; a book of rich, cheap and two fair names yields four `full` rows in that order; `writable_cents` is null at zero writable; a v11 row carries no flat `call_*` key; a stored v10 body renders the old strip line in both renderers; the twenty-name fixture renders under 80KB; `pnpm contracts:gen` is clean. See `docs/superpowers/specs/2026-10-25-m26-premium-every-name-design.md`.
+
 **Chinese side (Shanghai/Shenzhen A-share briefs):** tracked separately in
 `cn/docs/milestones.md` (CN-M1…CN-M3) so the two feature sets stay separable —
 design in `cn/docs/2026-08-15-shanghai-briefs-design.md`, structural decisions

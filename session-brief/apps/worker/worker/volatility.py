@@ -271,6 +271,7 @@ class StripRow:
     open_interest: int | None
     volume: int | None
     chg_contract_pct: Decimal | None  # same contract's mid vs our prior snapshot
+    mid_chg: Decimal | None  # same contract's mid less its prior mid, dollars per share
     chg_tenor_pct: Decimal | None  # same tenor-and-rule cell's premium_pct
     iv_chg: Decimal | None  # same cell's iv, vol points
     tenor_collapsed: bool
@@ -296,6 +297,7 @@ def strip_rows(
         c = cell.contract
         before = prior.get((cell.tenor, cell.rule))
         iv = c.iv if c is not None else None
+        prior_mid = prior_mids.get(c.symbol) if c is not None else None
         iv_chg = (
             iv - before.iv
             if iv is not None and before is not None and before.iv is not None
@@ -315,8 +317,9 @@ def strip_rows(
                 delta=c.delta if c is not None else None,
                 open_interest=c.open_interest if c is not None else None,
                 volume=c.volume if c is not None else None,
-                chg_contract_pct=_change(
-                    cell.mid, prior_mids.get(c.symbol) if c is not None else None
+                chg_contract_pct=_change(cell.mid, prior_mid),
+                mid_chg=(
+                    cell.mid - prior_mid if cell.mid is not None and prior_mid is not None else None
                 ),
                 chg_tenor_pct=_change(
                     cell.premium_pct, before.premium_pct if before is not None else None
@@ -344,6 +347,7 @@ class VolReading:
     iv30_cboe: Decimal | None
     iv30_thin: bool
     iv30_pctile: Decimal | None
+    iv30_chg: Decimal | None  # vs the prior session's stored iv30; None across a gap or stale
     iv_rank_252: Decimal | None
     hv20: Decimal | None
     hv60: Decimal | None
@@ -355,6 +359,7 @@ class VolReading:
     vix_pctile: Decimal | None
     iv_term_slope: Decimal | None
     premium: str  # "rich" | "fair" | "cheap"
+    book_median_ratio: Decimal | None  # the book's median iv_vix_ratio, the regime's fallback base
     earnings_date: date | None
     contracts_writable: int
     stale: bool
@@ -418,6 +423,12 @@ _READ_CHAINS = text("""
     JOIN option_contracts c USING (contract)
     WHERE c.symbol = ANY(:symbols) AND s.session_date = :session_date
     ORDER BY s.contract
+""")
+
+_READ_PRIOR_IV30 = text("""
+    SELECT symbol, value FROM metrics
+    WHERE user_id = :user_id AND symbol = ANY(:symbols)
+      AND metric = 'iv30' AND session_date = :session_date
 """)
 
 _ANY_SNAPSHOT = text("""
@@ -558,6 +569,7 @@ def compute_and_store_volatility(
     vix = _read_vix(conn, session_date)
     shares = _read_shares(conn, user_id, symbols, session_date)
     prior_strip = _read_prior_strip(conn, symbols, prior)
+    prior_iv30 = _read_prior_iv30(conn, user_id, symbols, prior)
 
     vix_close = vix[-1][1] if vix and vix[-1][0] == session_date else None
     vix_pctile = percentile([c for _, c in vix]) if vix_close is not None else None
@@ -606,6 +618,11 @@ def compute_and_store_volatility(
                 iv30_cboe=cboe,
                 iv30_thin=iv.n < IV30_MIN_CONTRACTS,
                 iv30_pctile=percentile([*iv30_hist, iv30]) if iv30 is not None else None,
+                iv30_chg=(
+                    iv30 - prior_iv30[symbol]
+                    if not stale and iv30 is not None and symbol in prior_iv30
+                    else None
+                ),
                 iv_rank_252=_rank(iv30_hist, iv30),
                 hv20=hv20,
                 hv60=hv60,
@@ -619,6 +636,7 @@ def compute_and_store_volatility(
                 vix_pctile=vix_pctile,
                 iv_term_slope=term_slope(cells),
                 premium="fair",  # set below, once the book's median ratio is known
+                book_median_ratio=None,  # likewise
                 earnings_date=_read_earnings(conn, symbol, session_date, horizon),
                 contracts_writable=int(shares.get(symbol, Decimal(0)) // 100),
                 stale=stale,
@@ -638,6 +656,7 @@ def compute_and_store_volatility(
                 iv_vix_ratio=r.iv_vix_ratio,
                 book_median_ratio=book_median_ratio,
             ),
+            book_median_ratio=book_median_ratio,
         )
         for r in readings
     }
@@ -734,6 +753,23 @@ def _read_history(
     return out
 
 
+def _read_prior_iv30(
+    conn: Connection, user_id: str, symbols: list[str], session_date: date
+) -> dict[str, Decimal]:
+    """The ``iv30`` metric stored for exactly ``session_date`` (the caller passes
+    the prior session): the base of ``iv30_chg``. ``_read_history`` carries no
+    dates, so its last value may be several sessions old after a gap."""
+    out: dict[str, Decimal] = {}
+    for row in conn.execute(
+        _READ_PRIOR_IV30,
+        {"user_id": user_id, "symbols": symbols, "session_date": session_date},
+    ).mappings():
+        value = _dec(row["value"])
+        assert value is not None  # NOT NULL
+        out[str(row["symbol"])] = value
+    return out
+
+
 def _read_vix(conn: Connection, session_date: date) -> list[tuple[date, Decimal]]:
     out: list[tuple[date, Decimal]] = []
     for row in conn.execute(
@@ -777,6 +813,7 @@ def _read_prior_strip(
             open_interest=None,
             volume=None,
             chg_contract_pct=None,
+            mid_chg=None,
             chg_tenor_pct=None,
             iv_chg=None,
             tenor_collapsed=False,

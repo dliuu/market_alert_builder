@@ -42,6 +42,8 @@ _USER = "00000000-0000-0000-0000-000000000001"
 _GENERATED_AT = datetime(2026, 8, 11, 20, 42, 11, tzinfo=UTC)
 _FIXTURE = Path(__file__).parent / "fixtures" / "close_brief.json"
 _FIXTURE_V10 = Path(__file__).parent / "fixtures" / "close_brief_v10.json"
+_FIXTURE_V11 = Path(__file__).parent / "fixtures" / "close_brief_v11.json"
+_FIXTURE_P20 = Path(__file__).parent / "fixtures" / "close_brief_premium20.json"
 
 
 def _lot(symbol: str, shares: str, cost: str) -> Lot:
@@ -190,11 +192,11 @@ def _mixed() -> BriefObject:
             rel_strength_benchmark="SPY", divergence=None,
         ),
     }
-    # Four qualifying premium readings so §6's cap (3) caps too: A (rich, a
-    # positive term slope, so the 7-day call rides along), B (cheap, inverted
-    # slope, no 7-day call), C full, D the overflow -> brief-tier, named in the
-    # note. `contracts_writable` is a reading input here, not derived from these
-    # sub-100-share lots — the gate reads the field, never the lots.
+    # Four premium readings, every one `full` since M26 ungated §6: A (rich, a
+    # positive term slope), B (cheap, inverted slope), C and D rich. The order
+    # is regime first, then distance from the median percentile.
+    # `contracts_writable` is a reading input here, not derived from these
+    # sub-100-share lots — the row reads the field, never the lots.
     premium = {
         "A": _reading("A", iv30_pctile=Decimal("92"), iv_term_slope=Decimal("2.1")),
         "B": _reading(
@@ -362,13 +364,13 @@ def test_rvol_spike_promotes_a_flat_name_to_full() -> None:
     assert close_brief_should_skip(obj) is False
 
 
-def test_schema_version_is_ten() -> None:
+def test_schema_version_is_eleven() -> None:
     # v4 = M13's attribution decomposition; v5 = M15's §2/§3 row fields and the
     # horizon-0 morning claim; v6 = M17's catalysts section; v7 = CN-M1's
     # `open_cn`/`close_cn` kinds and optional `currency`; v8 = M19's §4
     # technical snapshot; v9 = M20's gated §5 `standing` section; v10 = M24's
-    # gated §6 `premium` section (docs/04).
-    assert _mixed().schema_version == SCHEMA_VERSION == 10
+    # gated §6 `premium` section; v11 = M26's ungated §6 with `calls[]` (docs/04).
+    assert _mixed().schema_version == SCHEMA_VERSION == 11
 
 
 def test_material_residual_predicate() -> None:
@@ -790,23 +792,41 @@ def test_standing_section_present_with_note_when_computed_and_empty() -> None:
 # --- M24 (v10): the gated §6 `premium` section -----------------------------
 
 
-def _cell(tenor: int, rule: str, pct: str, chg: str | None) -> StripRow:
+def _dec(value: str | None) -> Decimal | None:
+    return Decimal(value) if value is not None else None
+
+
+def _cell(
+    tenor: int,
+    rule: str,
+    pct: str,
+    chg: str | None,
+    *,
+    contract: str | None = None,
+    mid: str | None = None,
+    mid_chg: str | None = None,
+    iv: str | None = None,
+    iv_chg: str | None = None,
+    delta: str | None = None,
+    open_interest: int | None = None,
+) -> StripRow:
     return StripRow(
         tenor=tenor,
         rule=rule,
-        contract=None,
+        contract=contract,
         dte=tenor,
         moneyness=None,
-        mid=None,
+        mid=_dec(mid),
         premium_pct=Decimal(pct),
         time_value_pct=None,
-        iv=None,
-        delta=None,
-        open_interest=None,
+        iv=_dec(iv),
+        delta=_dec(delta),
+        open_interest=open_interest,
         volume=None,
         chg_contract_pct=None,
-        chg_tenor_pct=Decimal(chg) if chg is not None else None,
-        iv_chg=None,
+        mid_chg=_dec(mid_chg),
+        chg_tenor_pct=_dec(chg),
+        iv_chg=_dec(iv_chg),
         tenor_collapsed=False,
         target_miss=False,
     )
@@ -822,6 +842,7 @@ def _reading(symbol: str, **kw: object) -> VolReading:
         iv30_cboe=Decimal("42.3"),
         iv30_thin=False,
         iv30_pctile=Decimal("85"),
+        iv30_chg=Decimal("3.2"),
         iv_rank_252=Decimal("0.8"),
         hv20=Decimal("31"),
         hv60=Decimal("29"),
@@ -833,21 +854,38 @@ def _reading(symbol: str, **kw: object) -> VolReading:
         vix_pctile=Decimal("55"),
         iv_term_slope=Decimal("1.5"),
         premium="rich",
+        book_median_ratio=Decimal("1.9"),
         earnings_date=None,
         contracts_writable=2,
         stale=False,
         strip=(
-            _cell(7, "atm", "0.021", "0.05"),
-            _cell(30, "atm", "0.048", "0.02"),
-            _cell(30, "otm10", "0.012", "-0.01"),
+            _cell(
+                7, "atm", "0.021", "0.05", contract="A     261028C00110000", mid="2.31", iv="43.0"
+            ),
+            _cell(
+                30,
+                "atm",
+                "0.048",
+                "0.02",
+                contract="A     261120C00150000",
+                mid="4.80",
+                mid_chg="0.45",
+                iv="41.0",
+                iv_chg="2.1",
+                delta="0.52",
+                open_interest=1204,
+            ),
+            _cell(30, "otm10", "0.012", "-0.01", contract="A     261120C00121000", mid="1.32"),
         ),
     )
     base.update(kw)
     return VolReading(symbol=symbol, **base)  # type: ignore[arg-type]
 
 
-def _assemble_premium(premium: dict[str, VolReading] | None) -> BriefObject:
-    symbols = sorted(premium or {}) or ["A"]
+def _assemble_premium(
+    premium: dict[str, VolReading] | None, *, held: list[str] | None = None
+) -> BriefObject:
+    symbols = held or sorted(premium or {}) or ["A"]
     lots = [_lot(s, "200", "90") for s in symbols]
     prices = {s: Price(c=Decimal("110"), prev_c=Decimal("100")) for s in symbols}
     closes = {s: Decimal("110") for s in symbols}
@@ -869,64 +907,105 @@ def _premium_tiers(obj: BriefObject) -> dict[str, str]:
     return {r.symbol or "": _tier_of(r) for r in _section(obj, "premium").rows}
 
 
-def test_rich_writable_name_without_earnings_is_full() -> None:
-    obj = _assemble_premium({"A": _reading("A")})
-    section = _section(obj, "premium")
-    assert _premium_tiers(obj) == {"A": "full"}
-    assert section.note is None
-    row = section.rows[0]
-    assert row.premium is not None and row.premium.value == "rich"
-    assert row.iv30 == 42.5
-    assert row.iv30_pctile == 85.0
-    assert row.contracts_writable == 2
-    assert row.earnings_in_window is False
-    assert row.occurs_at is None
-    assert row.call_atm30_pct == 0.048
-    assert row.call_atm30_chg == 0.02
-    assert row.call_otm30_pct == 0.012
-    assert row.call_otm30_chg == -0.01
-    assert row.call_atm7_pct == 0.021
-
-
-def test_earnings_in_window_demotes_to_brief_and_notes_no_qualifier() -> None:
-    obj = _assemble_premium({"A": _reading("A", earnings_date=date(2026, 8, 20))})
-    section = _section(obj, "premium")
-    assert _premium_tiers(obj) == {"A": "brief"}
-    assert section.note == "Premium is fair across the book"
-    row = section.rows[0]
-    assert row.earnings_in_window is True
-    assert row.occurs_at is not None and row.occurs_at.isoformat() == "2026-08-20"
-
-
-def test_thin_fair_and_unwritable_names_never_qualify() -> None:
+def test_every_present_name_is_full_and_regime_orders() -> None:
     obj = _assemble_premium(
         {
-            "A": _reading("A", iv30_thin=True),
-            "B": _reading("B", premium="fair"),
-            "C": _reading("C", contracts_writable=0),
-        }
-    )
-    assert _premium_tiers(obj) == {"A": "brief", "B": "brief", "C": "brief"}
-    assert _section(obj, "premium").note == "Premium is fair across the book"
-
-
-def test_fourth_qualifier_is_brief_and_named_in_the_note() -> None:
-    obj = _assemble_premium(
-        {
-            "A": _reading("A", iv30_pctile=Decimal("95")),
-            "B": _reading("B", premium="cheap", iv30_pctile=Decimal("90")),
-            "C": _reading("C", iv30_pctile=Decimal("80")),
-            "D": _reading("D", iv30_pctile=Decimal("75")),
+            "A": _reading("A", premium="fair"),
+            "B": _reading("B", iv30_pctile=Decimal("95")),
+            "C": _reading(
+                "C", premium="cheap", iv30_pctile=Decimal("3"), earnings_date=date(2026, 8, 20)
+            ),
+            "D": _reading("D", premium="fair", iv30_thin=True, contracts_writable=0),
         }
     )
     section = _section(obj, "premium")
     assert [(r.symbol, _tier_of(r)) for r in section.rows] == [
-        ("A", "full"),
-        ("B", "full"),
         ("C", "full"),
-        ("D", "brief"),
+        ("B", "full"),
+        ("A", "full"),
+        ("D", "full"),
     ]
-    assert section.note == "D also rich or cheap — see the archive"
+    assert section.note is None
+    c = section.rows[0]
+    assert c.earnings_in_window is True  # a guard is a badge, not a gate
+    assert c.occurs_at is not None and c.occurs_at.isoformat() == "2026-08-20"
+    d = section.rows[3]
+    assert d.iv30_thin is True and d.contracts_writable == 0
+
+
+def test_row_carries_the_iv_change_the_vix_and_the_calls() -> None:
+    obj = _assemble_premium({"A": _reading("A")})
+    row = _section(obj, "premium").rows[0]
+    assert row.premium is not None and row.premium.value == "rich"
+    assert row.iv30 == 42.5 and row.iv30_chg == 3.2
+    assert row.iv30_pctile == 85.0
+    assert row.vix_close == 20.2 and row.iv_vix_book_median == 1.9
+    assert row.call_atm30_pct is None and row.call_atm7_pct is None  # v10 fields not emitted
+    assert row.calls is not None
+    assert [(c.tenor.value, c.rule.value) for c in row.calls] == [
+        (30, "atm"),
+        (30, "otm10"),
+        (7, "atm"),
+    ]
+    atm30 = row.calls[0]
+    assert atm30.contract == "A     261120C00150000"
+    assert atm30.strike == 150.0
+    assert atm30.expiry is not None and atm30.expiry.isoformat() == "2026-11-20"
+    assert atm30.dte == 30
+    assert atm30.mid == 4.8 and atm30.mid_chg == 0.45
+    assert atm30.contract_cents == 48000 and atm30.writable_cents == 96000  # 2 writable
+    assert atm30.premium_pct == 0.048 and atm30.premium_pct_chg == 0.02
+    assert atm30.iv == 41.0 and atm30.iv_chg == 2.1 and atm30.delta == 0.52
+    assert atm30.open_interest == 1204
+    assert atm30.target_miss is False and atm30.tenor_collapsed is False
+
+
+def test_zero_writable_nulls_the_across_sum_and_an_empty_cell_keeps_its_slot() -> None:
+    obj = _assemble_premium(
+        {
+            "A": _reading(
+                "A",
+                contracts_writable=0,
+                strip=(_cell(30, "atm", "0.048", "0.02", mid="4.80"),),
+            )
+        }
+    )
+    row = _section(obj, "premium").rows[0]
+    assert row.calls is not None and len(row.calls) == 3
+    assert row.calls[0].contract_cents == 48000 and row.calls[0].writable_cents is None
+    assert row.calls[0].contract is None and row.calls[0].strike is None  # no OCC symbol given
+    empty = row.calls[1]
+    assert empty.tenor.value == 30 and empty.rule.value == "otm10"
+    assert empty.contract is None and empty.mid is None and empty.contract_cents is None
+    assert empty.target_miss is False and empty.tenor_collapsed is False
+
+
+def test_a_null_percentile_still_shows_iv30_and_sorts_after_real_ones() -> None:
+    obj = _assemble_premium(
+        {
+            "A": _reading("A", iv30_pctile=None),
+            "B": _reading("B", iv30_pctile=Decimal("80")),
+        }
+    )
+    rows = _section(obj, "premium").rows
+    assert [r.symbol for r in rows] == ["B", "A"]
+    assert rows[1].iv30 == 42.5 and rows[1].iv30_pctile is None
+
+
+def test_twenty_first_name_is_brief_and_named_in_the_note() -> None:
+    readings = {f"S{i:02d}": _reading(f"S{i:02d}", premium="fair") for i in range(21)}
+    section = _section(_assemble_premium(readings), "premium")
+    tiers = [_tier_of(r) for r in section.rows]
+    assert tiers.count("full") == 20 and tiers[-1] == "brief"
+    assert section.rows[-1].symbol == "S20"
+    assert section.note == "S20 also measured — see the archive"
+
+
+def test_held_names_without_a_reading_are_named_in_the_note() -> None:
+    obj = _assemble_premium({"A": _reading("A")}, held=["A", "B"])
+    section = _section(obj, "premium")
+    assert [r.symbol for r in section.rows] == ["A"]
+    assert section.note == "No option data for B"
 
 
 def test_null_percentile_ranks_last_then_wider_spread_leads() -> None:
@@ -939,23 +1018,24 @@ def test_null_percentile_ranks_last_then_wider_spread_leads() -> None:
         }
     )
     section = _section(obj, "premium")
-    assert [r.symbol for r in section.rows][:3] == ["D", "C", "B"]
-    assert section.note == "A also rich or cheap — see the archive"
+    assert [r.symbol for r in section.rows] == ["D", "C", "B", "A"]
+    assert all(_tier_of(r) == "full" for r in section.rows)
+    assert section.note is None
 
 
 def test_cheap_extreme_outranks_a_milder_rich_name() -> None:
-    """Distance from the middle, not raw percentile: a cheap name at the 5th
-    is further out than a rich one at the 80th."""
+    """Distance from the middle, not raw percentile: a cheap name at the 2nd
+    is further out than a rich one at the 95th; an exact tie (5th vs 95th)
+    falls through to the spread and then the symbol."""
     obj = _assemble_premium(
         {
             "A": _reading("A", iv30_pctile=Decimal("95")),
             "B": _reading("B", iv30_pctile=Decimal("90")),
             "C": _reading("C", iv30_pctile=Decimal("80")),
-            "D": _reading("D", premium="cheap", iv30_pctile=Decimal("5")),
+            "D": _reading("D", premium="cheap", iv30_pctile=Decimal("2")),
         }
     )
-    assert _premium_tiers(obj) == {"A": "full", "B": "full", "C": "brief", "D": "full"}
-    assert _section(obj, "premium").note == "C also rich or cheap — see the archive"
+    assert [r.symbol for r in _section(obj, "premium").rows] == ["D", "A", "B", "C"]
 
 
 def test_empty_premium_emits_the_section_with_a_no_data_note(
@@ -996,16 +1076,34 @@ def test_synthetic_chain_stamps_premium_synthetic(monkeypatch: pytest.MonkeyPatc
     assert STALE_PREMIUM == "premium.stale"
 
 
-def test_call_atm7_pct_absent_unless_the_slope_is_positive() -> None:
-    for slope in (Decimal("0"), Decimal("-2"), None):
-        obj = _assemble_premium({"A": _reading("A", iv_term_slope=slope)})
-        assert _section(obj, "premium").rows[0].call_atm7_pct is None
+def _twenty() -> BriefObject:
+    """A twenty-name book, every name in §6 at the cap: the email size check
+    (docs/06, 80KB) renders this one."""
+    readings = {
+        f"P{i:02d}": _reading(
+            f"P{i:02d}", premium=("rich", "fair", "cheap")[i % 3], iv30_pctile=Decimal(5 + 4 * i)
+        )
+        for i in range(20)
+    }
+    return _assemble_premium(readings)
 
 
-def test_frozen_fixture_carries_a_tiered_premium_section() -> None:
+def test_matches_frozen_twenty_name_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "OPTIONS_LIVE", False)
+    body = to_contract_json(_twenty())
+    sections = cast("list[dict[str, object]]", body["sections"])
+    section = next(s for s in sections if s["id"] == "premium")
+    rows = cast("list[dict[str, object]]", section["rows"])
+    assert [r["tier"] for r in rows] == ["full"] * 20
+    assert body == json.loads(_FIXTURE_P20.read_text())
+
+
+def test_frozen_fixture_carries_an_ungated_premium_section() -> None:
     body = json.loads(_FIXTURE.read_text())
     section = next(s for s in body["sections"] if s["id"] == "premium")
-    tiers = {r["tier"] for r in section["rows"]}
-    assert tiers == {"full", "brief"}
-    assert section["note"]
-    assert json.loads(_FIXTURE_V10.read_text()) == body
+    assert [r["tier"] for r in section["rows"]] == ["full"] * 4
+    assert all(len(r["calls"]) == 3 for r in section["rows"])
+    assert section["note"] is None
+    assert json.loads(_FIXTURE_V11.read_text()) == body
+    # v10 stays frozen: the renderers' fallback is tested against it.
+    assert json.loads(_FIXTURE_V10.read_text())["schema_version"] == 10
